@@ -37,3 +37,4 @@ coverage/
 .env.local
 *.p12
 e2e-screenshots/
+test/*.pbf

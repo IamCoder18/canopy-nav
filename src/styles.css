@@ -214,10 +214,28 @@ code {
   padding: 0 16px 0 24px;
   background: rgba(23, 24, 27, 0.88);
   backdrop-filter: blur(20px);
+  /* The ETA bar carries nowrap text and two 76dp buttons; on a narrow phone
+     those together exceed the viewport, pushing the buttons off-screen. Let
+     the flexible spacer absorb the slack and let text ellipsise instead. */
+  min-width: 0;
+  overflow: hidden;
 }
-.eta-block { display: flex; flex-direction: column; gap: 0; }
-.eta-value { color: #F1F3F4; white-space: nowrap; }
-.eta-label { color: rgba(255, 255, 255, 0.6); white-space: nowrap; }
+.eta-block { display: flex; flex-direction: column; gap: 0; min-width: 0; flex-shrink: 1; }
+.eta-value {
+  color: #F1F3F4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.eta-label {
+  color: rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Controls keep their 76dp touch target and never shrink. */
+.eta-bar > .icon-btn,
+.eta-bar > .offline-chip { flex-shrink: 0; }
 .eta-sep { width: 1px; height: 48px; background: rgba(255, 255, 255, 0.12); }
 
 /* Google Maps' pre-turn card: large maneuver glyph + distance + instruction */
@@ -226,7 +244,10 @@ code {
   left: 24px; top: 120px;
   display: flex; align-items: center; gap: 24px;
   padding: 24px 32px;
-  min-width: 420px;
+  /* Prefer a comfortable 420dp, but never wider than the space available —
+     on a 412dp phone a hard min-width pushes the card off-screen. */
+  min-width: min(420px, calc(100% - 48px));
+  max-width: calc(100% - 48px);
   border-radius: 16px;
   background: rgba(14, 16, 19, 0.94);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
@@ -239,9 +260,13 @@ code {
   color: #F1F3F4;
 }
 .maneuver-icon.major { background: #188038; color: #FFFFFF; }
-.maneuver-text { display: flex; flex-direction: column; gap: 4px; }
+.maneuver-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .maneuver-dist { color: #F1F3F4; }
-.maneuver-instr { color: rgba(255, 255, 255, 0.72); max-width: 460px; }
+.maneuver-instr {
+  color: rgba(255, 255, 255, 0.72);
+  max-width: 460px;
+  overflow-wrap: anywhere;
+}
 
 .shield {
   align-self: flex-start;
@@ -256,6 +281,9 @@ code {
 .nav-controls {
   position: absolute; right: 24px; top: 120px;
   display: flex; flex-direction: column; gap: 16px;
+  /* keep the stack clear of the maneuver card on narrow screens */
+  max-height: calc(100% - 260px);
+  overflow: hidden;
 }
 .round-btn {
   width: 76px; height: 76px;
@@ -272,12 +300,18 @@ code {
   position: absolute; bottom: 0; left: 0; right: 0;
   height: 128px;
   display: flex; align-items: center; justify-content: space-around;
+  gap: 8px;
+  padding: 0 8px;
   background: rgba(23, 24, 27, 0.88);
   backdrop-filter: blur(20px);
 }
 .nav-bottom-btn {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
-  min-width: 156px; min-height: 76px;
+  /* 156dp is the AAOS button minimum, but three of them plus gaps exceed a
+     narrow phone, so allow shrinking while keeping the 76dp touch target. */
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 76px;
   color: rgba(255, 255, 255, 0.88);
 }
 

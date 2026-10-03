@@ -31,7 +31,12 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: End-to-end smoke test
+      # .osm.pbf is what Geofabrik publishes, so it is the primary path; both
+      # are exercised against the real file picker.
+      - name: Build .osm.pbf fixture
+        run: node tools/osm2pbf.mjs test/fixture.osm test/fixture.osm.pbf 700
+
+      - name: End-to-end smoke test (.osm)
         run: |
           npx vite preview --port 4192 --host &
           for i in $(seq 1 30); do
@@ -39,6 +44,16 @@ jobs:
             sleep 1
           done
           node test/e2e.mjs
+
+      - name: End-to-end smoke test (.osm.pbf)
+        run: node test/e2e.mjs
+        env:
+          E2E_FIXTURE: fixture.osm.pbf
+
+      # Every screen at phone-portrait, phone-landscape and head-unit sizes,
+      # asserting no horizontal overflow and no invisible text.
+      - name: Screen coverage at three viewports
+        run: node test/screens.mjs
 
       - uses: actions/upload-artifact@v4
         if: always()

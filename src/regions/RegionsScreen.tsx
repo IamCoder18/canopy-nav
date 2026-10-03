@@ -149,7 +149,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
         </span>
       </div>
 
-      <input type="file" accept=".osm,.xml" hidden ref={fileRef} onChange={onFileChange} />
+      <input type="file" accept=".osm,.pbf,.xml,application/octet-stream" hidden ref={fileRef} onChange={onFileChange} />
 
       <div className="settings-body">
         {/* ---------------------- downloaded ---------------------- */}
@@ -286,11 +286,12 @@ export function RegionsScreen(props: RegionsScreenProps) {
         <div className="section-head" style={T.body3m}>Catalogue</div>
         <div className="hint-card">
           <div style={{ ...T.body3, color: ink.secondary }}>
-            Downloads are Geofabrik <code>.osm.pbf</code> extracts. This build parses
-            <code> .osm</code> XML, so convert on a desktop first:
+            Geofabrik publishes <code>.osm.pbf</code> (protobuf) extracts. Both that and
+            plain <code>.osm</code> XML are read directly — download the extract, then
+            Import to attach it to its province. To slice a smaller extract first:
           </div>
           <div style={{ ...T.body3, marginTop: DP.P3 }}>
-            <code>osmium cat region.osm.pbf -o region.osm</code>
+            <code>osmium extract -b bbox -o region.osm.pbf region-latest.osm.pbf</code>
           </div>
         </div>
 

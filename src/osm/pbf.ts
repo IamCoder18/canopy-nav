@@ -28,6 +28,7 @@
  */
 
 import type { RawNode, RawWay } from './engine.worker';
+import { isInterestingTag } from './tags';
 
 export type { RawNode, RawWay };
 
@@ -183,20 +184,6 @@ function deltas(b: Uint8Array): number[] {
   return out;
 }
 
-/* --------------------------- node tag filter -------------------------- */
-
-/**
- * Mirrors the private `isInterestingTag` in `engine.worker.ts`. The XML parser
- * keeps only placemark-ish tags on nodes to bound memory, and the two parsers
- * must agree exactly, so this list has to stay in step with that one.
- */
-function isInterestingTag(k: string): boolean {
-  return k === 'name' || k === 'place' || k === 'amenity' || k === 'shop' || k === 'tourism' ||
-    k === 'leisure' || k === 'highway' || k === 'railway' || k === 'landuse' ||
-    k === 'natural' || k === 'waterway' || k === 'building' || k === 'office' ||
-    k === 'addr:housenumber' || k === 'addr:street' || k === 'historic';
-}
-
 /* ------------------------------ string table -------------------------- */
 
 /**
@@ -276,7 +263,10 @@ function parseNode(r: Reader, st: StringTable, out: ParseOutput): void {
       default: r.skipField(wire); break; // info / version / future fields
     }
   }
-  const node: TaggedNode = { id, lat: lat * 1e-9, lon: lon * 1e-9 };
+  // Divide by 1e9 rather than multiplying by 1e-9: 1e9 is exactly representable,
+  // so the quotient is correctly rounded to the same double the XML parser
+  // gets from `+"51.5074"` — the two parsers stay bit-for-bit comparable.
+  const node: TaggedNode = { id, lat: lat / 1e9, lon: lon / 1e9 };
   const tags = readTags(keys, vals, st);
   if (tags) node.tags = tags;
   out.nodes.set(id, node);
@@ -318,7 +308,7 @@ function parseDenseNodes(r: Reader, st: StringTable, out: ParseOutput): void {
 
   const kv = kvBuf ? new Reader(kvBuf) : null;
   for (let i = 0; i < n; i++) {
-    const node: TaggedNode = { id: ids[i]!, lat: lats[i]! * 1e-9, lon: lons[i]! * 1e-9 };
+    const node: TaggedNode = { id: ids[i]!, lat: lats[i]! / 1e9, lon: lons[i]! / 1e9 };
     if (kv) {
       let tags: Record<string, string> | null = null;
       for (;;) {
@@ -464,12 +454,14 @@ async function readBlobPayload(r: Reader, scratch: Scratch): Promise<Uint8Array>
     const field = tag >>> 3;
     const wire = tag & 7;
     if (wire !== WIRE_LEN) { r.skipField(wire); continue; }
-    if (field === 1) raw = r.bytes();
-    else if (field === 3) zlib = r.bytes();
+    // Note every branch still has to consume its body, or the next iteration
+    // would read the payload as if it were a field tag.
+    const body = r.bytes();
+    if (field === 1) raw = body;
+    else if (field === 3) zlib = body;
     else if (field === 6) zstd = true;
     else if (field === 4) exotic = 'lzma';
     else if (field === 5) exotic = 'lz4';
-    else r.bytes();
   }
 
   if (zstd) {

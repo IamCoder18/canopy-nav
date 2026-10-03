@@ -474,8 +474,9 @@ function HomeScreen(p: HomeProps) {
           <div className="hint-card">
             <div style={{ ...T.body3m, marginBottom: DP.P1 }}>Import a map to route offline</div>
             <div style={{ ...T.sub3, color: ink.secondary, marginBottom: DP.P3 }}>
-              Download an <code>.osm</code> extract (Geofabrik) or convert with
-              <code> osmium cat region.osm.pbf -o region.osm</code>, then load it here.
+              Download an extract from Geofabrik —
+              <code>.osm.pbf</code> directly, or convert with
+              <code> osmium cat region.osm.pbf -o region.osm</code>.
             </div>
             <button className="text-btn" onClick={p.onImport}>Import .osm file</button>
           </div>
@@ -1024,12 +1025,13 @@ function ImportScreen(props: {
           onDragLeave={() => setDragging(false)}
           onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) props.onFile(f); }}
         >
-          <input type="file" accept=".osm,.xml" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) props.onFile(f); }} />
+          <input type="file" accept=".osm,.pbf,.xml,application/octet-stream" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) props.onFile(f); }} />
           <IconFile size={64} color={ink.secondary} />
           <div style={{ ...T.body1m, marginTop: DP.P3 }}>Choose or drop an .osm file</div>
           <div style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1, textAlign: 'center' }}>
-            XML format. For .osm.pbf run:<br />
-            <code>osmium cat region.osm.pbf -o region.osm</code>
+            Accepts <code>.osm</code> (XML) and <code>.osm.pbf</code> (protobuf),<br />
+            which is what Geofabrik publishes. Smaller extracts can be converted
+            with <code>osmium cat region.osm.pbf -o region.osm</code>.
           </div>
         </label>
 

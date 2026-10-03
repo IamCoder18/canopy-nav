@@ -11,6 +11,14 @@ import { searchGazetteer } from './engine.worker';
 
 type Handler = (ev: MessageEvent) => void;
 
+/** The slice of `File` the engine needs, so tests can pass a stub. */
+export interface OsmFile {
+  name?: string;
+  slice(start: number, end?: number): { arrayBuffer(): Promise<ArrayBuffer> };
+  arrayBuffer(): Promise<ArrayBuffer>;
+  text(): Promise<string>;
+}
+
 export interface BuildProgress {
   stage: string;
   pct: number;
@@ -56,13 +64,44 @@ export class OsmEngine {
     this.onProgress = fn;
   }
 
-  /** Parse an .osm XML string into a routing graph + gazetteer. */
-  build(text: string): Promise<OsmDataset> {
+  /**
+   * Parse a `.osm` file into a routing graph + gazetteer.
+   *
+   * The format is sniffed from the file's leading bytes rather than trusted
+   * from the extension, because both `.pbf` and `.xml` arrive through the same
+   * file picker and picking the wrong parser produces a baffling error deep
+   * inside the decoder.
+   */
+  async build(file: OsmFile): Promise<OsmDataset> {
     if (this.buildPromise) return this.buildPromise;
+
+    const name = file.name ?? '';
+    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    // XML begins with '<' after an optional BOM/whitespace; PBF never does.
+    let looksXml = false;
+    for (const b of head) {
+      if (b === 0x3c) { looksXml = true; break; }
+      if (b !== 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d && b !== 0xef && b !== 0xbb && b !== 0xbf) break;
+    }
+    const isXml = looksXml || /\.(osm|xml)$/i.test(name);
+
     this.buildPromise = new Promise<OsmDataset>((resolve, reject) => {
       this.resolveBuild = resolve;
       this.rejectBuild = reject;
-      this.worker.postMessage({ type: 'build', payload: { text } });
+      void (async () => {
+        try {
+          if (isXml) {
+            const text = await file.text();
+            this.worker.postMessage({ type: 'build', payload: { text, format: 'xml' } });
+          } else {
+            // Transfer the buffer instead of copying a province-sized file.
+            const bytes = await file.arrayBuffer();
+            this.worker.postMessage({ type: 'build', payload: { bytes, format: 'pbf' } }, [bytes]);
+          }
+        } catch (err) {
+          reject(err as Error);
+        }
+      })();
     });
     return this.buildPromise;
   }

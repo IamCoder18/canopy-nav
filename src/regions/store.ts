@@ -55,14 +55,10 @@ export async function importRegionFile(req: ImportRequest): Promise<OsmDataset |
   engine.setProgressHandler(onProgress ?? null);
 
   try {
-    if (/\.pbf$/i.test(req.file.name)) {
-      throw new Error(
-        '.osm.pbf is protobuf, and this build parses .osm XML only. Convert it on a desktop first: osmium cat region.osm.pbf -o region.osm',
-      );
-    }
-    onProgress?.({ stage: 'Parsing extract', pct: 0 });
-    const text = await req.file.text();
-    const dataset = await engine.build(text);
+    // Both .osm (XML) and .osm.pbf (protobuf) are accepted; OsmEngine sniffs
+    // which it actually got, so a mislabelled extension still works.
+    onProgress?.({ stage: 'Reading extract', pct: 0 });
+    const dataset = await engine.build(req.file);
 
     regionLib.add(
       {

@@ -206,12 +206,6 @@ const PLACE_CATS: Record<string, string> = {
   building: 'building', landuse: 'landuse', man_made: 'man_made',
 };
 
-function isInterestingTag(k: string): boolean {
-  return k === 'name' || k === 'place' || k === 'amenity' || k === 'shop' || k === 'tourism' ||
-    k === 'leisure' || k === 'highway' || k === 'railway' || k === 'landuse' ||
-    k === 'natural' || k === 'waterway' || k === 'building' || k === 'office' ||
-    k === 'addr:housenumber' || k === 'addr:street' || k === 'historic';
-}
 
 /* ------------------------- graph construction ---------------------- */
 
@@ -870,6 +864,11 @@ export function searchGazetteer(
 
 /* --------------------------- worker plumbing ----------------------- */
 
+// Static import: the parser is part of the same worker bundle.
+import { parseOsmPbf } from './pbf';
+import { isInterestingTag } from './tags';
+
+
 /**
  * The parse/graph/route/search core is pure and testable under Node; only this
  * message handler is worker-specific, so it is installed only when `self` is a
@@ -880,11 +879,22 @@ if (typeof self !== 'undefined' && typeof (self as any).postMessage === 'functio
     const { type, payload } = ev.data as { type: string; payload: any };
     try {
       if (type === 'build') {
-        const { text } = payload as { text: string };
+        // Accepts either .osm XML text or raw .osm.pbf bytes. PBF is the format
+        // Geofabrik actually publishes, so this is the normal path; XML stays
+        // supported because it is trivially inspectable and useful for tests.
+        const { text, bytes, format } = payload as
+          { text?: string; bytes?: ArrayBuffer; format?: 'xml' | 'pbf' };
         const post = (stage: string, pct: number) =>
           (self as any).postMessage({ type: 'progress', stage, pct });
-        post('Parsing XML', 0);
-        const { nodes, ways } = parseOsmXml(text, (p) => post('Parsing XML', p * 0.5));
+
+        const isPbf = format === 'pbf' || (!text && !!bytes);
+        const label = isPbf ? 'Reading PBF' : 'Parsing XML';
+        post(label, 0);
+
+        const { nodes, ways } = isPbf
+          ? await parseOsmPbf(new Uint8Array(bytes!), (p) => post(label, p * 0.5))
+          : parseOsmXml(text ?? '', (p) => post(label, p * 0.5));
+
         post('Building graph', 0.5);
         const ds = buildDataset(nodes, ways, (p) => post('Building graph', 0.5 + p * 0.5));
         (self as any).postMessage({ type: 'built', payload: ds });

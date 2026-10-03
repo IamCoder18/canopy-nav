@@ -166,6 +166,8 @@ describe('persistence availability', () => {
   });
 });
 
+const ARRAYS = ['coords', 'osmIds', 'edgeStart', 'edgeTo', 'edgeCost', 'edgeFlags'] as const;
+
 describe('dataset round trip', () => {
   it('restores a parsed dataset unchanged', async () => {
     const ds = parsed();
@@ -188,7 +190,7 @@ describe('dataset round trip', () => {
     expect(Array.isArray(g.edgeName)).toBe(true);
     expect(g.nodeCount).toBe(ds.graph.nodeCount);
 
-    for (const key of ['coords', 'osmIds', 'edgeStart', 'edgeTo', 'edgeCost', 'edgeFlags'] as const) {
+    for (const key of ARRAYS) {
       expect(loaded!.dataset.graph[key].length).toBe(ds.graph[key].length);
       expect(Array.from(loaded!.dataset.graph[key])).toEqual(Array.from(ds.graph[key]));
       expect(loaded!.dataset.graph[key].buffer.byteLength)

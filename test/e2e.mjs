@@ -25,6 +25,9 @@ const BASE = `http://localhost:${PORT}`;
 const SHOTS = join(__dirname, '..', 'e2e-screenshots');
 mkdirSync(SHOTS, { recursive: true });
 
+/** Which fixture to import; `.pbf` is the format Geofabrik actually publishes. */
+const FIXTURE = process.env.E2E_FIXTURE ?? 'fixture.osm';
+
 let failures = 0;
 const check = (name, ok, detail = '') => {
   console.log(`${ok ? '  PASS' : '  FAIL'}  ${name}${detail ? ` - ${detail}` : ''}`);
@@ -61,7 +64,7 @@ try {
   await page.waitForTimeout(600);
   const input = await page.$('input[type=file]');
   check('file input present', !!input);
-  await input.setInputFiles(join(__dirname, 'fixture.osm'));
+  await input.setInputFiles(join(__dirname, FIXTURE));
 
   // The worker parses and builds the graph; wait for the region count to land.
   await page.waitForFunction(
@@ -71,7 +74,7 @@ try {
   );
   await page.waitForTimeout(1200);
   const afterImport = await page.evaluate(() => document.body.innerText);
-  check('map registered after import', !/No map loaded/.test(afterImport), afterImport.match(/[\d,]+ routable ways/)?.[0] ?? '');
+  check(`map registered from ${FIXTURE}`, !/No map loaded/.test(afterImport), afterImport.match(/[\d,]+ routable ways/)?.[0] ?? '');
   await page.screenshot({ path: join(SHOTS, '1-imported.png') });
 
   /* ---------------- offline search ---------------- */
