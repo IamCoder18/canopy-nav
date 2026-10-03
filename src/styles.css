@@ -400,6 +400,60 @@ code {
 }
 .dropzone.over { border-color: #60A8F0; background: rgba(96, 168, 240, 0.1); }
 
+/* ------------------------------- regions ------------------------------- */
+
+/* Trailing actions on a .result-row: 76dp pills, shrinking row never wraps. */
+.region-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+.pill-btn {
+  min-height: 76px;
+  padding: 0 24px;
+  border-radius: 9999px;
+  background: rgba(96, 168, 240, 0.18);
+  color: #60A8F0;
+  font-size: 24px; font-weight: 500;
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.pill-btn:hover { background: rgba(96, 168, 240, 0.26); }
+.pill-btn.ghost { background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.72); }
+.pill-btn.ghost:hover { background: rgba(255, 255, 255, 0.14); }
+.pill-btn.danger { background: rgba(234, 67, 53, 0.18); color: #F28B82; }
+.pill-btn.danger:hover { background: rgba(234, 67, 53, 0.26); }
+.pill-btn:disabled { opacity: 0.38; cursor: default; }
+
+/* Region confirmed present in the library. */
+.result-icon.ok { background: rgba(24, 128, 56, 0.2); color: #81C995; }
+
+/* Status label — same 44dp / sub3 language as .offline-chip. */
+.chip {
+  min-height: 44px;
+  padding: 0 16px;
+  display: inline-flex; align-items: center; gap: 8px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 18px; font-weight: 500;
+  letter-spacing: 1.2px;
+  white-space: nowrap;
+}
+.chip.ok { background: rgba(24, 128, 56, 0.24); color: #81C995; }
+
+/* Selectable endpoints for a cross-region route. */
+.choice-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.choice {
+  min-height: 76px;
+  padding: 0 24px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 24px; font-weight: 500;
+  display: flex; align-items: center; gap: 12px;
+}
+.choice:hover { background: rgba(255, 255, 255, 0.14); }
+.choice.on { background: #60A8F0; color: #00204A; }
+
 /* Landscape phones / head units are short — tighten the vertical rhythm. */
 @media (max-height: 520px) {
   .top-app-bar { height: 76px; }

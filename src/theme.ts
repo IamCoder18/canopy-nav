@@ -10,6 +10,8 @@
  *   +1 #0E1013   +2 #17181B   +3 #202124
  */
 
+import type { CSSProperties } from 'react';
+
 /* ---------------- AAOS grayscale palette ---------------- */
 export const grey = {
   black: '#000000',
@@ -66,22 +68,37 @@ export const ICON = { primary: 44, secondary: 36, tertiary: 24 } as const;
 export const TOUCH_TARGET = 76;
 
 /**
+ * A single entry of the type scale.
+ *
+ * `lineHeight` is deliberately typed as a `${number}px` string. React treats
+ * `lineHeight` as a unitless CSS property, so it copies a numeric value into
+ * the style attribute verbatim — and a bare number in CSS means a *multiplier*
+ * of font-size, not a length. `line-height: 32` on a 24px font therefore
+ * produces a 768px line box, which silently shreds any layout that relies on
+ * the box height. The AAOS scale is specified in px, so we serialise the unit
+ * ourselves; typing it as `${number}px` turns a bare number into a type error.
+ */
+export type TypeToken = Omit<CSSProperties, 'lineHeight'> & {
+  readonly lineHeight: `${number}px`;
+};
+
+/**
  * Type scale, in pt (== dp for our purposes).
  * Android Auto uses Google Sans at 32dp and up; Roboto below.
  */
 export const type = {
-  display1: { fontFamily: 'var(--sans)', fontSize: 56, lineHeight: 64, letterSpacing: 0 },
-  display2: { fontFamily: 'var(--sans)', fontSize: 44, lineHeight: 52, letterSpacing: 0.1 },
-  display3: { fontFamily: 'var(--sans)', fontSize: 36, lineHeight: 44, letterSpacing: 0.2 },
-  body1: { fontFamily: 'var(--sans)', fontSize: 32, lineHeight: 40, letterSpacing: 0.3 },
-  body1m: { fontFamily: 'var(--sans)', fontSize: 32, lineHeight: 40, letterSpacing: 0.3, fontWeight: 500 },
-  body2: { fontFamily: 'var(--roboto)', fontSize: 28, lineHeight: 36, letterSpacing: 0.3 },
-  body3: { fontFamily: 'var(--roboto)', fontSize: 24, lineHeight: 32, letterSpacing: 0.6 },
-  body3m: { fontFamily: 'var(--roboto)', fontSize: 24, lineHeight: 32, letterSpacing: 0.6, fontWeight: 500 },
-  sub1: { fontFamily: 'var(--roboto)', fontSize: 22, lineHeight: 28, letterSpacing: 1.1 },
-  sub2: { fontFamily: 'var(--roboto)', fontSize: 20, lineHeight: 26, letterSpacing: 1.2 },
-  sub3: { fontFamily: 'var(--roboto)', fontSize: 18, lineHeight: 24, letterSpacing: 1.2 },
-} as const;
+  display1: { fontFamily: 'var(--sans)', fontSize: 56, lineHeight: '64px', letterSpacing: 0 },
+  display2: { fontFamily: 'var(--sans)', fontSize: 44, lineHeight: '52px', letterSpacing: 0.1 },
+  display3: { fontFamily: 'var(--sans)', fontSize: 36, lineHeight: '44px', letterSpacing: 0.2 },
+  body1: { fontFamily: 'var(--sans)', fontSize: 32, lineHeight: '40px', letterSpacing: 0.3 },
+  body1m: { fontFamily: 'var(--sans)', fontSize: 32, lineHeight: '40px', letterSpacing: 0.3, fontWeight: 500 },
+  body2: { fontFamily: 'var(--roboto)', fontSize: 28, lineHeight: '36px', letterSpacing: 0.3 },
+  body3: { fontFamily: 'var(--roboto)', fontSize: 24, lineHeight: '32px', letterSpacing: 0.6 },
+  body3m: { fontFamily: 'var(--roboto)', fontSize: 24, lineHeight: '32px', letterSpacing: 0.6, fontWeight: 500 },
+  sub1: { fontFamily: 'var(--roboto)', fontSize: 22, lineHeight: '28px', letterSpacing: 1.1 },
+  sub2: { fontFamily: 'var(--roboto)', fontSize: 20, lineHeight: '26px', letterSpacing: 1.2 },
+  sub3: { fontFamily: 'var(--roboto)', fontSize: 18, lineHeight: '24px', letterSpacing: 1.2 },
+} satisfies Record<string, TypeToken>;
 
 export type ScreenWidthClass = 'standard' | 'wide' | 'extraWide' | 'superWide';
 

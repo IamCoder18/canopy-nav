@@ -99,7 +99,7 @@ export class NoRouteError extends Error {
 }
 
 /** Normalise the local engine's output into the shared `Route` shape. */
-function localToRoute(r: RouteResult, units: 'km' | 'miles'): Route {
+export function localToRoute(r: RouteResult, units: 'km' | 'miles'): Route {
   const summary = {
     length: r.metres,
     time: r.time,

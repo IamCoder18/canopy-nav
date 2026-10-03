@@ -93,7 +93,10 @@ export function snapToPolyline(pt: LatLng, line: LatLng[]): { index: number; dis
   let best = { index: 0, dist: Infinity, point: line[0] ?? pt };
   for (let i = 0; i < line.length - 1; i++) {
     const [px, py] = projectOnSegment(pt, line[i], line[i + 1]);
-    const d = Math.hypot(pt[0] - px, pt[1] - py);
+    // Measure in metres, not degrees: a degree of longitude is ~cos(lat) times
+    // a degree of latitude, so a Euclidean degree distance badly understates
+    // east-west deviation and would make off-route detection useless.
+    const d = haversine(pt, [px, py]);
     if (d < best.dist) best = { index: i, dist: d, point: [px, py] };
   }
   return best;
