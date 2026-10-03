@@ -2,6 +2,11 @@ import React from 'react';
 
 interface P {
   size?: number;
+  /**
+   * Defaults to `currentColor` so an icon always inherits its container's
+   * colour. Never hardcode a default here: a light button with a white icon
+   * renders as an invisible glyph.
+   */
   color?: string;
   className?: string;
 }
@@ -224,92 +229,92 @@ export function ManeuverIcon({ kind, size = 24, color: c = '#fff', className }: 
 /** Stroke style shared by every system icon. */
 const ic = (c: string) => ({ stroke: c, ...STROKE });
 
-export const IconSearch = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconSearch = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><circle cx="11" cy="11" r="6.5" {...ic(c)} /><path d="M15.8 15.8 L21 21" {...ic(c)} /></svg>
 );
-export const IconBack = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconBack = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><path d="M15 4 L7 12 L15 20" {...ic(c)} /></svg>
 );
-export const IconClose = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconClose = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><path d="M6 6 L18 18 M18 6 L6 18" {...ic(c)} /></svg>
 );
-export const IconMute = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconMute = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}>
     <path d="M11 5 L6.5 9 H3 v6 h3.5 L11 19 Z" {...ic(c)} />
     <path d="M15.5 9.5 L20 14 M20 9.5 L15.5 14" {...ic(c)} />
   </svg>
 );
-export const IconSound = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconSound = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}>
     <path d="M11 5 L6.5 9 H3 v6 h3.5 L11 19 Z" {...ic(c)} />
     <path d="M15 9 a4.5 4.5 0 0 1 0 6" {...ic(c)} />
   </svg>
 );
-export const IconOverview = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconOverview = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}>
     <path d="M9 4 L3.5 12 L9 20 Z" {...ic(c)} />
     <path d="M15 4 L20.5 12 L15 20 Z" {...ic(c)} />
   </svg>
 );
-export const IconLayers = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconLayers = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}>
     <path d="M12 3 L21 8 L12 13 L3 8 Z" {...ic(c)} />
     <path d="M3 13 L12 18 L21 13" {...ic(c)} />
   </svg>
 );
-export const IconTraffic = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconTraffic = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}>
     <rect x="9" y="3" width="6" height="18" rx="2.5" {...ic(c)} />
     <circle cx="12" cy="7" r="1.4" fill={c} /><circle cx="12" cy="12" r="1.4" fill={c} /><circle cx="12" cy="17" r="1.4" fill={c} />
   </svg>
 );
-export const IconCompass = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconCompass = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><circle cx="12" cy="12" r="8.5" {...ic(c)} /><path d="M15 9 L10.5 14.5 L9 9 Z" fill={c} /></svg>
 );
-export const IconSettings = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconSettings = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}>
     <circle cx="12" cy="12" r="3" {...ic(c)} />
     <path d="M12 2v3 M12 19v3 M2 12h3 M19 12h3 M4.9 4.9l2.1 2.1 M17 17l2.1 2.1 M19.1 4.9L17 7 M7 17l-2.1 2.1" {...ic(c)} />
   </svg>
 );
-export const IconHome = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconHome = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><path d="M4 11 L12 4 L20 11" {...ic(c)} /><path d="M6.5 10 v10 h11 v-10" {...ic(c)} /></svg>
 );
-export const IconCar = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconCar = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}>
     <path d="M4 15 l1.6 -5 a2 2 0 0 1 1.9 -1.4 h9 a2 2 0 0 1 1.9 1.4 L20 15" {...ic(c)} />
     <rect x="3" y="15" width="18" height="4.5" rx="1.6" {...ic(c)} />
   </svg>
 );
-export const IconGoto = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconGoto = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><path d="M21 3 L3 10.5 l7 3 3 7 Z" {...ic(c)} /></svg>
 );
-export const IconPlus = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconPlus = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><path d="M12 5v14 M5 12h14" {...ic(c)} /></svg>
 );
-export const IconMinus = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconMinus = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><path d="M5 12h14" {...ic(c)} /></svg>
 );
-export const IconLocate = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconLocate = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><circle cx="12" cy="12" r="3.2" fill={c} /><circle cx="12" cy="12" r="7" {...ic(c)} /></svg>
 );
-export const IconChevronRight = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconChevronRight = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><path d="M9 5 l7 7 -7 7" {...ic(c)} /></svg>
 );
-export const IconPhone = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconPhone = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}>
     <path d="M7 3 h3 l1.5 4 -2 1.5 a11 11 0 0 0 6 6 L17 12.5 21 14 v3 a2 2 0 0 1 -2.2 2 A16.5 16.5 0 0 1 3.9 5.2 2 2 0 0 1 5.9 3 Z" {...ic(c)} />
   </svg>
 );
-export const IconMessage = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconMessage = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><path d="M4 5 h16 v11 h-9 l-5 4 v-4 H4 Z" {...ic(c)} /></svg>
 );
-export const IconMusic = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconMusic = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><path d="M9 18 V6 l11 -2 v12" {...ic(c)} /><circle cx="6.5" cy="18" r="2.5" {...ic(c)} /><circle cx="17.5" cy="16" r="2.5" {...ic(c)} /></svg>
 );
-export const IconFile = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconFile = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><path d="M6 3 h7 l5 5 v13 H6 Z" {...ic(c)} /><path d="M13 3 v5 h5" {...ic(c)} /></svg>
 );
-export const IconRefresh = ({ size = 24, color: c = '#fff' }: P) => (
+export const IconRefresh = ({ size = 24, color: c = 'currentColor' }: P) => (
   <svg {...s(size)}><path d="M20 12a8 8 0 1 1 -2.4 -5.7" {...ic(c)} /><path d="M20 4v5h-5" {...ic(c)} /></svg>
 );

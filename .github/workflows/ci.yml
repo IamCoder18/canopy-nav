@@ -23,3 +23,25 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npx vite build
+
+      # End-to-end: drives the real built app in headless Chrome through
+      # import -> offline search -> route -> navigate -> regions. This is the
+      # only check that exercises the worker, region store, router and screens
+      # together, so a wiring regression can't slip past unit tests.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end smoke test
+        run: |
+          npx vite preview --port 4192 --host &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4192/ >/dev/null && break
+            sleep 1
+          done
+          node test/e2e.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-screenshots
+          path: e2e-screenshots/

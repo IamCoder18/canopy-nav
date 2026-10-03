@@ -36,3 +36,4 @@ coverage/
 .env
 .env.local
 *.p12
+e2e-screenshots/

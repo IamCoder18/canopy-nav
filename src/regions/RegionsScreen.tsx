@@ -143,7 +143,8 @@ export function RegionsScreen(props: RegionsScreenProps) {
         <button className="icon-btn" onClick={props.onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
         <div style={{ ...T.body1m, marginLeft: DP.P2 }}>Regions</div>
         <div className="spacer" />
-        <span className="chip ok">
+        {/* Green only once something is actually loaded. */}
+        <span className={`chip ${regions.length ? 'ok' : ''}`}>
           {regions.length} loaded{totalBytes > 0 ? ` · ${fmtBytes(totalBytes)}` : ''}
         </span>
       </div>
@@ -284,12 +285,12 @@ export function RegionsScreen(props: RegionsScreenProps) {
         {/* -------------------------- catalogue -------------------------- */}
         <div className="section-head" style={T.body3m}>Catalogue</div>
         <div className="hint-card">
-          <div style={{ ...T.body3, color: ink.secondary, marginBottom: DP.P3 }}>
+          <div style={{ ...T.body3, color: ink.secondary }}>
             Downloads are Geofabrik <code>.osm.pbf</code> extracts. This build parses
             <code> .osm</code> XML, so convert on a desktop first:
           </div>
-          <div className="pill-btn" style={{ pointerEvents: 'none' }}>
-            osmium cat region.osm.pbf -o region.osm
+          <div style={{ ...T.body3, marginTop: DP.P3 }}>
+            <code>osmium cat region.osm.pbf -o region.osm</code>
           </div>
         </div>
 
