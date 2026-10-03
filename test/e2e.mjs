@@ -137,6 +137,22 @@ try {
   check('search works with a loaded region', /Elbow St/.test(multi));
   const stillOnSearch = await page.evaluate(() => !!document.querySelector('.inline-search'));
   check('still on the search screen', stillOnSearch);
+
+  // category chips derived from the downloaded gazetteer
+  await page.fill('.inline-search input', '');
+  await page.waitForTimeout(700);
+  const chips = await page.evaluate(() =>
+    [...document.querySelectorAll('.chip')].map((c) => c.textContent.trim()),
+  );
+  check('browse chips rendered from offline data', chips.length > 0, chips.join(', '));
+  if (chips.length) {
+    await page.click('.chip');
+    await page.waitForTimeout(900);
+    const afterChip = await page.evaluate(() => document.querySelectorAll('.result-row').length);
+    check('chip selects a category and returns results', afterChip > 0, `${afterChip} rows`);
+  }
+  await page.fill('.inline-search input', '');
+  await page.waitForTimeout(400);
   // leave the search screen so the regions block starts from home
   const backBtn = await page.$('button[aria-label="Back"]');
   if (backBtn) await backBtn.click();

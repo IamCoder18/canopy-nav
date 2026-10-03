@@ -251,7 +251,8 @@ async function transact(
     tx.oncomplete = () => resolve();
     // A failed request aborts its transaction, so this covers both the request
     // failure and an explicit `abort()`.
-    tx.onabort = () => reject(reqError ?? tx.error ?? new Error('the storage transaction was aborted'));
+    tx.onabort = () =>
+      reject(reqError ?? tx.error ?? new Error('the storage transaction was aborted'));
 
     try {
       work(tx, track);
@@ -300,12 +301,21 @@ function pack(view: ArrayBufferView): ArrayBuffer {
   return new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice().buffer;
 }
 
-function unpack<T>(buffer: ArrayBuffer | null | undefined, ctor: TypedArrayCtor<T>, field: string, id: string): T {
+function unpack<T>(
+  buffer: ArrayBuffer | null | undefined,
+  ctor: TypedArrayCtor<T>,
+  field: string,
+  id: string,
+): T {
   if (!(buffer instanceof ArrayBuffer)) {
     throw corrupt(id, `the "${field}" array is missing`);
   }
   if (buffer.byteLength % ctor.BYTES_PER_ELEMENT !== 0) {
-    throw corrupt(id, `the "${field}" array is ${buffer.byteLength} bytes, which is not a whole number of elements`);
+    throw corrupt(
+      id,
+      `the "${field}" array is ${buffer.byteLength} bytes, which is not a whole ` +
+      `number of ${ctor.BYTES_PER_ELEMENT}-byte elements`,
+    );
   }
   return new ctor(buffer);
 }
@@ -514,7 +524,8 @@ async function saveFailure(meta: RegionMeta, bytes: number, e: unknown): Promise
   return new Error(
     `Not enough device storage to keep ${label(meta)} (${mb(bytes)}). ` +
     (victim
-      ? `Remove ${label(victim)} (${mb(victim.storedBytes ?? 0)}) from Offline maps first, then import ${meta.name} again.`
+      ? `Remove ${label(victim)} (${mb(victim.storedBytes ?? 0)}) from Offline maps ` +
+        `first, then import ${meta.name} again.`
       : 'Free up space on the device, then import it again.'),
   );
 }

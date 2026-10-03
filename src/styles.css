@@ -471,3 +471,27 @@ code {
   .nav-bottom { height: 96px; }
   .eta-bar { height: 76px; }
 }
+
+/* Category chips — browse the offline gazetteer by what it actually contains */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.chip {
+  height: 76px;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  border-radius: 9999px; /* R4 — chips are fully rounded */
+  background: rgba(255, 255, 255, 0.08);
+  color: #F1F3F4;
+  font-size: 24px;
+  font-weight: 500;
+  transition: background 120ms ease;
+}
+.chip:hover { background: rgba(255, 255, 255, 0.14); }
+.chip:active { background: rgba(255, 255, 255, 0.2); }
+.chip.ok { background: rgba(96, 168, 240, 0.18); color: #60A8F0; }

@@ -717,6 +717,24 @@ function PreviewRow({ label, value }: { label: string; value: string; icon?: Rea
 
 /* ---------------------------- SearchScreen -------------------------- */
 
+/** Categories to offer, derived from what the downloaded map actually contains. */
+function categoriesFor(regions: ReturnType<typeof useRegions>, dataset: OsmDataset | null) {
+  const counts = new Map<string, number>();
+  const gaz = regions.length ? regions.flatMap((r) => r.dataset.gaz) : (dataset?.gaz ?? []);
+  for (const g of gaz) {
+    if (g.cat === 'street' || g.cat === 'address' || g.cat === 'place') continue;
+    counts.set(g.cat, (counts.get(g.cat) ?? 0) + 1);
+  }
+  const label: Record<string, string> = {
+    amenity: 'Amenities', shop: 'Shops', tourism: 'Attractions', leisure: 'Leisure',
+    office: 'Offices', healthcare: 'Healthcare', historic: 'Historic', craft: 'Craft',
+  };
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([cat, n]) => ({ key: cat, label: label[cat] ?? cat, count: n }));
+}
+
 function SearchScreen(props: {
   dataset: OsmDataset | null;
   regions: ReturnType<typeof useRegions>;
@@ -725,12 +743,39 @@ function SearchScreen(props: {
   onPick: (pos: LatLng, label: string) => void;
   onBack: () => void;
 }) {
+  const categories = useMemo(
+    () => categoriesFor(props.regions, props.dataset),
+    [props.regions, props.dataset],
+  );
   const [q, setQ] = useState('');
+  // A category chip filters the gazetteer by tag category. It is deliberately
+  // not a text query: searching the literal word "city" matches no place names.
+  const [cat, setCat] = useState<string | null>(null);
   const [results, setResults] = useState<{ label: string; sub: string; pos: LatLng }[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
+    // Category browse: every entry with that tag, nearest first.
+    if (cat) {
+      const gaz = props.regions.length
+        ? props.regions.flatMap((r) => r.dataset.gaz)
+        : (props.dataset?.gaz ?? []);
+      const near = props.location;
+      const hits = gaz
+        .filter((g) => g.cat === cat)
+        .map((g) => ({
+          label: g.name,
+          sub: g.cat,
+          pos: [g.lon, g.lat] as LatLng,
+          d: Math.hypot((g.lat - near[1]) * 111320, (g.lon - near[0]) * 111320 * Math.cos(near[1] * Math.PI / 180)),
+        }))
+        .sort((a, b) => a.d - b.d)
+        .slice(0, 20);
+      setResults(hits);
+      setBusy(false);
+      return;
+    }
     const term = q.trim();
     if (term.length < 2) { setResults([]); return; }
     let cancelled = false;
@@ -774,7 +819,7 @@ function SearchScreen(props: {
       if (!cancelled) setBusy(false);
     }, 250);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [q, props.dataset, props.online, props.location, props.regions]);
+  }, [q, cat, props.dataset, props.online, props.location, props.regions]);
 
   return (
     <div className="search-root">
@@ -803,7 +848,16 @@ function SearchScreen(props: {
             Searching {props.regions.length} downloaded regions. Results show which region each is in.
           </div>
         )}
-        {busy && !results.length && <div style={{ ...T.body3, color: ink.secondary }}>Searching…</div>}
+        {cat && (
+          <div className="result-row">
+            <span className="result-text">
+              <span style={T.body3m}>Browsing {cat}</span>
+              <span style={{ ...T.sub3, color: ink.secondary }}>{results.length} nearby</span>
+            </span>
+            <button className="chip" onClick={() => setCat(null)}>Clear</button>
+          </div>
+        )}
+        {busy && !results.length && !cat && <div style={{ ...T.body3, color: ink.secondary }}>Searching…</div>}
         {results.map((r, i) => (
           <button key={i} className="result-row" onClick={() => props.onPick(r.pos, r.label)}>
             <span className="result-icon"><IconGoto size={ICON.secondary} /></span>
@@ -814,6 +868,20 @@ function SearchScreen(props: {
             <IconChevronRight size={ICON.secondary} color={ink.tertiary} />
           </button>
         ))}
+        {!q && !cat && categories.length > 0 && (
+          <>
+            <div className="section-head" style={{ ...T.body3m, marginTop: DP.P4 }}>Browse</div>
+            <div className="chip-row">
+              {categories.map((c) => (
+                <button key={c.key} className="chip" onClick={() => { setCat(cat === c.key ? null : c.key); setQ(''); }}>
+                  {c.label}
+                  <span style={{ ...T.sub3, color: 'rgba(255,255,255,0.5)', marginLeft: 8 }}>{c.count}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
         {!q && (
           <div className="hint-card" style={{ marginTop: DP.P4 }}>
             <div style={T.body3m}>Try</div>
