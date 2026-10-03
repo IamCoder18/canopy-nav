@@ -1,0 +1,99 @@
+name: Release
+
+# Tag push (v1.2.3) -> build the APK and attach it to a GitHub Release.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Gradle 8.11 cannot run on JDK 25 (Unsupported class file major version 69).
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build web bundle and sync Capacitor
+        run: npm run sync
+
+      - name: Build debug APK
+        run: |
+          cd android
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Collect APK
+        id: apk
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+          mkdir -p dist-artifacts
+          cp "$APK" "dist-artifacts/canopy-nav-${GITHUB_REF_NAME}.apk"
+          ls -lh dist-artifacts/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: dist-artifacts/*.apk
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-artifacts/*.apk
+          generate_release_notes: true
+          body: |
+            ## Canopy Nav ${{ github.ref_name }}
+
+            Android app recreating the Android Auto / Google Maps navigation UI
+            with offline OpenStreetMap routing.
+
+            ### Install
+            ```
+            adb install -r canopy-nav-${{ github.ref_name }}.apk
+            ```
+
+            ### First run
+            1. Download a `.osm` extract from [Geofabrik](https://download.geofabrik.de/),
+               or convert a `.pbf` first:
+               ```bash
+               osmium cat region.osm.pbf -o region.osm
+               ```
+            2. Tap **Import .osm** and select the file.
+            3. Search for a destination and tap **Start**.
+
+            Routing works entirely offline once a map is loaded. Valhalla and
+            Nominatim are available as optional online providers.
+
+            Map data © OpenStreetMap contributors (ODbL).

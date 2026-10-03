@@ -1,0 +1,38 @@
+# Logs
+*.log
+npm-debug.log*
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+android/app/build/
+android/build/
+android/.gradle/
+android/app/src/main/assets/public/
+android/local.properties
+android/capacitor-capacitor-cordova-android-plugins/
+.gradle/
+
+# Capacitor / native generated
+android/app/release/
+*.keystore
+!debug.keystore
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+# Test artifacts
+coverage/
+
+# Never commit large map data or API keys
+*.osm.pbf
+*.osm
+!test/fixture.osm
+.env
+.env.local
+*.p12

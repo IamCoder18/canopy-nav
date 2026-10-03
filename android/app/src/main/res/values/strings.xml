@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Canopy Nav</string>
+    <string name="title_activity_main">Canopy Nav</string>
+    <string name="package_name">com.canopy.nav</string>
+    <string name="custom_url_scheme">com.canopy.nav</string>
+</resources>

@@ -1,0 +1,305 @@
+/**
+ * A MapLibre style that reproduces Google Maps' light cartography as closely as
+ * an open-data source allows.
+ *
+ * We start from OpenFreeMap's `liberty` vector style (free, no API key) and
+ * remap the palette to Google's, then declare the navigation overlays ourselves
+ * (route casing + route line + traffic tint + markers).
+ *
+ * Google's style is proprietary; this is an independent re-creation of its
+ * visual conventions (land/green/water/road ramps), not a copy of their tiles.
+ */
+
+import type { StyleSpecification } from 'maplibre-gl';
+
+export const TILES = 'https://tiles.openfreemap.org/styles/liberty';
+
+/** Google Maps light-mode cartography palette. */
+const G = {
+  land: '#F8F7F5',
+  landAlt: '#F1EFEA',
+  water: '#AADAFF',
+  waterDeep: '#8FC8F5',
+  green: '#C5E8C0',
+  greenDeep: '#A8D5A0',
+  grass: '#CFEDC9',
+  building: '#EFEDE8',
+  buildingOutline: '#E2DFD8',
+  road: '#FFFFFF',
+  roadCasing: '#E3E0D8',
+  arterial: '#FFFFFF',
+  arterialCasing: '#DCD8CE',
+  highway: '#FFE8A8',
+  highwayCasing: '#F0C970',
+  motorway: '#FFDFA6',
+  motorwayCasing: '#E8A33D',
+  label: '#5F6368',
+  labelHalo: '#FFFFFF',
+  labelMajor: '#3C4043',
+} as const;
+
+/** Remap a Liberty style's paint properties onto Google's palette. */
+function remapPaint(layer: any): void {
+  const p = layer.paint ?? {};
+  const fill: string = layer['source-layer'] ?? '';
+
+  switch (layer.type) {
+    case 'background':
+      p['background-color'] = G.land;
+      break;
+
+    case 'fill':
+      if (/water|ocean|river|stream/.test(fill)) p['fill-color'] = G.water;
+      else if (/park|forest|wood|grass|cemetery|golf|scrub|pitch|garden|nature/.test(fill))
+        p['fill-color'] = /forest|wood/.test(fill) ? G.greenDeep : G.green;
+      else if (/building/.test(fill)) {
+        p['fill-color'] = G.building;
+        p['fill-outline-color'] = G.buildingOutline;
+      } else if (/land|earth|ground|beach|sand/.test(fill)) p['fill-color'] = G.landAlt;
+      else if (/residential|industrial|commercial|retail|suburb|quarter|neighbourhood/.test(fill))
+        p['fill-color'] = G.landAlt;
+      break;
+
+    case 'line': {
+      const isWater = /water|river|stream|canal/.test(fill);
+      if (isWater) {
+        p['line-color'] = G.water;
+        break;
+      }
+      // Motorway / trunk keep Google's warm fill with an orange casing.
+      if (/motorway|trunk/.test(fill)) {
+        p['line-color'] = G.motorway;
+        p['line-opacity'] = 1;
+        if (p['line-width'] && typeof p['line-width'] === 'object' && (p['line-width'] as any)['stops'])
+          (p['line-width'] as any).stops = ((p['line-width'] as any).stops as [number, number][]).map(([k, v]) => [
+            k,
+            Math.max(0.4, v * 1.15),
+          ]);
+        break;
+      }
+      if (/primary|secondary|trunk_link/.test(fill)) {
+        p['line-color'] = G.highway;
+        p['line-opacity'] = 1;
+        break;
+      }
+      // Everything else: white fill, light grey casing (done by the casing layers).
+      if (/road|street|path|bridge|tunnel|service|railway|ferry/.test(fill)) {
+        p['line-color'] = G.road;
+        p['line-opacity'] = 1;
+        break;
+      }
+      p['line-color'] = G.roadCasing;
+      break;
+    }
+
+    case 'symbol': {
+      const isRoadLabel = /road|street|place/.test(fill) || /place/.test(layer.id);
+      const isWater = /water|ocean|river/.test(fill);
+      if (isWater) p['text-color'] = '#4A90C4';
+      else if (isRoadLabel) p['text-color'] = G.labelMajor;
+      else p['text-color'] = G.label;
+      p['text-halo-color'] = G.labelHalo;
+      p['text-halo-width'] = 1.2;
+      break;
+    }
+  }
+
+  // Casing layers sit directly under their fill layer with the same id prefix.
+  if (/casing/i.test(layer.id)) {
+    const isWater = /water|river/.test(fill);
+    p['line-color'] = isWater ? G.waterDeep : G.roadCasing;
+    p['line-opacity'] = 0.9;
+  }
+}
+
+export async function buildStyle(): Promise<StyleSpecification> {
+  const res = await fetch(TILES);
+  if (!res.ok) throw new Error(`Tile style unavailable (HTTP ${res.status})`);
+  const style = (await res.json()) as StyleSpecification;
+
+  const layers = style.layers as any[];
+  for (const layer of layers) {
+    layer.paint = layer.paint ?? {};
+    remapPaint(layer);
+    // Google Maps labels sit above the road network but below POI icons.
+    if (layer.type === 'symbol') layer.layout = { ...(layer.layout ?? {}), 'symbol-z-order': 'source' };
+  }
+
+  // The tile style has no offline overlay sources; add them (empty) so the
+  // overlay layers always resolve, whichever style is active.
+  for (const [id, src] of Object.entries(overlaySources())) {
+    if (!style.sources) style.sources = {};
+    if (!style.sources[id]) style.sources[id] = src;
+  }
+
+  style.layers = [...layers, ...overlays()];
+
+  style.glyphs = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
+  return style;
+}
+
+/**
+ * Navigation overlays, in draw order.
+ * Google draws the route as a thick blue line with a darker blue casing and
+ * slightly rounded joins; traffic tints the line amber/red rather than replacing it.
+ */
+export function overlays(): any[] {
+  return [
+    {
+      id: 'canopy-avoid-fill',
+      type: 'fill',
+      source: 'canopy-avoid',
+      filter: ['==', '$type', 'Polygon'],
+      paint: { 'fill-color': '#5F6368', 'fill-opacity': 0.55 },
+    },
+    {
+      id: 'canopy-avoid-line',
+      type: 'line',
+      source: 'canopy-avoid',
+      filter: ['==', '$type', 'LineString'],
+      paint: { 'line-color': '#80868B', 'line-width': 3, 'line-dasharray': [2, 2] },
+    },
+
+    // --- route casing ---
+    {
+      id: 'canopy-route-casing',
+      type: 'line',
+      source: 'canopy-route',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#0B4FB0', 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 5, 10, 10, 14, 20, 18, 30], 'line-opacity': 0.55 },
+    },
+    // --- traffic tint ---
+    {
+      id: 'canopy-route-traffic',
+      type: 'line',
+      source: 'canopy-route',
+      filter: ['==', ['get', 'traffic'], 'slow'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 3, 10, 6, 14, 13, 18, 22], 'line-color': '#E5484D' },
+    },
+    {
+      id: 'canopy-route-traffic-slow',
+      type: 'line',
+      source: 'canopy-route',
+      filter: ['==', ['get', 'traffic'], 'dense'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 3, 10, 6, 14, 13, 18, 22], 'line-color': '#E8A33D' },
+    },
+    // --- travelled portion (dimmed, Google Maps greys out the part already driven) ---
+    {
+      id: 'canopy-route-travelled',
+      type: 'line',
+      source: 'canopy-route-travelled',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#9AA0A6', 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 3, 10, 6, 14, 13, 18, 22], 'line-opacity': 0.75 },
+    },
+    // --- the route itself ---
+    {
+      id: 'canopy-route',
+      type: 'line',
+      source: 'canopy-route',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#1A73E8', 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 3.5, 10, 6.5, 14, 14, 18, 24] },
+    },
+
+    // --- maneuver markers along the route ---
+    {
+      id: 'canopy-maneuver-markers',
+      type: 'circle',
+      source: 'canopy-maneuvers',
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 4, 14, 7, 18, 10],
+        'circle-color': '#FFFFFF',
+        'circle-stroke-color': '#1A73E8',
+        'circle-stroke-width': 2.5,
+      },
+    },
+
+    // --- origin puck ---
+    {
+      id: 'canopy-origin-halo',
+      type: 'circle',
+      source: 'canopy-origin',
+      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 9, 14, 16, 18, 24], 'circle-color': '#1A73E8', 'circle-opacity': 0.18 },
+    },
+    {
+      id: 'canopy-origin',
+      type: 'circle',
+      source: 'canopy-origin',
+      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 4.5, 14, 7.5, 18, 11], 'circle-color': '#FFFFFF', 'circle-stroke-width': 3, 'circle-stroke-color': '#1A73E8' },
+    },
+
+    // --- destination pin ---
+    {
+      id: 'canopy-dest-shadow',
+      type: 'circle',
+      source: 'canopy-destination',
+      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 6, 14, 10, 18, 14], 'circle-color': '#000000', 'circle-opacity': 0.2, 'circle-translate': [0, 2] },
+    },
+    {
+      id: 'canopy-destination',
+      type: 'circle',
+      source: 'canopy-destination',
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 5, 14, 8.5, 18, 12],
+        'circle-color': '#EA4335',
+        'circle-stroke-color': '#FFFFFF',
+        'circle-stroke-width': 2.5,
+      },
+    },
+    {
+      id: 'canopy-destination-inner',
+      type: 'circle',
+      source: 'canopy-destination',
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 1.8, 14, 3.2, 18, 4.6],
+        'circle-color': '#FFFFFF',
+      },
+    },
+
+    // --- live location puck ---
+    {
+      id: 'canopy-location-accuracy',
+      type: 'circle',
+      source: 'canopy-location',
+      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 12, 14, 40, 18, 90], 'circle-color': '#1A73E8', 'circle-opacity': 0.12 },
+    },
+    {
+      id: 'canopy-location',
+      type: 'circle',
+      source: 'canopy-location',
+      paint: { 'circle-radius': 7, 'circle-color': '#1A73E8', 'circle-stroke-width': 3, 'circle-stroke-color': '#FFFFFF' },
+    },
+
+    // --- imported .osm overlay ---
+    {
+      id: 'canopy-osm-roads',
+      type: 'line',
+      source: 'canopy-osm',
+      filter: ['==', ['geometry-type'], 'LineString'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': ['match', ['get', 'class'], 'motorway', '#F0A03C', 'trunk', '#F0A03C', 'primary', '#FFE8A8', 'secondary', '#FFF3D0', '#FFFFFF'],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1, 14, 3, 18, 8],
+      },
+    },
+  ];
+}
+
+const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
+
+/** Empty GeoJSON sources for every layer the overlays reference. */
+export function overlaySources(): Record<string, any> {
+  return {
+    'canopy-route': { type: 'geojson', data: EMPTY },
+    'canopy-route-travelled': { type: 'geojson', data: EMPTY },
+    'canopy-maneuvers': { type: 'geojson', data: EMPTY },
+    'canopy-origin': { type: 'geojson', data: EMPTY },
+    'canopy-destination': { type: 'geojson', data: EMPTY },
+    'canopy-location': { type: 'geojson', data: EMPTY },
+    'canopy-avoid': { type: 'geojson', data: EMPTY },
+    'canopy-osm': { type: 'geojson', data: EMPTY },
+    'canopy-osm-water': { type: 'geojson', data: EMPTY },
+    'canopy-osm-green': { type: 'geojson', data: EMPTY },
+  };
+}
