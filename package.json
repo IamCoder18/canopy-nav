@@ -10,7 +10,8 @@
     "sync": "npm run build && npx cap sync android",
     "apk": "npm run sync && cd android && JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64} ./gradlew assembleDebug",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "e2e": "node test/e2e.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",
