@@ -680,15 +680,23 @@ function buildIndex(g: RoadGraph, cellDeg: number) {
   };
 }
 
-let cachedIndex: ReturnType<typeof buildIndex> | null = null;
-let cachedNodeCount = -1;
+/**
+ * Spatial index cache, keyed by graph identity.
+ *
+ * This used to be a single global entry keyed on node count, which silently
+ * handed graph B's routing search graph A's buckets whenever two extracts
+ * shared a node count — i.e. exactly the multi-region case. A WeakMap keeps one
+ * index per graph and lets a discarded dataset be collected.
+ */
+const indexCache = new WeakMap<RoadGraph, ReturnType<typeof buildIndex>>();
 
 function indexFor(g: RoadGraph) {
-  if (!cachedIndex || cachedNodeCount !== g.nodeCount) {
-    cachedIndex = buildIndex(g, 0.002);
-    cachedNodeCount = g.nodeCount;
+  let ix = indexCache.get(g);
+  if (!ix) {
+    ix = buildIndex(g, 0.002);
+    indexCache.set(g, ix);
   }
-  return cachedIndex;
+  return ix;
 }
 
 /**

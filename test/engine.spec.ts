@@ -334,3 +334,40 @@ describe('geo utilities', () => {
     expect(s.point[1]).toBeCloseTo(0, 6);
   });
 });
+
+describe('multi-region index isolation', () => {
+  const mkRegion = (id: string, ds: ReturnType<typeof build>): Region => ({
+    id, name: id, code: id, bbox: ds.bbox, loadedAt: 0, bytes: 0,
+    counts: ds.counts, gazetteerSize: ds.gaz.length, dataset: ds,
+  });
+
+  it('does not reuse one region’s spatial index for another', () => {
+    // Two different extracts that happen to share a node count. A global cache
+    // keyed on nodeCount would route the second using the first's buckets.
+    const a = build();
+    const bXml = XML
+      .replace(/lat="([\d.]+)"/g, (_m, v) => `lat="${(parseFloat(v) + 0.5).toFixed(7)}"`)
+      .replace(/lon="([-\d.]+)"/g, (_m, v) => `lon="${(parseFloat(v) + 0.5).toFixed(7)}"`)
+      .replace(/id="(\d+)"/g, (_m, v) => `id="${parseInt(v, 10) + 5000000}"`)
+      .replace(/ref="(\d+)"/g, (_m, v) => `ref="${parseInt(v, 10) + 5000000}"`);
+    const bn = parseOsmXml(bXml);
+    const b = buildDataset(bn.nodes, bn.ways, () => {});
+
+    expect(b.graph.nodeCount).toBe(a.graph.nodeCount);
+
+    // Route in B first, then in A. If the index leaked, A would resolve
+    // against B's buckets and return nonsense.
+    routeOnGraph(b.graph, [-114.0000, 51.6000], [-113.9500, 51.6600]);
+    const inA = routeOnGraph(a.graph, FROM, TO);
+
+    expect(inA).not.toBeNull();
+    expect(inA!.metres).toBeGreaterThan(1000);
+    for (const [lon, lat] of inA!.geometry) {
+      expect(lat).toBeGreaterThan(51.4);
+      expect(lat).toBeLessThan(51.6);
+      expect(lon).toBeGreaterThan(-1.5);
+      expect(lon).toBeLessThan(-1.2);
+    }
+    void mkRegion;
+  });
+});
