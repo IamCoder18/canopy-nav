@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { MapView } from './map/MapView';
-import { OsmEngine, type BuildProgress } from './osm/engine';
+import type { BuildProgress } from './osm/engine';
+import type { OsmDataset } from './osm/engine.worker';
 import { searchPlaces, type Place } from './nav/geocode';
 import {
-  resolveRoute, isOnline, watchConnectivity, PROVIDERS,
+  resolveRoute, isOnline, watchConnectivity, PROVIDERS, localToRoute,
   NoRouteError, type ProviderId,
 } from './nav/providers';
 import type { Route, ValhallaManeuver } from './nav/valhalla';
@@ -14,13 +15,17 @@ import {
 } from './geo';
 import { ink, type as T, DP, ICON } from './theme';
 import { useLocation, type LocationMode } from './nav/location';
+import RegionsScreen from './regions/RegionsScreen';
+import {
+  importRegionFile, localRegionId, localRegionName, regionLib, useRegions,
+} from './regions/store';
 import {
   ManeuverIcon, IconSearch, IconBack, IconClose, IconMute, IconSound, IconOverview,
   IconLayers, IconTraffic, IconSettings, IconHome, IconGoto, IconChevronRight,
   IconFile, IconLocate, IconCar,
 } from './icons';
 
-type Screen = 'home' | 'search' | 'preview' | 'navigating' | 'steps' | 'settings' | 'import';
+type Screen = 'home' | 'search' | 'preview' | 'navigating' | 'steps' | 'settings' | 'import' | 'regions';
 
 /* ------------------------------ App ------------------------------ */
 
@@ -31,10 +36,11 @@ export default function App() {
   const [apiKey, setApiKey] = useState('');
   const [endpoint, setEndpoint] = useState('');
 
-  const [dataset, setDataset] = useState<OsmEngine['data']>(null);
-  const engine = useMemo(() => new OsmEngine(), []);
+  const [dataset, setDataset] = useState<OsmDataset | null>(null);
   const [progress, setProgress] = useState<BuildProgress | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  // Subscribes to the library, so every screen re-renders when a region lands.
+  const regions = useRegions();
 
   const [destination, setDestination] = useState<{ pos: LatLng; label: string } | null>(null);
   const [origin, setOrigin] = useState<LatLng | null>(null);
@@ -55,30 +61,38 @@ export default function App() {
   const { fix, mode: locationMode, error: locationError } = useLocation(true);
   const location = fix.pos;
 
-  useEffect(() => engine.setProgressHandler(setProgress), [engine]);
   useEffect(() => watchConnectivity(setOnline), []);
 
   /* -------------------------- OSM import -------------------------- */
 
-  const onFile = useCallback(async (file: File) => {
+  /**
+   * Parse an extract and hand back its dataset.
+   *
+   * Every import goes through the region library, whatever screen started it:
+   * the library owns one worker per region, so the map/search screens keep
+   * working against `dataset` while `regions` holds the full set.
+   */
+  const build = useCallback(async (file: File, id: string, name: string, code: string) => {
     setImportError(null);
-    setProgress({ stage: 'Reading file', pct: 0 });
-    try {
-      const text = await file.text();
-      const ds = await engine.build(text);
-      setDataset(ds);
-      setProgress(null);
-      setOrigin(null);
-      setRoute(null);
-      setDestination(null);
-      setFocus({ center: [ (ds.bbox[0]+ds.bbox[2])/2, (ds.bbox[1]+ds.bbox[3])/2 ], zoom: 13 });
-      setFitNonce((n) => n + 1);
-      setScreen('home');
-    } catch (e) {
-      setProgress(null);
-      setImportError((e as Error).message);
-    }
-  }, [engine]);
+    const ds = await importRegionFile({
+      id, name, code, file,
+      onProgress: setProgress,
+      onError: setImportError,
+    });
+    if (!ds) return null;
+    setDataset(ds);
+    setOrigin(null);
+    setRoute(null);
+    setDestination(null);
+    setFocus({ center: [(ds.bbox[0] + ds.bbox[2]) / 2, (ds.bbox[1] + ds.bbox[3]) / 2], zoom: 13 });
+    setFitNonce((n) => n + 1);
+    return ds;
+  }, []);
+
+  const onFile = useCallback(async (file: File) => {
+    const ds = await build(file, localRegionId(file), localRegionName(file), 'local');
+    if (ds) setScreen('home');
+  }, [build]);
 
   /* ---------------------------- routing --------------------------- */
 
@@ -87,9 +101,10 @@ export default function App() {
     setRouteError(null);
     setRouting(true);
     setDegraded([]);
+    const from = origin ?? location;
     try {
       const outcome = await resolveRoute(
-        { from: origin ?? location, to: dest.pos, provider, units: valhallaUnits, avoid: [] },
+        { from, to: dest.pos, provider, units: valhallaUnits, avoid: [] },
         dataset,
         { apiKey, endpoint },
       );
@@ -99,13 +114,24 @@ export default function App() {
       setScreen('preview');
       setFitNonce((n) => n + 1);
     } catch (e) {
-      setRoute(null);
-      setRouteError(e instanceof NoRouteError ? e.message : (e as Error).message);
-      setScreen('preview');
+      // Single-dataset routing can't span extracts. With several regions
+      // downloaded the library picks the region for each end and stitches.
+      const multi = regions.length > 1 ? regionLib.route(from, dest.pos) : null;
+      if (multi) {
+        setRoute(localToRoute(multi.result, valhallaUnits));
+        setDegraded([`Region library: ${multi.regions.map((id) => regionLib.get(id)?.name ?? id).join(' → ')}`]);
+        setProgressAlong(0);
+        setScreen('preview');
+        setFitNonce((n) => n + 1);
+      } else {
+        setRoute(null);
+        setRouteError(e instanceof NoRouteError ? e.message : (e as Error).message);
+        setScreen('preview');
+      }
     } finally {
       setRouting(false);
     }
-  }, [dataset, origin, location, provider, valhallaUnits, apiKey, endpoint]);
+  }, [dataset, origin, location, provider, valhallaUnits, apiKey, endpoint, regions.length]);
 
   /* ------------------------- guidance model ----------------------- */
 
@@ -257,6 +283,7 @@ export default function App() {
       {screen === 'home' && (
         <HomeScreen
           dataset={dataset}
+          regionCount={regions.length}
           online={online}
           provider={provider}
           locationMode={locationMode}
@@ -266,6 +293,7 @@ export default function App() {
           route={route}
           onImport={() => setScreen('import')}
           onImportFile={onFile}
+          onRegions={() => setScreen('regions')}
           onSearch={() => setScreen('search')}
           onContinue={() => route && setScreen('navigating')}
           onSettings={() => setScreen('settings')}
@@ -297,6 +325,7 @@ export default function App() {
           setProvider={setProvider}
           online={online}
           dataset={dataset}
+          regionCount={regions.length}
           apiKey={apiKey}
           setApiKey={setApiKey}
           endpoint={endpoint}
@@ -305,6 +334,7 @@ export default function App() {
           setUnits={setUnits}
           onBack={() => setScreen('home')}
           onImport={() => setScreen('import')}
+          onRegions={() => setScreen('regions')}
         />
       )}
 
@@ -314,6 +344,25 @@ export default function App() {
           error={importError}
           onFile={onFile}
           onBack={() => setScreen('home')}
+        />
+      )}
+
+      {screen === 'regions' && (
+        <RegionsScreen
+          units={units}
+          location={location}
+          onBack={() => setScreen('home')}
+          onActivated={() => { setImportError(null); setProgress(null); }}
+          onMapFocus={(center, zoom) => setFocus({ center, zoom })}
+          onPreviewRoute={(result, to, label, via) => {
+            setDestination({ pos: to, label });
+            setRoute(localToRoute(result, valhallaUnits));
+            setRouteError(null);
+            setDegraded([`Region library: ${via.map((id) => regionLib.get(id)?.name ?? id).join(' → ')}`]);
+            setProgressAlong(0);
+            setScreen('preview');
+            setFitNonce((n) => n + 1);
+          }}
         />
       )}
     </div>
@@ -343,7 +392,8 @@ function turnKind(delta: number): LegStep['icon'] | null {
 /* ---------------------------- HomeScreen ---------------------------- */
 
 interface HomeProps {
-  dataset: OsmEngine['data'];
+  dataset: OsmDataset | null;
+  regionCount: number;
   online: boolean;
   provider: ProviderId;
   locationMode: LocationMode;
@@ -353,6 +403,7 @@ interface HomeProps {
   route: Route | null;
   onImport: () => void;
   onImportFile: (f: File) => void;
+  onRegions: () => void;
   onSearch: () => void;
   onContinue: () => void;
   onSettings: () => void;
@@ -369,7 +420,9 @@ function HomeScreen(p: HomeProps) {
           <div className="brand-text">
             <div style={T.body3m}>Canopy Nav</div>
             <div style={{ ...T.sub3, color: ink.secondary }}>
-              {p.dataset ? `${p.dataset.counts.routable.toLocaleString()} routable ways` : 'No map loaded'}
+              {p.dataset
+                ? `${p.dataset.counts.routable.toLocaleString()} routable ways · ${p.regionCount} region${p.regionCount === 1 ? '' : 's'}`
+                : 'No map loaded'}
             </div>
           </div>
         </div>
@@ -395,7 +448,10 @@ function HomeScreen(p: HomeProps) {
           <QuickTile label="Search" icon={<IconSearch size={ICON.primary} />} onClick={p.onSearch} />
           <QuickTile label="Home" icon={<IconHome size={ICON.primary} />} onClick={() => p.onRoute([-0.1276, 51.5072], 'Home')} />
           <QuickTile label="Work" icon={<IconGoto size={ICON.primary} />} onClick={() => p.onRoute([-0.142, 51.5], 'Work')} />
-          <QuickTile label="Import .osm" icon={<IconFile size={ICON.primary} />} onClick={p.onImport} />
+          <QuickTile label="Regions" icon={<IconLayers size={ICON.primary} />} onClick={p.onRegions} />
+          {/* Label stays short: five tiles share the row at head-unit widths and
+              "Import .osm" truncates. The hint card below names the format. */}
+          <QuickTile label="Import" icon={<IconFile size={ICON.primary} />} onClick={p.onImport} />
         </div>
 
         {p.route && (
@@ -660,7 +716,7 @@ function PreviewRow({ label, value }: { label: string; value: string; icon?: Rea
 /* ---------------------------- SearchScreen -------------------------- */
 
 function SearchScreen(props: {
-  dataset: OsmEngine['data'];
+  dataset: OsmDataset | null;
   online: boolean;
   location: LatLng;
   onPick: (pos: LatLng, label: string) => void;
@@ -785,11 +841,12 @@ function StepsScreen({ steps, onBack }: { steps: LegStep[]; onBack: () => void }
 function SettingsScreen(props: {
   provider: ProviderId; setProvider: (p: ProviderId) => void;
   online: boolean;
-  dataset: OsmEngine['data'];
+  dataset: OsmDataset | null;
+  regionCount: number;
   apiKey: string; setApiKey: (v: string) => void;
   endpoint: string; setEndpoint: (v: string) => void;
   units: 'metric' | 'imperial'; setUnits: (u: 'metric' | 'imperial') => void;
-  onBack: () => void; onImport: () => void;
+  onBack: () => void; onImport: () => void; onRegions: () => void;
 }) {
   return (
     <div className="search-root">
@@ -846,7 +903,12 @@ function SettingsScreen(props: {
               ? `Bounds ${props.dataset.bbox.map((v) => v.toFixed(3)).join(', ')}`
               : 'Import a .osm extract to enable offline routing and search.'}
           </div>
-          <button className="text-btn" onClick={props.onImport}>Import .osm</button>
+          <div className="region-actions">
+            <button className="text-btn" onClick={props.onImport}>Import .osm</button>
+            <button className="pill-btn" onClick={props.onRegions}>
+              Regions ({props.regionCount})
+            </button>
+          </div>
         </div>
       </div>
     </div>

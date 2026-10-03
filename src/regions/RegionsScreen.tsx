@@ -11,7 +11,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { catalogByCountry, type CatalogEntry } from '../osm/regions';
+import { CATALOG, catalogByCountry, type CatalogEntry } from '../osm/regions';
 import type { RouteResult } from '../osm/engine.worker';
 import type { BuildProgress } from '../osm/engine';
 import type { LatLng } from '../geo';
@@ -298,6 +298,9 @@ export function RegionsScreen(props: RegionsScreenProps) {
             <div className="section-head" style={{ ...T.sub2, color: ink.secondary }}>{g.country}</div>
             {g.entries.map((e) => {
               const have = regionLib.get(e.id);
+              // `parentId` is the containing extract, not the country: 'ca'
+              // has no catalogue entry, so provinces don't say "sub-region".
+              const parent = e.parentId ? CATALOG.find((x) => x.id === e.parentId) : undefined;
               return (
                 <div className="result-row" key={e.id}>
                   <span className={`result-icon ${have ? 'ok' : ''}`}>
@@ -307,9 +310,9 @@ export function RegionsScreen(props: RegionsScreenProps) {
                     <span style={T.body3m}>{e.name}</span>
                     <span style={{ ...T.body3, color: ink.secondary }}>
                       ≈ {e.approxMb.toLocaleString()} MB · {e.country}
-                      {e.parentId ? ' · sub-region' : ''}
+                      {parent ? ` · part of ${parent.name}` : ''}
                     </span>
-                    <span style={{ ...T.sub2, color: ink.tertiary }}>{e.pbfUrl}</span>
+                    <span className="truncate" style={{ ...T.sub2, color: ink.tertiary }} title={e.pbfUrl}>{e.pbfUrl}</span>
                   </span>
                   <span className="region-actions">
                     {have

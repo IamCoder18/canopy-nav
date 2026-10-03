@@ -128,7 +128,9 @@ code {
 
 .quick-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* 156dp is the tile min already used by .nav-bottom-btn; auto-fit keeps
+     five tiles on one row at head-unit widths and wraps instead of squashing. */
+  grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
   gap: 24px;
   flex-shrink: 0;
 }
@@ -336,8 +338,9 @@ code {
   background: rgba(255, 255, 255, 0.08);
 }
 
-.search-results { flex: 1; overflow-y: auto; padding: 0 12% 32px; }
-.settings-body { flex: 1; overflow-y: auto; padding: 0 12% 32px; }
+/* The app bar is absolutely positioned, so it overlays the top of these
+   scroll containers — pad past it or the first heading is hidden. */
+.search-results, .settings-body { flex: 1; overflow-y: auto; padding: 96px 12% 32px; }
 
 .result-row, .provider-row {
   display: flex; align-items: center; gap: 16px;
@@ -426,6 +429,9 @@ code {
 /* Region confirmed present in the library. */
 .result-icon.ok { background: rgba(24, 128, 56, 0.2); color: #81C995; }
 
+/* Long URLs stay on one line so catalogue rows stay a uniform 116dp tall. */
+.truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 /* Status label — same 44dp / sub3 language as .offline-chip. */
 .chip {
   min-height: 44px;
@@ -457,6 +463,7 @@ code {
 /* Landscape phones / head units are short — tighten the vertical rhythm. */
 @media (max-height: 520px) {
   .top-app-bar { height: 76px; }
+  .search-results, .settings-body { padding-top: 76px; }
   .home-search { top: 88px; }
   .maneuver-banner { top: 96px; padding: 16px 24px; }
   .maneuver-icon { width: 88px; height: 88px; }
