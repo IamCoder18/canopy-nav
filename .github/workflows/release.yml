@@ -38,8 +38,23 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Setup Android SDK
+      # setup-android@v3 tries to install the 'tools' package, which no longer
+      # exists in current SDK repositories. Prefer the SDK already present on
+      # ubuntu-latest and only fall back to downloading packages explicitly.
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        continue-on-error: true
+
+      - name: Accept SDK licenses and install required platforms
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" >/dev/null
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
