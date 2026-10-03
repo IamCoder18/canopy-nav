@@ -19,6 +19,7 @@ import RegionsScreen from './regions/RegionsScreen';
 import {
   importRegionFile, localRegionId, localRegionName, regionLib, useRegions,
 } from './regions/store';
+import { searchAll } from './osm/regions';
 import {
   ManeuverIcon, IconSearch, IconBack, IconClose, IconMute, IconSound, IconOverview,
   IconLayers, IconTraffic, IconSettings, IconHome, IconGoto, IconChevronRight,
@@ -305,6 +306,7 @@ export default function App() {
       {screen === 'search' && (
         <SearchScreen
           dataset={dataset}
+          regions={regions}
           online={online}
           location={location}
           onPick={(pos, label) => { setScreen('home'); doRoute({ pos, label }); }}
@@ -717,6 +719,7 @@ function PreviewRow({ label, value }: { label: string; value: string; icon?: Rea
 
 function SearchScreen(props: {
   dataset: OsmDataset | null;
+  regions: ReturnType<typeof useRegions>;
   online: boolean;
   location: LatLng;
   onPick: (pos: LatLng, label: string) => void;
@@ -733,14 +736,22 @@ function SearchScreen(props: {
     let cancelled = false;
     const t = setTimeout(async () => {
       setBusy(true); setErr(null);
+
       // Offline gazetteer first — instant, no network.
-      const local = props.dataset
-        ? props.dataset.gaz
-        : [];
-      const localHits = local
-        .filter((g) => g.name.toLowerCase().includes(term.toLowerCase()))
-        .slice(0, 8)
-        .map((g) => ({ label: g.name, sub: g.cat, pos: [g.lon, g.lat] as LatLng }));
+      // With more than one region loaded, search every gazetteer and label the
+      // result with its region, otherwise a hit in the "other" province looks
+      // identical to one underfoot.
+      const multi = props.regions.length > 1;
+      const localHits = multi
+        ? searchAll(regionLib, term, props.location, 20).map((h) => ({
+            label: h.entry.name,
+            sub: h.regionName === 'Local map' ? h.entry.cat : `${h.entry.cat} · ${h.regionName}`,
+            pos: [h.entry.lon, h.entry.lat] as LatLng,
+          }))
+        : (props.dataset?.gaz ?? [])
+            .filter((g) => g.name.toLowerCase().includes(term.toLowerCase()))
+            .slice(0, 8)
+            .map((g) => ({ label: g.name, sub: g.cat, pos: [g.lon, g.lat] as LatLng }));
       if (!cancelled) setResults(localHits);
 
       // Enrich with Nominatim when there's a network.
@@ -763,7 +774,7 @@ function SearchScreen(props: {
       if (!cancelled) setBusy(false);
     }, 250);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [q, props.dataset, props.online, props.location]);
+  }, [q, props.dataset, props.online, props.location, props.regions]);
 
   return (
     <div className="search-root">
@@ -784,7 +795,14 @@ function SearchScreen(props: {
 
       <div className="search-results">
         {err && <div className="hint-card">{err}</div>}
-        {!props.dataset && <div className="hint-card">No offline map loaded — import an .osm file for offline search.</div>}
+        {!props.regions.length && (
+          <div className="hint-card">No offline map loaded — import an .osm file for offline search.</div>
+        )}
+        {props.regions.length > 1 && (
+          <div className="hint-card">
+            Searching {props.regions.length} downloaded regions. Results show which region each is in.
+          </div>
+        )}
         {busy && !results.length && <div style={{ ...T.body3, color: ink.secondary }}>Searching…</div>}
         {results.map((r, i) => (
           <button key={i} className="result-row" onClick={() => props.onPick(r.pos, r.label)}>

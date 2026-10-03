@@ -115,6 +115,33 @@ try {
     }
   }
 
+  /* ---------------- search after a loaded region ---------------- */
+  console.log('\nsearch with a loaded region');
+  // Back out to home. The stack is steps -> navigating -> home, and each screen
+  // exposes a different control, so unwind it rather than assuming one button.
+  for (let i = 0; i < 4; i++) {
+    if (await page.$('.search-field')) break;
+    const exit = await page.$('button[aria-label="Exit navigation"]');
+    const back = await page.$('button[aria-label="Back"]');
+    if (exit) await exit.click();
+    else if (back) await back.click();
+    else break;
+    await page.waitForTimeout(700);
+  }
+  await page.waitForSelector('.search-field', { timeout: 10000 });
+  await page.click('.search-field');
+  await page.waitForTimeout(400);
+  await page.fill('.inline-search input', 'Elbow');
+  await page.waitForTimeout(900);
+  const multi = await page.evaluate(() => document.body.innerText);
+  check('search works with a loaded region', /Elbow St/.test(multi));
+  const stillOnSearch = await page.evaluate(() => !!document.querySelector('.inline-search'));
+  check('still on the search screen', stillOnSearch);
+  // leave the search screen so the regions block starts from home
+  const backBtn = await page.$('button[aria-label="Back"]');
+  if (backBtn) await backBtn.click();
+  await page.waitForTimeout(700);
+
   /* ---------------- regions ---------------- */
   console.log('\nregions');
   await page.goto(BASE, { waitUntil: 'networkidle' });
