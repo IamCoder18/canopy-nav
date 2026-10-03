@@ -13,6 +13,7 @@ import {
   snapToPolyline, type LatLng,
 } from './geo';
 import { ink, type as T, DP, ICON } from './theme';
+import { useLocation, type LocationMode } from './nav/location';
 import {
   ManeuverIcon, IconSearch, IconBack, IconClose, IconMute, IconSound, IconOverview,
   IconLayers, IconTraffic, IconSettings, IconHome, IconGoto, IconChevronRight,
@@ -20,36 +21,6 @@ import {
 } from './icons';
 
 type Screen = 'home' | 'search' | 'preview' | 'navigating' | 'steps' | 'settings' | 'import';
-
-/* ------------------------------ GPS ------------------------------ */
-
-interface Fix { pos: LatLng; speed: number; heading: number; accuracy: number; ts: number }
-
-/**
- * Simulated GPS for desktop preview. On a real device the native
- * Capacitor Geolocation plugin replaces this; the hook contract is identical.
- */
-function usePosition(): Fix {
-  const [fix, setFix] = useState<Fix>({
-    pos: [-0.1276, 51.5072], speed: 0, heading: 0, accuracy: 12, ts: Date.now(),
-  });
-  useEffect(() => {
-    let raf = 0;
-    const tick = () => {
-      const now = performance.now();
-      setFix((f) => {
-        const moving = f.speed > 0.2;
-        // gentle heading drift so the compass/arrow has something to show
-        const h = (f.heading + (moving ? Math.sin(now / 3000) * 2 : 0) + 360) % 360;
-        return { ...f, ts: now, heading: h };
-      });
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-  return fix;
-}
 
 /* ------------------------------ App ------------------------------ */
 
@@ -80,7 +51,8 @@ export default function App() {
   // Valhalla expects km/miles; our formatters expect metric/imperial.
   const valhallaUnits: 'km' | 'miles' = units === 'imperial' ? 'miles' : 'km';
 
-  const fix = usePosition();
+  // Real GPS on device, Geolocation API in a browser, simulated as a last resort.
+  const { fix, mode: locationMode, error: locationError } = useLocation(true);
   const location = fix.pos;
 
   useEffect(() => engine.setProgressHandler(setProgress), [engine]);
@@ -287,6 +259,8 @@ export default function App() {
           dataset={dataset}
           online={online}
           provider={provider}
+          locationMode={locationMode}
+          locationError={locationError}
           progress={progress}
           error={importError}
           route={route}
@@ -372,6 +346,8 @@ interface HomeProps {
   dataset: OsmEngine['data'];
   online: boolean;
   provider: ProviderId;
+  locationMode: LocationMode;
+  locationError: string | null;
   progress: BuildProgress | null;
   error: string | null;
   route: Route | null;
@@ -398,7 +374,12 @@ function HomeScreen(p: HomeProps) {
           </div>
         </div>
         <div className="spacer" />
-        <StatusPill online={p.online} provider={p.provider} />
+        <StatusPill
+          online={p.online}
+          provider={p.provider}
+          locationMode={p.locationMode}
+          locationError={p.locationError}
+        />
         <button className="icon-btn" onClick={p.onSettings} aria-label="Settings">
           <IconSettings size={ICON.primary} />
         </button>
@@ -446,12 +427,31 @@ function HomeScreen(p: HomeProps) {
   );
 }
 
-function StatusPill({ online, provider }: { online: boolean; provider: ProviderId }) {
+function StatusPill({
+  online,
+  provider,
+  locationMode,
+  locationError,
+}: {
+  online: boolean;
+  provider: ProviderId;
+  locationMode: LocationMode;
+  locationError: string | null;
+}) {
   const label = online ? PROVIDERS.find((x) => x.id === provider)?.label ?? 'Online' : 'Offline';
+  const gps = locationMode === 'device' ? 'GPS'
+    : locationMode === 'browser' ? 'Browser GPS'
+    : 'Simulated GPS';
+  const title = locationError ? `${gps} - ${locationError}` : gps;
   return (
-    <div className={`status-pill ${online ? 'on' : 'off'}`}>
+    <div
+      className={`status-pill ${online ? 'on' : 'off'}`}
+      title={title}
+      style={{ gap: 16 }}
+    >
       <span className="dot" />
       <span style={T.sub3}>{label}</span>
+      <span style={{ ...T.sub3, color: 'rgba(255,255,255,0.5)' }}>{gps}</span>
     </div>
   );
 }
