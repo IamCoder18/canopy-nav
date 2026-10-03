@@ -175,6 +175,39 @@ try {
     await page.screenshot({ path: join(SHOTS, '6-regions.png') });
   }
 
+  /* ---------------- persistence across a reload ---------------- */
+  console.log('\npersistence');
+  // Re-parsing a province takes tens of seconds, so imported regions are cached
+  // as parsed datasets. A reload must bring it back with no re-import, and the
+  // restored region must be immediately usable.
+  // A region was imported earlier in this run, so it is already cached. A
+  // reload must bring it back from IndexedDB with no re-import -- which is the
+  // whole point of caching: re-parsing takes tens of seconds.
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(2000);
+  const beforeReload =
+    (await page.evaluate(() => document.body.innerText)).match(/[\d,]+ routable ways/)?.[0] ?? '';
+  check('a region is loaded before the reload', beforeReload !== '', beforeReload);
+
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(3500);
+  const afterReload =
+    (await page.evaluate(() => document.body.innerText)).match(/[\d,]+ routable ways/)?.[0] ?? '';
+  check(
+    'region survives a reload without re-importing',
+    afterReload !== '' && afterReload === beforeReload,
+    `${beforeReload || 'none'} -> ${afterReload || 'nothing restored'}`,
+  );
+
+  // ...and the restored gazetteer is usable
+  await page.click('.search-field');
+  await page.waitForTimeout(400);
+  await page.fill('.inline-search input', 'Elbow');
+  await page.waitForTimeout(900);
+  const restoredRows = await page.evaluate(() => document.querySelectorAll('.result-row').length);
+  check('restored region is searchable', restoredRows > 0, `${restoredRows} rows`);
+  await page.screenshot({ path: join(SHOTS, '7-restored.png') });
+
   check('no uncaught page errors', pageErrors.length === 0, pageErrors.join(' | '));
 } catch (err) {
   check('harness completed', false, err.message);

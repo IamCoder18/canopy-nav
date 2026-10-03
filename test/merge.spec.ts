@@ -14,8 +14,17 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { mergeRegions, countComponents, diagnoseMerge } from '../src/osm/merge';
-import { FLAG_ONEWAY_F, FLAG_ONEWAY_B, routeOnGraph, type RoadGraph } from '../src/osm/engine.worker';
+import {
+  FLAG_ONEWAY_F,
+  FLAG_ONEWAY_B,
+  parseOsmXml,
+  buildDataset,
+  routeOnGraph,
+  type RoadGraph,
+} from '../src/osm/engine.worker';
 import type { Region } from '../src/osm/regions';
 import type { OsmDataset } from '../src/osm/engine.worker';
 
@@ -115,6 +124,57 @@ function traversable(g: RoadGraph): string[] {
   return out.sort();
 }
 
+/**
+ * Every ordered (from, to) that the graph permits travelling along, keyed by OSM
+ * id rather than slot so it can be compared across a merge (which renumbers
+ * slots). This is the property a merge must never break: the union of the
+ * extracts' travel permissions, no more and no less.
+ */
+function permissions(g: RoadGraph): string[] {
+  const out = new Set<string>();
+  for (let i = 0; i < g.nodeCount; i++) {
+    for (let e = g.edgeStart[i]; e < g.edgeStart[i + 1]; e++) {
+      const u = g.osmIds[i];
+      const v = g.osmIds[g.edgeTo[e]];
+      if (g.edgeFlags[e] & FLAG_ONEWAY_F) out.add(`${u}>${v}`);
+      if (g.edgeFlags[e] & FLAG_ONEWAY_B) out.add(`${v}>${u}`);
+    }
+  }
+  return [...out].sort();
+}
+
+/** Indices of edges that permit travel in neither direction — always empty. */
+function deadEdges(g: RoadGraph): number[] {
+  const out: number[] = [];
+  for (let e = 0; e < g.edgeFlags.length; e++) {
+    if ((g.edgeFlags[e] & (FLAG_ONEWAY_F | FLAG_ONEWAY_B)) === 0) out.push(e);
+  }
+  return out;
+}
+
+/** The dataset in test/fixture.osm, as the engine would load it. */
+function fixtureDataset(): OsmDataset {
+  const xml = readFileSync(join(__dirname, 'fixture.osm'), 'utf8');
+  const { nodes, ways } = parseOsmXml(xml);
+  return buildDataset(nodes, ways, () => {});
+}
+
+function regionOf(id: string, ds: OsmDataset): Region {
+  return {
+    id, name: id, code: id, bbox: ds.bbox, loadedAt: 0, bytes: 0,
+    counts: ds.counts, gazetteerSize: ds.gaz.length, dataset: ds,
+  };
+}
+
+/** Largest gap between consecutive geometry points — a seam shows up as a jump. */
+function maxGeometryJump(pts: [number, number][]): number {
+  let max = 0;
+  for (let i = 1; i < pts.length; i++) {
+    max = Math.max(max, Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  }
+  return max;
+}
+
 describe('countComponents', () => {
   it('counts weakly-connected components', () => {
     const g = makeGraph(
@@ -156,15 +216,34 @@ describe('mergeRegions — node identity', () => {
     expect(() => mergeRegions([])).toThrow('mergeRegions: no regions');
   });
 
-  it('passes a single region through unchanged (same graph object)', () => {
+  it('passes a single region through unchanged, as its own copy', () => {
     const g = makeGraph([{ id: 1, lon: 0, lat: 0 }, { id: 2, lon: 1, lat: 0 }], [{ from: 1, to: 2 }]);
     const report = mergeRegions([makeRegion('solo', g)]);
-    expect(report.graph).toBe(g);
+    // The report owns its graph: a multi-region merge builds fresh arrays, and
+    // the single-region case used to hand back the caller's object by reference,
+    // so mutating the "merged" graph corrupted the region's own dataset.
+    expect(report.graph).not.toBe(g);
+    expect(report.graph.edgeTo).not.toBe(g.edgeTo);
+    expect(report.graph.edgeFlags).not.toBe(g.edgeFlags);
+    // ...but it is the same network.
+    expect(edgeSet(report.graph)).toEqual(edgeSet(g));
     expect(report.nodes).toBe(2);
     expect(report.sharedNodes).toBe(0);
     expect(report.sharedEdges).toBe(0);
     expect(report.components).toBe(1);
     expect(report.regionIds).toEqual(['solo']);
+  });
+
+  it('isolates the merged graph from the source datasets', () => {
+    const g = makeGraph([{ id: 1, lon: 0, lat: 0 }, { id: 2, lon: 1, lat: 0 }], [{ from: 1, to: 2 }]);
+    const original = g.edgeFlags[0];
+    const report = mergeRegions([makeRegion('solo', g)]);
+    report.graph.edgeFlags[0] = 0;
+    report.graph.edgeTo[0] = 99;
+    report.graph.coords[0] = 12345;
+    expect(g.edgeFlags[0]).toBe(original);
+    expect(g.edgeTo[0]).toBe(1);
+    expect(g.coords[0]).toBe(0);
   });
 
   it('collapses border nodes that share OSM ids', () => {
@@ -265,49 +344,58 @@ describe('mergeRegions — edge dedup', () => {
     expect(report.sharedEdges).toBe(1);
   });
 
-  it('BUG: drops the second direction of every two-way road', () => {
-    // `pairSlot` is keyed on the unordered node pair, so the reverse record of
-    // the same road collides with the forward record and hits the
-    // `prior !== undefined -> continue` branch. A merged graph keeps at most
-    // ONE directed edge per node pair, so every two-way road becomes one-way.
+  it('keeps both records of a two-way road', () => {
+    // `pairSlot` was keyed on the unordered node pair, so the reverse record of
+    // the same road collided with the forward record already stored and hit the
+    // `prior !== undefined -> continue` branch. The merged graph kept at most
+    // ONE directed edge per node pair, i.e. every two-way road became a one-way
+    // in an arbitrary direction. Dedup is per DIRECTED pair, so both records
+    // survive; only a record from another extract is folded away.
     const report = mergeRegions([
       makeRegion('a', makeGraph(nodes, twoWay)),
       makeRegion('b', makeGraph(nodes, twoWay)),
     ]);
-    expect(edgeSet(report.graph)).toEqual(['0->1 flags=3']);
-    expect(traversable(report.graph)).toEqual(['0->1']);
+    expect(edgeSet(report.graph)).toEqual(['0->1 flags=3', '1->0 flags=3']);
+    expect(traversable(report.graph)).toEqual(['0->1', '1->0']);
+    // still exactly one *road*, counted once, however many directions it has
+    expect(report.sharedEdges).toBe(1);
   });
 
-  it.fails('keeps both directions of a two-way road', () => {
+  it('folds away only cross-extract duplicates, not a second copy of a two-way road', () => {
+    // Two extracts of the same road: 4 records in, 2 out — one per direction.
     const report = mergeRegions([
       makeRegion('a', makeGraph(nodes, twoWay)),
       makeRegion('b', makeGraph(nodes, twoWay)),
     ]);
+    expect(report.graph.edgeTo.length).toBe(2);
+    // Three extracts, still two edges: the third copy folds into the first.
+    const three = mergeRegions([
+      makeRegion('a', makeGraph(nodes, twoWay)),
+      makeRegion('b', makeGraph(nodes, twoWay)),
+      makeRegion('c', makeGraph(nodes, twoWay)),
+    ]);
+    expect(three.graph.edgeTo.length).toBe(2);
+    expect(three.sharedEdges).toBe(1);
+  });
+
+  it('keeps parallel one-ways over the same pair, in both directions', () => {
+    // A node pair can carry several distinct records and they are not duplicates
+    // of each other: two one-way streets pointing opposite ways share the same
+    // unordered pair but not the same directed pair.
+    const opposing = makeGraph(nodes, [
+      { from: 1, to: 2, flags: FLAG_ONEWAY_F },
+      { from: 2, to: 1, flags: FLAG_ONEWAY_F },
+    ]);
+    const report = mergeRegions([makeRegion('a', opposing), makeRegion('b', opposing)]);
+    expect(report.graph.edgeTo.length).toBe(2);
+    expect(edgeSet(report.graph)).toEqual(['0->1 flags=1', '1->0 flags=1']);
     expect(traversable(report.graph)).toEqual(['0->1', '1->0']);
   });
 
-  it('BUG: a merged two-way road is no longer routable in reverse', () => {
-    const chain: [NodeSpec, NodeSpec, NodeSpec] = [
-      { id: 1, lon: 0, lat: 0 },
-      { id: 2, lon: 0.01, lat: 0 },
-      { id: 3, lon: 0.02, lat: 0 },
-    ];
-    const chainEdges: EdgeSpec[] = [
-      { from: 1, to: 2, flags: TWO_WAY },
-      { from: 2, to: 1, flags: TWO_WAY },
-      { from: 2, to: 3, flags: TWO_WAY },
-      { from: 3, to: 2, flags: TWO_WAY },
-    ];
-    const single = makeGraph(chain, chainEdges);
-    expect(routeOnGraph(single, [0.02, 0], [0, 0])).not.toBeNull(); // works before merging
-
-    const report = mergeRegions([makeRegion('a', single), makeRegion('b', single)]);
-    expect(report.graph.edgeTo.length).toBe(2); // was 4 before the merge
-    expect(routeOnGraph(report.graph, [0, 0], [0.02, 0])).not.toBeNull();
-    expect(routeOnGraph(report.graph, [0.02, 0], [0, 0])).toBeNull(); // reverse is impossible
-  });
-
-  it.fails('a merged two-way road stays routable in both directions', () => {
+  it('a merged two-way road stays routable in both directions', () => {
+    // The bug's real consequence: cross-region routing silently died one way.
+    // Merging a chain with itself must leave all four records intact, so the
+    // route survives in the reverse direction too — with contiguous geometry.
     const chain: NodeSpec[] = [
       { id: 1, lon: 0, lat: 0 },
       { id: 2, lon: 0.01, lat: 0 },
@@ -320,12 +408,27 @@ describe('mergeRegions — edge dedup', () => {
       { from: 3, to: 2, flags: TWO_WAY },
     ];
     const single = makeGraph(chain, chainEdges);
+    const before = routeOnGraph(single, [0.02, 0], [0, 0]);
+    expect(before).not.toBeNull(); // the unmerged extract routes in reverse
+
     const report = mergeRegions([makeRegion('a', single), makeRegion('b', single)]);
-    expect(report.graph.edgeTo.length).toBe(4);
-    expect(routeOnGraph(report.graph, [0.02, 0], [0, 0])).not.toBeNull();
+    expect(report.graph.edgeTo.length).toBe(4); // was 2: both reverse records were dropped
+    const legs: [[number, number], [number, number]][] = [
+      [[0, 0], [0.02, 0]],
+      [[0.02, 0], [0, 0]],
+    ];
+    for (const [from, to] of legs) {
+      const r = routeOnGraph(report.graph, from, to);
+      expect(r).not.toBeNull(); // the reverse leg used to be unreachable
+      expect(r!.geometry.length).toBe(3); // both ends plus the middle node
+      expect(maxGeometryJump(r!.geometry as [number, number][])).toBeLessThan(0.012);
+      expect(r!.steps.map((s) => s.name).join('|')).toBe(
+        before!.steps.map((s) => s.name).join('|'),
+      );
+    }
   });
 
-  it('BUG: reports sharedEdges for two extracts that share nothing', () => {
+  it('reports no shared edges for two extracts that share nothing', () => {
     const a = makeGraph([{ id: 1, lon: 0, lat: 0 }, { id: 2, lon: 1, lat: 0 }], twoWay);
     const b = makeGraph([{ id: 90, lon: 40, lat: 40 }, { id: 91, lon: 41, lat: 40 }], [
       { from: 90, to: 91, flags: TWO_WAY },
@@ -333,28 +436,76 @@ describe('mergeRegions — edge dedup', () => {
     ]);
     const report = mergeRegions([makeRegion('a', a), makeRegion('b', b)]);
     expect(report.sharedNodes).toBe(0);
-    // The counter is bumped by the two direction records inside each extract.
-    expect(report.sharedEdges).toBe(2);
+    expect(report.sharedEdges).toBe(0);
+    // both roads keep both directions
+    expect(report.graph.edgeTo.length).toBe(4);
+    expect(traversable(report.graph)).toEqual(['0->1', '1->0', '2->3', '3->2']);
+  });
+
+  it('merging a real extract with itself loses no road and no direction', () => {
+    // The concrete measurement of the "one direction per pair" bug: fixture.osm
+    // has 288 directed records over 144 roads, and the merged graph used to keep
+    // exactly 144 of them. Merging an extract with itself must be a no-op on the
+    // edge set.
+    const ds = fixtureDataset();
+    const undirected = new Set<number>();
+    for (let i = 0; i < ds.graph.nodeCount; i++) {
+      for (let e = ds.graph.edgeStart[i]; e < ds.graph.edgeStart[i + 1]; e++) {
+        undirected.add(Math.min(i, ds.graph.edgeTo[e]) * 1e6 + Math.max(i, ds.graph.edgeTo[e]));
+      }
+    }
+    expect(ds.graph.edgeTo.length).toBe(288);
+    expect(undirected.size).toBe(144);
+
+    const report = mergeRegions([regionOf('a', ds), regionOf('b', ds)]);
+    expect(report.nodes).toBe(ds.graph.nodeCount);
+    expect(report.sharedNodes).toBe(81);
+    expect(report.components).toBe(1);
+    expect(report.graph.edgeTo.length).toBe(288);
+    expect(report.sharedEdges).toBe(144); // all 144 roads are in both extracts
+    expect(deadEdges(report.graph)).toEqual([]);
+    // The invariant behind the edge count: every direction of travel the extract
+    // permits still exists after the merge, keyed by OSM id.
+    expect(permissions(report.graph)).toEqual(permissions(ds.graph));
+  });
+
+  it('routes across a merged real extract in both directions', () => {
+    const ds = fixtureDataset();
+    const report = mergeRegions([regionOf('a', ds), regionOf('b', ds)]);
+    const g = report.graph;
+
+    // the two ends of the network, by longitude
+    let lo = 0, hi = 0;
+    for (let i = 1; i < g.nodeCount; i++) {
+      if (g.coords[i * 2] < g.coords[lo * 2]) lo = i;
+      if (g.coords[i * 2] > g.coords[hi * 2]) hi = i;
+    }
+    const A: [number, number] = [g.coords[lo * 2], g.coords[lo * 2 + 1]];
+    const B: [number, number] = [g.coords[hi * 2], g.coords[hi * 2 + 1]];
+
+    const legs: [[number, number], [number, number]][] = [[A, B], [B, A]];
+    for (const [from, to] of legs) {
+      const r = routeOnGraph(g, from, to);
+      expect(r).not.toBeNull(); // was null in the reverse direction before the fix
+      // contiguous geometry: every consecutive pair is a real edge, no seam
+      expect(maxGeometryJump(r!.geometry as [number, number][])).toBeLessThan(0.012);
+      // and identical to routing the unmerged extract
+      const plain = routeOnGraph(ds.graph, from, to)!;
+      expect(r!.metres).toBeCloseTo(plain.metres, 6);
+      expect(r!.time).toBeCloseTo(plain.time, 3);
+      expect(r!.geometry.length).toBe(plain.geometry.length);
+    }
   });
 });
 
 describe('mergeRegions — one-way relaxation', () => {
   const nodes = [{ id: 1, lon: 0, lat: 0 }, { id: 2, lon: 1, lat: 0 }];
 
-  it('does not make the road MORE restrictive than a two-way extract (BUG)', () => {
+  it('does not make the road MORE restrictive than a two-way extract', () => {
     // Extract A says one-way forward; extract B says two-way. The union of the
-    // two descriptions is two-way, so merging must not lose 2->1.
-    const report = mergeRegions([
-      makeRegion('a', makeGraph(nodes, [{ from: 1, to: 2, flags: FLAG_ONEWAY_F }])),
-      makeRegion('b', makeGraph(nodes, [
-        { from: 1, to: 2, flags: TWO_WAY },
-        { from: 2, to: 1, flags: TWO_WAY },
-      ])),
-    ]);
-    expect(traversable(report.graph)).toEqual(['0->1']);
-  });
-
-  it.fails('keeps the two-way direction when merging a two-way and a one-way extract', () => {
+    // two descriptions is two-way, so merging must not lose 2->1. Relaxing a
+    // restriction means GRANTING the missing permission (`|=`), never masking
+    // flags away (`&=`, which with F(1) & B(2) yields 0 and strands the road).
     const report = mergeRegions([
       makeRegion('a', makeGraph(nodes, [{ from: 1, to: 2, flags: FLAG_ONEWAY_F }])),
       makeRegion('b', makeGraph(nodes, [
@@ -363,44 +514,60 @@ describe('mergeRegions — one-way relaxation', () => {
       ])),
     ]);
     expect(traversable(report.graph)).toEqual(['0->1', '1->0']);
+    expect(edgeSet(report.graph)).toEqual(['0->1 flags=3', '1->0 flags=3']);
+    expect(routeOnGraph(report.graph, [1, 0], [0, 0])).not.toBeNull();
+    expect(routeOnGraph(report.graph, [0, 0], [1, 0])).not.toBeNull();
   });
 
-  it('turns a conflicting pair of one-ways into a road that is impassable', () => {
-    // A: one-way 1->2 (record (0->1) flags=F). B: the same way listed
-    // back-to-front as one-way 2->1 (record (1->0) flags=F). This is the only
-    // input that reaches the "relax the restriction" branch, and it does the
-    // exact opposite of relaxing:
-    //   flatFlags[storedIdx] &= FLAG_ONEWAY_B   // F(1) & 2 === 0
-    //   reverseIdx = seen.get(pk*2+1)          // the entry inserted 2 lines
-    //                                              above, i.e. past the end
-    //   flatFlags[reverseIdx] &= FLAG_ONEWAY_B  // undefined & 2 === 0
-    // Net: one edge with flags 0, which the engine cannot traverse either way.
+  it('relaxes two conflicting one-ways into a two-way road', () => {
+    // A: one-way 1->2, recorded (0->1) with F. B: the same way listed
+    // back-to-front as one-way 2->1, recorded (1->0) with F. Neither record is a
+    // duplicate of the other — they are the two directions of one road — and
+    // together they permit travel both ways.
     const report = mergeRegions([
       makeRegion('a', makeGraph(nodes, [{ from: 1, to: 2, flags: FLAG_ONEWAY_F }])),
       makeRegion('b', makeGraph(nodes, [{ from: 2, to: 1, flags: FLAG_ONEWAY_F }])),
     ]);
     expect(report.sharedEdges).toBe(1);
-    expect(edgeSet(report.graph)).toEqual(['0->1 flags=0']);
-    expect(traversable(report.graph)).toEqual([]);
-    // Both inputs were routable in one direction; the merge is routable in none.
-    expect(routeOnGraph(report.graph, [0, 0], [1, 0])).toBeNull();
-  });
-
-  it.fails('relaxes two conflicting one-ways into a two-way road', () => {
-    const report = mergeRegions([
-      makeRegion('a', makeGraph(nodes, [{ from: 1, to: 2, flags: FLAG_ONEWAY_F }])),
-      makeRegion('b', makeGraph(nodes, [{ from: 2, to: 1, flags: FLAG_ONEWAY_F }])),
-    ]);
+    expect(edgeSet(report.graph)).toEqual(['0->1 flags=1', '1->0 flags=1']);
     expect(traversable(report.graph)).toEqual(['0->1', '1->0']);
+    expect(deadEdges(report.graph)).toEqual([]);
+    // Both inputs were routable in one direction; so is the merge, in both.
+    expect(routeOnGraph(report.graph, [0, 0], [1, 0])).not.toBeNull();
+    expect(routeOnGraph(report.graph, [1, 0], [0, 0])).not.toBeNull();
   });
 
-  it.fails('never leaves an edge that permits travel in no direction', () => {
-    const report = mergeRegions([
-      makeRegion('a', makeGraph(nodes, [{ from: 1, to: 2, flags: FLAG_ONEWAY_F }])),
-      makeRegion('b', makeGraph(nodes, [{ from: 2, to: 1, flags: FLAG_ONEWAY_F }])),
-    ]);
-    for (let e = 0; e < report.graph.edgeFlags.length; e++) {
-      expect(report.graph.edgeFlags[e]).toBeGreaterThan(0);
+  it('never leaves an edge that permits travel in no direction', () => {
+    // stepCost() needs FLAG_ONEWAY_F to walk an edge forward and
+    // FLAG_ONEWAY_B to walk it backward, so flags === 0 is a road that cannot be
+    // used at all — exactly what `flatFlags[i] &= FLAG_ONEWAY_B` produced.
+    const road = (flags: number[]): RoadGraph => makeGraph(
+      [{ id: 1, lon: 0, lat: 0 }, { id: 2, lon: 1, lat: 0 }],
+      flags.map((f, i) => ({ from: i % 2 ? 2 : 1, to: i % 2 ? 1 : 2, flags: f })),
+    );
+    const scenarios: [string, RoadGraph, RoadGraph][] = [
+      ['conflicting one-ways', road([FLAG_ONEWAY_F]), road([FLAG_ONEWAY_F])],
+      ['one-way vs two-way', road([FLAG_ONEWAY_F]), road([TWO_WAY, TWO_WAY])],
+      ['repeated one-way records', road([FLAG_ONEWAY_F, FLAG_ONEWAY_F]), road([FLAG_ONEWAY_F])],
+      ['reverse one-ways', road([FLAG_ONEWAY_B, FLAG_ONEWAY_B]), road([FLAG_ONEWAY_B])],
+      ['mixed directions', road([FLAG_ONEWAY_F, FLAG_ONEWAY_B]), road([TWO_WAY, TWO_WAY])],
+      ['two-way vs two-way', road([TWO_WAY, TWO_WAY]), road([TWO_WAY, TWO_WAY])],
+    ];
+    for (const [name, a, b] of scenarios) {
+      for (const regions of [[a, b], [a, b, b]]) {
+        const g = mergeRegions(regions.map((rg, i) => makeRegion(`${name}-${i}`, rg))).graph;
+        expect(deadEdges(g), name).toEqual([]);
+        // The merge may relax a restriction (grant the union of what the
+        // extracts permit) but must neither drop nor invent a direction.
+        const allowed = new Set(regions.flatMap(permissions));
+        for (const p of permissions(g)) expect(allowed, name).toContain(p);
+        for (const p of allowed) expect(permissions(g), name).toContain(p);
+      }
+    }
+    // the same guarantee on a real extract
+    const ds = fixtureDataset();
+    for (const regions of [[regionOf('a', ds)], [regionOf('a', ds), regionOf('b', ds)]]) {
+      expect(deadEdges(mergeRegions(regions).graph)).toEqual([]);
     }
   });
 

@@ -194,19 +194,30 @@ describe('localToRoute', () => {
     expect(r.units).toBe('miles');
   });
 
-  it('BUG: throws RangeError for route geometries beyond ~125k points', () => {
-    // `Math.min(...geometry.map(...))` spreads one argument per point, which
-    // blows the argument limit on a long route from a large extract.
+  it('computes the summary bbox for a 125k-point geometry without overflowing', () => {
+    // `Math.min(...geometry.map(...))` spread one argument per point and blew
+    // the engine's argument limit past ~125k. This runs in the *offline
+    // fallback*, so the overflow would kill the very path that exists to keep a
+    // trip alive when the network drops.
     const geometry: LatLng[] = Array.from({ length: 125_000 }, (_, i) => [i * 1e-5, i * 1e-5]);
-    expect(() =>
-      localToRoute({ geometry, time: 1, metres: 1, steps: [], engine: 'osm-local' }, 'km'),
-    ).toThrow(RangeError);
+    let r!: ReturnType<typeof localToRoute>;
+    expect(() => {
+      r = localToRoute({ geometry, time: 1, metres: 1, steps: [], engine: 'osm-local' }, 'km');
+    }).not.toThrow();
+
+    expect(r.summary.max_lon).toBeCloseTo(1.24999, 5);
+    expect(r.summary.max_lat).toBeCloseTo(1.24999, 5);
+    expect(r.summary.min_lon).toBeCloseTo(0, 9);
+    expect(r.summary.min_lat).toBeCloseTo(0, 9);
+    expect(r.geometry).toBe(geometry);
   });
 
-  it.fails('computes the summary bbox for a 125k-point geometry', () => {
-    const geometry: LatLng[] = Array.from({ length: 125_000 }, (_, i) => [i * 1e-5, i * 1e-5]);
-    const r = localToRoute({ geometry, time: 1, metres: 1, steps: [], engine: 'osm-local' }, 'km');
-    expect(r.summary.max_lon).toBeCloseTo(1.24999, 5);
+  it('produces a finite bbox for an empty geometry', () => {
+    // A degenerate route must not put Infinity into the summary, which would
+    // propagate into the map's fitBounds call.
+    const r = localToRoute({ geometry: [], time: 0, metres: 0, steps: [], engine: 'osm-local' }, 'km');
+    expect(Number.isFinite(r.summary.min_lon)).toBe(true);
+    expect(Number.isFinite(r.summary.max_lat)).toBe(true);
   });
 });
 
@@ -313,7 +324,9 @@ describe('resolveRoute — online provider', () => {
     respondError(400, 'bad request');
     const err = await resolveRoute({ from: FROM, to: TO, provider: 'valhalla-fossgis' }, null, {})
       .catch((e) => e);
-    expect(err.message).toBe('bad request. No route found in the offline map for this pair.');
+    // A 4xx is a bad request, not a network problem, so it is fatal and
+    // reported as-is rather than dressed up as a failed offline lookup.
+    expect(err.message).toBe('bad request.');
   });
 
   it('skips the network entirely when the link is down', async () => {
@@ -336,27 +349,28 @@ describe('resolveRoute — online provider', () => {
     );
   });
 
-  it('does not send an Authorization header for simplerouting without a key', async () => {
-    // BUG: `probeProvider` enforces `requiresKey` but resolveRoute does not, so
-    // a keyless Simplerouting.io request goes out and comes back 401/403.
-    respondError(401, 'Unauthorized');
-    const out = await resolveRoute(
-      { from: FROM, to: TO, provider: 'valhalla-simplerouting' }, dataset(), {},
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(url()).toBe('https://api.simplerouting.io/valhalla/route');
-    expect(headers().Authorization).toBeUndefined();
-    expect(out.used).toBe('local');
-    expect(out.degraded[0]).toMatchObject({ provider: 'valhalla-simplerouting', reason: 'Unauthorized' });
-  });
-
-  it.fails('refuses to call simplerouting when no API key is configured', async () => {
+  it('refuses to call a key-required provider when no key is configured', async () => {
+    // `probeProvider` enforced `requiresKey` but `resolveRoute` did not, so a
+    // keyless Simplerouting.io request went out and came back 401 -- surfacing
+    // as a server error rather than the actionable "API key required".
     respondError(401, 'Unauthorized');
     const out = await resolveRoute(
       { from: FROM, to: TO, provider: 'valhalla-simplerouting' }, dataset(), {},
     );
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(out.used).toBe('local');
+    expect(out.degraded[0]).toMatchObject({ provider: 'valhalla-simplerouting' });
     expect(out.degraded[0].reason).toMatch(/API key/i);
+  });
+
+  it('sends the bearer token once a key is configured', async () => {
+    respondOnline();
+    await resolveRoute(
+      { from: FROM, to: TO, provider: 'valhalla-simplerouting' }, null, { apiKey: 'sk-test' },
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(url()).toBe('https://api.simplerouting.io/valhalla/route');
+    expect(headers().Authorization).toBe('Bearer sk-test');
   });
 
   it('sends a bearer token when simplerouting has a key', async () => {
@@ -413,11 +427,35 @@ describe('resolveRoute — online provider', () => {
     expect(out.degraded[0].reason).toBe('Too many requests');
   });
 
-  it('treats a 4xx as non-retryable but still falls back offline', async () => {
-    // `fatal && degraded.length >= 2` can never be true: the chain pushes at
-    // most one degraded entry, so the NoRouteError branch is dead code.
+  it('treats a 4xx as fatal instead of pretending offline could answer', async () => {
+    // `fatal && degraded.length >= 2` could never be true: the chain pushes at
+    // most one degraded entry, so the NoRouteError branch was dead code and a
+    // bad request was reported as a failed offline lookup.
     respondError(400, 'bad request');
-    const out = await resolveRoute({ from: FROM, to: TO, provider: 'valhalla-fossgis' }, dataset(), {});
+    const err = await resolveRoute(
+      { from: FROM, to: TO, provider: 'valhalla-fossgis' }, dataset(), {},
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(NoRouteError);
+    expect(err.message).toBe('bad request.');
+  });
+
+  it('still falls back offline for a non-4xx server failure', async () => {
+    // A 5xx is a server-side problem, not a bad request: the trip is probably
+    // fine and the offline engine is a reasonable answer, so we must not fail.
+    respondError(503, 'service unavailable');
+    const out = await resolveRoute(
+      { from: FROM, to: TO, provider: 'valhalla-fossgis' }, dataset(), {},
+    );
+    expect(out.used).toBe('local');
+    expect(out.degraded).toHaveLength(1);
+    expect(out.degraded[0].reason).toMatch(/service unavailable/i);
+  });
+
+  it('still falls back offline for a 429 rate limit', async () => {
+    respondError(429, 'too many requests');
+    const out = await resolveRoute(
+      { from: FROM, to: TO, provider: 'valhalla-fossgis' }, dataset(), {},
+    );
     expect(out.used).toBe('local');
     expect(out.degraded).toHaveLength(1);
   });
@@ -489,12 +527,19 @@ describe('probeProvider', () => {
 
 describe('RoutingError interop', () => {
   it('the online client raises RoutingError with a status the chain can inspect', async () => {
+    // 422 is a 4xx, so resolveRoute treats it as fatal and surfaces the server's
+    // own message. That message only reaches the user intact because the client
+    // parsed it out of the JSON error body into a RoutingError.
     respondError(422, 'No path could be found for the requested locations');
-    const out = await resolveRoute({ from: FROM, to: TO, provider: 'valhalla-fossgis' }, dataset(), {});
-    expect(out.degraded[0].reason).toBe('No path could be found for the requested locations');
+    const err = await resolveRoute(
+      { from: FROM, to: TO, provider: 'valhalla-fossgis' }, dataset(), {},
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(NoRouteError);
+    expect(err.message).toBe('No path could be found for the requested locations.');
+
     // RoutingError is what resolveRoute inspects for `status`
-    const err = new RoutingError('x', 422);
-    expect(err.status).toBe(422);
-    expect(err instanceof Error).toBe(true);
+    const re = new RoutingError('x', 422);
+    expect(re.status).toBe(422);
+    expect(re instanceof Error).toBe(true);
   });
 });

@@ -90,7 +90,15 @@ export function formatClock(date: Date): string {
 
 /** Snap a point to the closest position on a polyline; returns dist + index. */
 export function snapToPolyline(pt: LatLng, line: LatLng[]): { index: number; dist: number; point: LatLng } {
-  let best = { index: 0, dist: Infinity, point: line[0] ?? pt };
+  // A line with fewer than two points has no segment to project onto. Report
+  // the point as the answer and a distance of 0, not Infinity: an infinite
+  // distance reads as "maximally off route", which would fail a threshold
+  // comparison and claim the driver is lost when there is no route to be lost
+  // from.
+  if (line.length < 2) {
+    return { index: 0, dist: 0, point: line[0] ?? pt };
+  }
+  let best = { index: 0, dist: Infinity, point: line[0] };
   for (let i = 0; i < line.length - 1; i++) {
     const [px, py] = projectOnSegment(pt, line[i], line[i + 1]);
     // Measure in metres, not degrees: a degree of longitude is ~cos(lat) times

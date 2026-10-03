@@ -18,6 +18,7 @@ import { useLocation, type LocationMode } from './nav/location';
 import RegionsScreen from './regions/RegionsScreen';
 import {
   importRegionFile, localRegionId, localRegionName, regionLib, useRegions,
+  restoreRegions,
 } from './regions/store';
 import { searchAll } from './osm/regions';
 import {
@@ -63,6 +64,28 @@ export default function App() {
   const location = fix.pos;
 
   useEffect(() => watchConnectivity(setOnline), []);
+
+  /* ------------------- restore cached regions on start ------------------- */
+  // Parsing a province takes tens of seconds, so previously imported regions
+  // are cached as parsed datasets. Rehydrate them so the app is usable
+  // immediately rather than empty until the user re-imports.
+  const [restoring, setRestoring] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const restored = await restoreRegions();
+      if (cancelled || !restored.length) { if (!cancelled) setRestoring(false); return; }
+      // Pick an active dataset: whichever cached region covers the driver best.
+      const best = regionLib.bestFor(location) ?? restored[restored.length - 1];
+      setDataset(best.dataset);
+      setFocus({ center: [(best.bbox[0] + best.bbox[2]) / 2, (best.bbox[1] + best.bbox[3]) / 2], zoom: 13 });
+      setFitNonce((n) => n + 1);
+      setRestoring(false);
+    })();
+    return () => { cancelled = true; };
+    // Intentionally runs once on mount; location is not yet known here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* -------------------------- OSM import -------------------------- */
 
@@ -283,6 +306,7 @@ export default function App() {
 
       {screen === 'home' && (
         <HomeScreen
+          restoring={restoring}
           dataset={dataset}
           regionCount={regions.length}
           online={online}
@@ -394,6 +418,8 @@ function turnKind(delta: number): LegStep['icon'] | null {
 /* ---------------------------- HomeScreen ---------------------------- */
 
 interface HomeProps {
+  /** True while previously saved regions are rehydrated from storage. */
+  restoring: boolean;
   dataset: OsmDataset | null;
   regionCount: number;
   online: boolean;
@@ -416,6 +442,11 @@ interface HomeProps {
 function HomeScreen(p: HomeProps) {
   return (
     <>
+      {p.restoring && (
+        <div className="restoring-bar" role="status">
+          <span style={T.sub3}>Restoring saved maps…</span>
+        </div>
+      )}
       <div className="top-app-bar">
         <div className="brand">
           <IconCar size={40} />

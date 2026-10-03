@@ -413,16 +413,17 @@ describe('snapToPolyline', () => {
     expect(s.dist).toBe(0);
   });
 
-  it('returns dist Infinity for a degenerate line (single point / empty)', () => {
-    // Documented sharp edge: with fewer than 2 points there is no segment to
-    // project on, so no distance is produced.
+  it('reports distance 0, not Infinity, for a degenerate line', () => {
+    // With fewer than 2 points there is no segment to project onto. Returning
+    // Infinity would read as "maximally off route" to any threshold comparison,
+    // claiming the driver is lost when there is no route to be lost from.
     const one = snapToPolyline([1, 1], [[0, 0]]);
     expect(one.index).toBe(0);
-    expect(one.dist).toBe(Infinity);
+    expect(one.dist).toBe(0);
     expect(one.point).toEqual([0, 0]);
 
     const none = snapToPolyline([1, 1], []);
-    expect(none.dist).toBe(Infinity);
+    expect(none.dist).toBe(0);
     expect(none.point).toEqual([1, 1]);
   });
 });

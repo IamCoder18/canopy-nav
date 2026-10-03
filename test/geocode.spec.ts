@@ -180,7 +180,8 @@ describe('searchPlaces request', () => {
     expect(parsed.searchParams.get('namedetails')).toBe('1');
     expect((init.headers as Record<string, string>)['Accept-Language']).toBe('en');
     expect((init.headers as Record<string, string>)['X-Client-Id']).toBe('canopy-nav');
-    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+    // /search and /reverse are bodyless GETs, so no Content-Type is sent.
+    expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined();
     expect(parsed.searchParams.get('viewbox')).toBeNull();
   });
 
@@ -194,40 +195,67 @@ describe('searchPlaces request', () => {
     expect(parsed.searchParams.get('limit')).toBe('3');
   });
 
-  it('BUG: sends addressdetails=false instead of 0', async () => {
-    // `String(opts.addressDetails ?? 1)` stringifies the boolean; the API only
-    // accepts 0 or 1 for this parameter.
-    fetchMock.mockResolvedValue(ok([]));
-    await settle(searchPlaces('x', { addressDetails: false }));
-    const parsed = new URL(String(fetchMock.mock.calls[0][0]));
-    expect(parsed.searchParams.get('addressdetails')).toBe('false');
-  });
-
-  it.fails('sends addressdetails=0 when addressDetails is false', async () => {
+  it('sends addressdetails=0 when addressDetails is false', async () => {
+    // Nominatim only accepts 0 or 1 for `addressdetails`; `String(false)` would
+    // send the literal "false" and the API rejects it.
     fetchMock.mockResolvedValue(ok([]));
     await settle(searchPlaces('x', { addressDetails: false }));
     const parsed = new URL(String(fetchMock.mock.calls[0][0]));
     expect(parsed.searchParams.get('addressdetails')).toBe('0');
   });
 
-  it('BUG: builds the viewbox in lat,lon order instead of lon,lat', async () => {
-    // Nominatim documents viewbox as <x1>,<y1>,<x2>,<y2> with x = longitude and
-    // y = latitude. The code emits [lat+d, lon+d, lat-d, lon-d], so Berlin
-    // becomes lon 53.1, lat 14 -> lon 51.9, lat 12.8: not a proper box (and in
-    // the wrong hemisphere). App.tsx always passes `near`, so every in-app
-    // search is affected.
+  it('only ever sends addressdetails as 0 or 1, defaulting to 1', async () => {
+    // App.tsx calls searchPlaces without the flag, so an omitted option must
+    // still request address details — only an explicit false turns them off.
     fetchMock.mockResolvedValue(ok([]));
-    await settle(searchPlaces('cafe', { near: [13.4, 52.5] }));
-    const parsed = new URL(String(fetchMock.mock.calls[0][0]));
-    expect(parsed.searchParams.get('viewbox')).toBe('53.1,14,51.9,12.8');
-    expect(parsed.searchParams.get('bounded')).toBeNull();
+    const seen: (string | null)[] = [];
+    for (const opts of [{}, { addressDetails: true }, { addressDetails: false }]) {
+      await settle(searchPlaces('x', opts));
+      seen.push(new URL(String(fetchMock.mock.calls.at(-1)![0])).searchParams.get('addressdetails'));
+    }
+    expect(seen).toEqual(['1', '1', '0']);
+    expect(seen.every((v) => v === '0' || v === '1')).toBe(true);
   });
 
-  it.fails('builds the viewbox as <min_lon>,<min_lat>,<max_lon>,<max_lat>', async () => {
+  it('builds the viewbox as <min_lon>,<min_lat>,<max_lon>,<max_lat>', async () => {
+    // Nominatim documents viewbox as <x1>,<y1>,<x2>,<y2> with x = longitude and
+    // y = latitude, i.e. [W, S, E, N]. `near` is [lon, lat], so Berlin
+    // (13.4, 52.5) +/-0.6 must serialise as 12.8,51.9,14,53.1 — the old
+    // lat/lon order sent lon 53.1, lat 14 -> lon 51.9, lat 12.8, which is both
+    // an invalid box and in the wrong hemisphere. App.tsx always passes `near`,
+    // so every in-app search was affected (Nominatim answers HTTP 400).
     fetchMock.mockResolvedValue(ok([]));
     await settle(searchPlaces('cafe', { near: [13.4, 52.5] }));
     const parsed = new URL(String(fetchMock.mock.calls[0][0]));
     expect(parsed.searchParams.get('viewbox')).toBe('12.8,51.9,14,53.1');
+    // still a bias, not a hard filter
+    expect(parsed.searchParams.get('bounded')).toBeNull();
+  });
+
+  it('keeps the viewbox a valid box around `near` in either hemisphere', async () => {
+    fetchMock.mockResolvedValue(ok([]));
+    for (const near of [[13.4, 52.5], [-73.9, 40.7], [151.2, -33.9], [0, 0]] as [number, number][]) {
+      await settle(searchPlaces('cafe', { near }));
+      const vb = new URL(String(fetchMock.mock.calls.at(-1)![0])).searchParams
+        .get('viewbox')!
+        .split(',')
+        .map(Number);
+      expect(vb).toHaveLength(4);
+      const [w, s, e, n] = vb;
+      // min-before-max ordering holds in every octant
+      expect(e).toBeGreaterThan(w);
+      expect(n).toBeGreaterThan(s);
+      // the centre point lies inside the box, and the box is ~1.2 deg across
+      expect(near[0]).toBeGreaterThanOrEqual(w);
+      expect(near[0]).toBeLessThanOrEqual(e);
+      expect(near[1]).toBeGreaterThanOrEqual(s);
+      expect(near[1]).toBeLessThanOrEqual(n);
+      expect(e - w).toBeCloseTo(1.2, 10);
+      expect(n - s).toBeCloseTo(1.2, 10);
+      // longitudes are longitudes: Berlin stays in [-180, 180]
+      expect(Math.abs(w)).toBeLessThanOrEqual(180);
+      expect(Math.abs(e)).toBeLessThanOrEqual(180);
+    }
   });
 
   it('percent-encodes the query', async () => {
@@ -271,7 +299,8 @@ describe('toPlace mapping', () => {
     expect(p.category).toBe('shop');
     expect(p.type).toBe('bakery');
     expect(p.importance).toBeCloseTo(0.00001, 8);
-    expect(p.bbox).toEqual([52.5427201, 52.5427654, 13.3668619, 13.3669442]);
+    // boundingbox arrives as [S, N, W, E] and is stored as [W, S, E, N]
+    expect(p.bbox).toEqual([13.3668619, 52.5427201, 13.3669442, 52.5427654]);
   });
 
   it('falls back to the first display_name segment when `name` is absent', async () => {
@@ -346,25 +375,11 @@ describe('toPlace mapping', () => {
     expect(await settle(searchPlaces('zzzz'))).toEqual([]);
   });
 
-  it('BUG: puts the bbox in Nominatim order [S, N, W, E], not [W, S, E, N]', async () => {
+  it('normalises the bbox to [west, south, east, north]', async () => {
     // Nominatim's `boundingbox` is ["min_lat", "max_lat", "min_lon", "max_lon"],
-    // but every other bbox in the app is [west, south, east, north], so this
-    // field cannot be fed to bboxContains / bboxOverlapFrac / bboxOf.
-    fetchMock.mockResolvedValue(
-      ok([
-        {
-          place_id: 1, osm_type: 'way', osm_id: 2, lat: '52.5172', lon: '13.3978',
-          display_name: 'Kommandantenhaus', boundingbox: ['52.5170798', '52.5173311', '13.3975116', '13.3981577'],
-        },
-      ]),
-    );
-    const p = (await settle(searchPlaces('kommandantenhaus')))[0];
-    // Berlin: lat 52.517..52.517, lon 13.397..13.398
-    expect(p.bbox).toEqual([52.5170798, 52.5173311, 13.3975116, 13.3981577]);
-    expect(p.bbox![0]).toBeGreaterThan(p.bbox![2]); // south > west
-  });
-
-  it.fails('normalises the bbox to [west, south, east, north]', async () => {
+    // but every other bbox in the app is [west, south, east, north] (bboxOf in
+    // src/geo.ts, RegionMeta.bbox, OsmDataset.bbox), so this field cannot be fed
+    // to bboxContains / bboxOverlapFrac / bboxOf unless it is permuted.
     fetchMock.mockResolvedValue(
       ok([
         {
@@ -375,6 +390,45 @@ describe('toPlace mapping', () => {
     );
     const p: Place = (await settle(searchPlaces('kommandantenhaus')))[0];
     expect(p.bbox).toEqual([13.3975116, 52.5170798, 13.3981577, 52.5173311]);
+    const [w, s, e, n] = p.bbox!;
+    expect(w).toBeLessThan(e); // west < east
+    expect(s).toBeLessThan(n); // south < north
+    expect(w).toBeLessThan(p.lon); // and the point sits inside its own box
+    expect(p.lon).toBeLessThan(e);
+    expect(s).toBeLessThan(p.lat);
+    expect(p.lat).toBeLessThan(n);
+  });
+
+  it('produces a bbox usable by the app [W,S,E,N] bbox helpers', async () => {
+    // Mirrors bboxContains(b, p) from src/osm/regions.ts. Under the old
+    // Nominatim ordering ([S, N, W, E]) this returned false for a point that
+    // is plainly inside the box, because longitudes were compared against
+    // latitudes.
+    fetchMock.mockResolvedValue(
+      ok([
+        {
+          place_id: 1, osm_type: 'way', osm_id: 2, lat: '52.5172', lon: '13.3978',
+          display_name: 'Kommandantenhaus', boundingbox: ['52.5170798', '52.5173311', '13.3975116', '13.3981577'],
+        },
+        {
+          place_id: 3, osm_type: 'way', osm_id: 4, lat: '-33.8688', lon: '151.2093',
+          display_name: 'Sydney Opera House', boundingbox: ['-33.8695', '-33.8681', '151.2086', '151.2100'],
+        },
+      ]),
+    );
+    const places = await settle(searchPlaces('haus'));
+    const bboxContains = (b: [number, number, number, number], p: [number, number]) =>
+      p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3];
+
+    for (const p of places) {
+      expect(bboxContains(p.bbox!, [p.lon, p.lat])).toBe(true);
+      // corners ordered: a centre-west point is outside, a centre-east one inside
+      const [w, s, e, n] = p.bbox!;
+      expect(bboxContains(p.bbox!, [w - 0.01, (s + n) / 2])).toBe(false);
+      expect(bboxContains(p.bbox!, [(w + e) / 2, s - 0.01])).toBe(false);
+      expect(bboxContains(p.bbox!, [e + 0.01, (s + n) / 2])).toBe(false);
+      expect(bboxContains(p.bbox!, [(w + e) / 2, n + 0.01])).toBe(false);
+    }
   });
 });
 

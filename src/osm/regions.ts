@@ -97,34 +97,67 @@ export function bboxOverlapFrac(
   return area <= 0 ? 0 : (w * h) / area;
 }
 
-/** Where should we cut a route so it can be handed between two regions? */
-export function boundaryPoint(
-  a: Region, b: Region,
-): LatLng | null {
-  const ax = (a.bbox[0] + a.bbox[2]) / 2;
-  const ay = (a.bbox[1] + a.bbox[3]) / 2;
-  const bx = (b.bbox[0] + b.bbox[2]) / 2;
-  const by = (b.bbox[1] + b.bbox[3]) / 2;
-  // Ray/rect intersection between the two centroids.
-  const dx = bx - ax, dy = by - ay;
-  const minX = Math.min(a.bbox[0], b.bbox[0]), maxX = Math.max(a.bbox[2], b.bbox[2]);
-  const minY = Math.min(a.bbox[1], b.bbox[1]), maxY = Math.max(a.bbox[3], b.bbox[3]);
-  let tMin = 0, tMax = 1;
-  for (const [p, d, lo, hi] of [[ax, dx, minX, maxX], [ay, dy, minY, maxY]] as const) {
-    if (Math.abs(d) < 1e-12) {
-      if (p < lo || p > hi) return null;
-      continue;
-    }
-    let t1 = (lo - p) / d;
-    let t2 = (hi - p) / d;
-    if (t1 > t2) [t1, t2] = [t2, t1];
-    tMin = Math.max(tMin, t1);
-    tMax = Math.min(tMax, t2);
-    if (tMin > tMax) return null;
-  }
-  if (tMax <= 0 || tMin >= 1) return null;
-  const t = (tMin + tMax) / 2;
-  return [ax + dx * t, ay + dy * t];
+/**
+ * Closest pair of points between two axis-aligned boxes, plus the gap.
+ *
+ * For axis-aligned boxes the minimum separation is exactly
+ * `hypot(gapX, gapY)` where each gap is zero when the boxes overlap on that
+ * axis — no search needed.
+ */
+function closestPoints(
+  a: [number, number, number, number],
+  b: [number, number, number, number],
+): { pa: [number, number]; pb: [number, number]; gapM: number } {
+  // Positive only when the boxes are separated on that axis.
+  const gapX = Math.max(a[0] - b[2], b[0] - a[2], 0);
+  const gapY = Math.max(a[1] - b[3], b[1] - a[3], 0);
+
+  // The facing coordinate pair. When separated, these are the two edges that
+  // touch; when overlapping, any shared coordinate works, so take the middle of
+  // the shared span.
+  const xPair: [number, number] =
+    gapX > 0 ? (b[0] > a[2] ? [a[2], b[0]] : [b[2], a[0]])
+             : [(Math.max(a[0], b[0]) + Math.min(a[2], b[2])) / 2,
+                (Math.max(a[0], b[0]) + Math.min(a[2], b[2])) / 2];
+  const yPair: [number, number] =
+    gapY > 0 ? (b[1] > a[3] ? [a[3], b[1]] : [b[3], a[1]])
+             : [(Math.max(a[1], b[1]) + Math.min(a[3], b[3])) / 2,
+                (Math.max(a[1], b[1]) + Math.min(a[3], b[3])) / 2];
+
+  const pa: [number, number] = [xPair[0], yPair[0]];
+  const pb: [number, number] = [xPair[1], yPair[1]];
+
+  // Convert the angular gap to metres; longitude degrees shrink with latitude.
+  const midLat = ((a[1] + a[3]) / 2 + (b[1] + b[3]) / 2) / 2;
+  const gapM =
+    Math.hypot(gapX * 111320 * Math.cos((midLat * Math.PI) / 180), gapY * 111320);
+
+  return { pa, pb, gapM };
+}
+
+/**
+ * Largest separation still considered "adjacent".
+ *
+ * Canadian provinces and US states share borders, so a real pair overlaps or
+ * touches. A wider gap means the two extracts are simply not neighbours and
+ * there is no shared boundary to hand a route across.
+ */
+const ADJACENCY_GAP_M = 25_000;
+
+/**
+ * Where to hand a route from one region to the other, or null if they are not
+ * neighbours.
+ *
+ * This previously clipped a segment between the two centroids against the
+ * *union* of the boxes. Both centroids are by definition inside that union, so
+ * the clip could never fail and every `null` path was dead code: two extracts on
+ * opposite sides of the planet still produced a plausible-looking boundary
+ * point, and `plan()` happily built a cross-ocean two-leg route for them.
+ */
+export function boundaryPoint(a: Region, b: Region): LatLng | null {
+  const { pa, pb, gapM } = closestPoints(a.bbox, b.bbox);
+  if (gapM > ADJACENCY_GAP_M) return null;
+  return [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2];
 }
 
 /* --------------------------- the library --------------------------- */
@@ -167,8 +200,9 @@ export class RegionLibrary {
   }
 
   remove(id: string) {
-    this.regions.delete(id);
-    this.emit();
+    // Only notify on a real change; a no-op delete would otherwise re-render
+    // every subscribed screen for nothing.
+    if (this.regions.delete(id)) this.emit();
   }
 
   get(id: string) { return this.regions.get(id); }
@@ -178,11 +212,18 @@ export class RegionLibrary {
     return this.all.filter((r) => bboxContains(r.bbox, p));
   }
 
-  /** Best single region for a point, preferring the tightest bbox. */
+  /**
+   * Best single region for a point, preferring the tightest bbox.
+   *
+   * A city extract nested inside a province is the more specific match, so
+   * ascending area is what "tightest" means. This previously sorted descending
+   * and returned the loosest, so a point inside a loaded city routed against
+   * the province-wide graph.
+   */
   bestFor(p: LatLng): Region | null {
     const hits = this.regionsFor(p);
     if (!hits.length) return null;
-    return hits.sort((x, y) => area(y.bbox) - area(x.bbox))[0];
+    return hits.slice().sort((x, y) => area(x.bbox) - area(y.bbox))[0];
   }
 
   /** Which catalog entry would cover this point, if downloaded? */
@@ -194,6 +235,9 @@ export class RegionLibrary {
     const rough: Record<string, [number, number, number, number]> = {
       'ca-ab': [-120, 49, -110, 60], 'ca-bc': [-139, 48.3, -114, 60],
       'ca-on': [-95.8, 41.7, -74.3, 56.9], 'ca-qc': [-79.6, 44.9, -57, 62.6],
+      // First match wins, so the more specific Manitoba-north box must be
+      // tested before the province-wide ca-mb box or it is unreachable.
+      'ca-mb-north': [-102, 58.5, -88.9, 60],
       'ca-mb': [-102, 48.9, -88.9, 60], 'ca-sk': [-110, 48.9, -101.4, 60],
       'ca-ns': [-66.5, 43.3, -59.6, 47.1], 'ca-nb': [-69.1, 44.6, -63.8, 48.1],
       'ca-nl': [-59.5, 46.6, -52.6, 51.7], 'ca-pe': [-64.5, 46.2, -62, 47.1],
@@ -247,7 +291,15 @@ export class RegionLibrary {
    * Off-road gaps between regions are flagged so the UI can warn the driver.
    */
   route(from: LatLng, to: LatLng): { result: RouteResult; regions: string[]; stitched: boolean } | null {
-    const plan = this.plan(from, to);
+    // `plan` throws when no downloaded region covers the pair. Callers expect a
+    // nullable result here, so surface it the same way rather than forcing
+    // every caller into a try/catch.
+    let plan: CrossRegionPlan;
+    try {
+      plan = this.plan(from, to);
+    } catch {
+      return null;
+    }
 
     if (plan.kind === 'single') {
       const r = this.routeIn(plan.region, from, to);
@@ -301,6 +353,7 @@ export function searchAll(
 
   const mPerDegLon = 111320 * Math.cos((near[1] * Math.PI) / 180);
 
+  outer:
   for (const region of lib.all) {
     for (const g of region.dataset.gaz) {
       const name = g.name.toLowerCase();
@@ -320,7 +373,9 @@ export function searchAll(
         score: score + g.rank - Math.min(120, distM / 500),
         entry: g,
       });
-      if (hits.length > 6000) break;
+      // Cap total work, not per-region work: breaking only the inner loop let a
+      // 20-region library push tens of thousands of hits before stopping.
+      if (hits.length > 6000) break outer;
     }
   }
   return hits.sort((a, b) => b.score - a.score).slice(0, limit);

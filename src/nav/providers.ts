@@ -98,15 +98,32 @@ export class NoRouteError extends Error {
   }
 }
 
-/** Normalise the local engine's output into the shared `Route` shape. */
+/**
+ * Normalise the local engine's output into the shared `Route` shape.
+ *
+ * The bbox is reduced with a loop rather than `Math.min(...geometry.map(...))`:
+ * spreading one argument per point exceeds the engine's argument limit at
+ * roughly 125 000 points, which a provincial extract reaches easily — and this
+ * function runs in the *offline fallback*, so a stack overflow here would take
+ * down the very path that exists to keep the trip alive.
+ */
 export function localToRoute(r: RouteResult, units: 'km' | 'miles'): Route {
+  let minLat = Infinity, minLon = Infinity, maxLat = -Infinity, maxLon = -Infinity;
+  for (const [lon, lat] of r.geometry) {
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+    if (lon < minLon) minLon = lon;
+    if (lon > maxLon) maxLon = lon;
+  }
+  if (!r.geometry.length) { minLat = minLon = 0; maxLat = maxLon = 0; }
+
   const summary = {
     length: r.metres,
     time: r.time,
-    min_lat: Math.min(...r.geometry.map((p) => p[1])),
-    min_lon: Math.min(...r.geometry.map((p) => p[0])),
-    max_lat: Math.max(...r.geometry.map((p) => p[1])),
-    max_lon: Math.max(...r.geometry.map((p) => p[0])),
+    min_lat: minLat,
+    min_lon: minLon,
+    max_lat: maxLat,
+    max_lon: maxLon,
   };
   return {
     geometry: r.geometry,
@@ -166,7 +183,13 @@ export async function resolveRoute(
   if (provider.online && isOnline()) {
     const endpoint =
       provider.id === 'valhalla-custom' ? (providerState.endpoint ?? '') : provider.endpoint;
-    if (endpoint) {
+
+    // Don't send a request we know cannot succeed: a hosted provider that needs
+    // a key and has none would otherwise come back 401 and surface as a server
+    // error instead of "API key required".
+    if (provider.requiresKey && !providerState.apiKey) {
+      degraded.push({ provider: provider.id, reason: 'API key required' });
+    } else if (endpoint) {
       try {
         const route = await routeOnValhalla(
           { from: req.from, to: req.to, costing: req.costing, units, avoid: req.avoid },
@@ -181,9 +204,13 @@ export async function resolveRoute(
           err instanceof RoutingError ? err.message : (err as Error).message || 'Routing request failed';
         degraded.push({ provider: provider.id, reason });
         // A 4xx from Valhalla is a bad request, not a network problem — don't retry offline.
-        const fatal = err instanceof RoutingError && typeof err.status === 'number' && err.status < 500 && err.status !== 429;
-        if (fatal && degraded.length >= 2) {
-          throw new NoRouteError(`${reason}. Offline routing unavailable for this pair.`);
+        // A 4xx (other than 429) is a bad request rather than a network
+        // problem. Only one online provider is ever tried per call, so this
+        // branch must not also test the degraded count — it never gets past 1.
+        const fatal = err instanceof RoutingError && typeof err.status === 'number' &&
+          err.status < 500 && err.status !== 429;
+        if (fatal) {
+          throw new NoRouteError(`${reason}.`);
         }
       }
     }

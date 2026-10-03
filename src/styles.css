@@ -529,3 +529,18 @@ code {
 .chip:hover { background: rgba(255, 255, 255, 0.14); }
 .chip:active { background: rgba(255, 255, 255, 0.2); }
 .chip.ok { background: rgba(96, 168, 240, 0.18); color: #60A8F0; }
+
+/* Startup notice while cached regions are rehydrated from IndexedDB. */
+.restoring-bar {
+  position: absolute;
+  top: 96px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 35;
+  display: flex; align-items: center;
+  height: 76px; padding: 0 24px;
+  border-radius: 9999px;
+  background: #202124;
+  color: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}

@@ -175,49 +175,57 @@ describe('bboxOverlapFrac', () => {
 
 describe('boundaryPoint', () => {
   const a = stubRegion('a', [-120, 49, -110, 60]);
-  const b = stubRegion('b', [-110, 49, -100, 60]);
 
-  it('returns the midpoint of the two centroids for adjacent regions', () => {
+  it('returns the midpoint of the shared edge for horizontally adjacent regions', () => {
+    const b = stubRegion('b', [-110, 49, -100, 60]);
     const p = boundaryPoint(a, b);
     expect(p).not.toBeNull();
-    // centroids (-115, 54.5) and (-105, 54.5) => midpoint (-110, 54.5),
-    // which is exactly the shared edge.
     expect(p![0]).toBeCloseTo(-110, 9);
     expect(p![1]).toBeCloseTo(54.5, 9);
   });
 
+  it('finds the touching edge on the other three sides', () => {
+    const left = boundaryPoint(a, stubRegion('l', [-130, 49, -120, 60]))!;
+    expect(left[0]).toBeCloseTo(-120, 9);
+    expect(left[1]).toBeCloseTo(54.5, 9);
+
+    const below = boundaryPoint(a, stubRegion('d', [-120, 39, -110, 49]))!;
+    expect(below[0]).toBeCloseTo(-115, 9);
+    expect(below[1]).toBeCloseTo(49, 9);
+
+    const corner = boundaryPoint(a, stubRegion('c', [-120, 60, -110, 70]))!;
+    expect(corner[0]).toBeCloseTo(-115, 9);
+    expect(corner[1]).toBeCloseTo(60, 9);
+  });
+
   it('is symmetric in its arguments', () => {
+    const b = stubRegion('b', [-110, 49, -100, 60]);
     expect(boundaryPoint(a, b)).toEqual(boundaryPoint(b, a));
   });
 
-  it('works for diagonal neighbours', () => {
-    const c = stubRegion('c', [-120, 60, -110, 70]);
-    // centroids (-115, 54.5) and (-115, 65) => midpoint (-115, 59.75)
-    const p = boundaryPoint(a, c)!;
-    expect(p[0]).toBeCloseTo(-115, 9);
-    expect(p[1]).toBeCloseTo(59.75, 9);
+  it('returns the shared centre for identical or nested boxes', () => {
+    expect(boundaryPoint(a, stubRegion('same', [-120, 49, -110, 60]))).toEqual([-115, 54.5]);
+    expect(boundaryPoint(a, stubRegion('nested', [-119, 50, -111, 59]))).toEqual([-115, 54.5]);
   });
 
-  it('returns the shared centroid for identical boxes', () => {
-    const same = stubRegion('same', [-120, 49, -110, 60]);
-    expect(boundaryPoint(a, same)).toEqual([-115, 54.5]);
+  it('returns the middle of the shared span for overlapping boxes', () => {
+    // Boxes that overlap need no hand-off; the answer is the centre of the
+    // intersection (x: -118..-112 -> -115, y: 50..55 -> 52.5).
+    expect(boundaryPoint(a, stubRegion('ov', [-118, 50, -112, 55]))).toEqual([-115, 52.5]);
   });
 
-  it('BUG: never returns null, even for regions on opposite sides of the world', () => {
-    // The slab clip always contains both centroids (each is inside its own box
-    // and the clip rect is the union of the two boxes), so t stays inside
-    // [0, 1] and the `return null` paths are unreachable. Regions thousands of
-    // km apart still get a "boundary" point between them.
-    const far = stubRegion('far', [130, -40, 150, -20]);
-    const p = boundaryPoint(a, far);
-    expect(p).not.toBeNull();
-    expect(p![0]).toBeCloseTo(12.5, 9); // (-115 + 140) / 2
-    expect(p![1]).toBeCloseTo(12.25, 9); // (54.5 + -30) / 2
+  it('accepts a small gap but rejects one past the adjacency threshold', () => {
+    // 0.2 deg of longitude at 54.5N is ~12.9 km, 0.4 deg is ~25.9 km.
+    const near = boundaryPoint(a, stubRegion('near', [-109.8, 49, -100, 60]));
+    expect(near).not.toBeNull();
+    expect(near![0]).toBeCloseTo(-109.9, 9);
+    expect(boundaryPoint(a, stubRegion('far', [-109.6, 49, -100, 60]))).toBeNull();
   });
 
-  it.fails('returns null for non-adjacent regions', () => {
-    const far = stubRegion('far', [130, -40, 150, -20]);
-    expect(boundaryPoint(a, far)).toBeNull();
+  it('returns null for regions that are not neighbours', () => {
+    expect(boundaryPoint(a, stubRegion('far', [130, -40, 150, -20]))).toBeNull();
+    expect(boundaryPoint(a, stubRegion('eu', [-40, 10, -30, 20]))).toBeNull();
+    expect(boundaryPoint(a, stubRegion('pacific', [170, 10, 175, 20]))).toBeNull();
   });
 });
 
@@ -269,14 +277,25 @@ describe('RegionLibrary bookkeeping', () => {
     expect(lib.count).toBe(1);
   });
 
-  it('emits even when removing an id that was never added', () => {
-    // remove() is unconditional, so subscribers wake up for a no-op delete.
+  it('does not notify when removing an id that was never added', () => {
+    // An unconditional emit() re-rendered every subscribed screen for a no-op.
     const lib = new RegionLibrary();
     let calls = 0;
     lib.subscribe(() => calls++);
     lib.remove('ghost');
     expect(lib.count).toBe(0);
+    expect(calls).toBe(0);
+
+    // ...but a real removal still notifies exactly once
+    const ds = datasetFromXml('<osm/>');
+    addRegion(lib, {
+      id: 'real', name: 'Real', code: 'r', bbox: ds.bbox,
+      loadedAt: 0, bytes: 0, counts: ds.counts, gazetteerSize: ds.gaz.length, dataset: ds,
+    });
+    calls = 0;
+    lib.remove('real');
     expect(calls).toBe(1);
+    expect(lib.count).toBe(0);
   });
 });
 
@@ -291,19 +310,13 @@ describe('regionsFor / bestFor', () => {
     expect(lib.regionsFor([100, 0])).toEqual([]);
   });
 
-  it('BUG: picks the LOOSEST bbox, not the tightest', () => {
+  it('prefers the tightest bbox', () => {
+    // A city extract nested inside a province is the more specific match. The
+    // sort previously ordered descending by area and returned the loosest, so a
+    // point inside a loaded city routed against the province-wide graph.
     const lib = libWith(big(), small());
-    // `hits.sort((x, y) => area(y.bbox) - area(x.bbox))` orders descending by
-    // area, so `hits[0]` is the biggest box even though the docstring says
-    // "preferring the tightest bbox".
-    expect(lib.bestFor([1, 46])!.id).toBe('big');
-    expect(lib.bestFor([-5, 42])!.id).toBe('big');
-  });
-
-  it.fails('prefers the tightest bbox', () => {
-    const lib = libWith(big(), small());
-    expect(lib.bestFor([1, 46])!.id).toBe('small');
-    expect(lib.bestFor([-5, 42])!.id).toBe('big');
+    expect(lib.bestFor([1, 46])!.id).toBe('small');   // inside both
+    expect(lib.bestFor([-5, 42])!.id).toBe('big');    // inside only the province
   });
 
   it('returns null when no region covers the point', () => {
@@ -341,6 +354,13 @@ describe('plan', () => {
       expect(plan.legs[1].from).toEqual([0, 45]);
       expect(plan.legs[1].to).toEqual([5, 45]);
     }
+  });
+
+  it('falls back to a single plan when the two regions are not neighbours', () => {
+    const lib = libWith(stubRegion('a', [-120, 49, -110, 60]), stubRegion('far', [130, -40, 150, -20]));
+    const plan = lib.plan([-115, 54], [140, -30]);
+    expect(plan.kind).toBe('single');
+    if (plan.kind === 'single') expect(plan.region.id).toBe('a');
   });
 
   it('falls back to the region covering the origin when the destination is elsewhere', () => {
@@ -382,12 +402,15 @@ describe('route', () => {
   };
 
   it('routes inside a single region without stitching', () => {
-    const r = lib().route([0, 0], [0.01, 0]);
+    // Both endpoints strictly inside `west`, so this is genuinely one region
+    // rather than a point sitting on the shared border.
+    const r = lib().route([0.001, 0], [0.009, 0]);
     expect(r).not.toBeNull();
     expect(r!.regions).toEqual(['west']);
     expect(r!.stitched).toBe(false);
+    // endpoints snap to the nearest graph nodes, which sit at lon 0 and 0.01
     expect(r!.result.geometry.map((p) => p[0])).toEqual([0, 0.01]);
-    expect(r!.result.metres).toBeGreaterThan(1000);
+    expect(r!.result.metres).toBeGreaterThan(100);
   });
 
   it('routes across regions and joins the legs without duplicating the seam node', () => {
@@ -412,12 +435,11 @@ describe('route', () => {
     expect(lib().route([0, 0], [0.02, 0.5])).toBeNull();
   });
 
-  it('throws rather than returning null when no region covers the pair', () => {
-    // plan() throws and route() does not catch it, so a caller expecting
-    // `RouteResult | null` gets an exception instead.
-    expect(() => new RegionLibrary().route([100, 0], [101, 0])).toThrow(
-      /No downloaded region covers this route/,
-    );
+  it('returns null rather than throwing when no region covers the pair', () => {
+    // route() is typed `| null`, so a caller must not have to guard with
+    // try/catch just because nothing downloaded covers the trip.
+    expect(() => new RegionLibrary().route([100, 0], [101, 0])).not.toThrow();
+    expect(new RegionLibrary().route([100, 0], [101, 0])).toBeNull();
   });
 
   it('routeIn delegates to the single-region engine', () => {

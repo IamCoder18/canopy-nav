@@ -18,7 +18,8 @@
 import { useSyncExternalStore } from 'react';
 import { OsmEngine, type BuildProgress } from '../osm/engine';
 import type { OsmDataset } from '../osm/engine.worker';
-import { RegionLibrary, type Region } from '../osm/regions';
+import { RegionLibrary, type Region, type RegionMeta } from '../osm/regions';
+import { saveRegion, deleteRegion, loadAllRegions, probePersistence } from './persist';
 
 /** The one library. Downloaded regions live here for the life of the session. */
 export const regionLib = new RegionLibrary();
@@ -36,6 +37,14 @@ export interface ImportRequest {
   file: File;
   onProgress?: (p: BuildProgress | null) => void;
   onError?: (message: string | null) => void;
+  /**
+   * Non-fatal persistence problem, e.g. the device is out of room.
+   *
+   * Deliberately separate from `onError`: failing to cache a region must never
+   * make a perfectly good import look broken. Quota is the one case the driver
+   * genuinely needs to see, so it is reported without failing the import.
+   */
+  onPersistError?: (message: string | null) => void;
 }
 
 /**
@@ -44,7 +53,7 @@ export interface ImportRequest {
  * reported through `onError`, so callers only need to check for `null`).
  */
 export async function importRegionFile(req: ImportRequest): Promise<OsmDataset | null> {
-  const { onProgress, onError } = req;
+  const { onProgress, onError, onPersistError } = req;
   onError?.(null);
   onProgress?.({ stage: 'Reading file', pct: 0 });
 
@@ -60,22 +69,28 @@ export async function importRegionFile(req: ImportRequest): Promise<OsmDataset |
     onProgress?.({ stage: 'Reading extract', pct: 0 });
     const dataset = await engine.build(req.file);
 
-    regionLib.add(
-      {
-        id: req.id,
-        name: req.name,
-        code: req.code,
-        bbox: dataset.bbox,
-        loadedAt: Date.now(),
-        bytes: req.file.size,
-        counts: dataset.counts,
-        gazetteerSize: dataset.gaz.length,
-      },
-      dataset,
-    );
+    const meta: RegionMeta = {
+      id: req.id,
+      name: req.name,
+      code: req.code,
+      bbox: dataset.bbox,
+      loadedAt: Date.now(),
+      bytes: req.file.size,
+      counts: dataset.counts,
+      gazetteerSize: dataset.gaz.length,
+    };
+    regionLib.add(meta, dataset);
 
     prev?.dispose();
     onProgress?.(null);
+
+    // Cache the parsed dataset so it survives a restart. Re-parsing a province
+    // takes tens of seconds, so this is worth doing even though it is not
+    // required for the import to be usable.
+    void saveRegion(meta, dataset)
+      .then(() => onPersistError?.(null))
+      .catch((err: Error) => onPersistError?.(err.message));
+
     return dataset;
   } catch (e) {
     // A failed replace must not take the working region down with it: the
@@ -89,10 +104,33 @@ export async function importRegionFile(req: ImportRequest): Promise<OsmDataset |
   }
 }
 
-/** Drop a region and release its worker. */
+/**
+ * Rehydrate regions saved by a previous session.
+ *
+ * Returns the restored regions so the caller can pick an active dataset; a
+ * restored region has no worker (routing and search run off the parsed dataset
+ * on the main thread), so it is immediately usable.
+ */
+export async function restoreRegions(): Promise<Region[]> {
+  try {
+    if (!(await probePersistence())) return [];
+    const saved = await loadAllRegions();
+    const out: Region[] = [];
+    for (const { meta, dataset } of saved) {
+      out.push(regionLib.add(meta, dataset));
+    }
+    return out;
+  } catch {
+    // Never block startup on a storage problem.
+    return [];
+  }
+}
+
+/** Drop a region, release its worker, and forget the cached copy. */
 export function removeRegion(id: string) {
   regionLib.remove(id);
   engines.get(id)?.dispose();
+  void deleteRegion(id).catch(() => { /* nothing to do if it is already gone */ });
   engines.delete(id);
 }
 

@@ -229,29 +229,19 @@ describe('routeOnValhalla — response parsing', () => {
     expect(route.geometry[decoded.length - 1]).toEqual(LEG_SHAPE_PTS[LEG_SHAPE_PTS.length - 1]);
   });
 
-  it('BUG: appends a duplicate of the final coordinate', async () => {
-    // Valhalla's `shape` already contains the destination and the last
-    // maneuver's end_shape_index is that coordinate's index, so
-    // `geometry.push(geometry[end_shape_index])` duplicates it.
-    respond(TRIP_JSON);
-    const route = await routeOnValhalla({ from: FROM, to: TO });
-    const decoded = decodePolyline(LEG_SHAPE, 6);
-    expect(route.geometry).toHaveLength(decoded.length + 1);
-    const n = route.geometry.length;
-    expect(route.geometry[n - 1]).toEqual(route.geometry[n - 2]);
-    expect(route.geometry[n - 2]).toEqual(LEG_SHAPE_PTS[LEG_SHAPE_PTS.length - 1]);
-    // ...so the arrival maneuver's index still lands on the right point, but
-    // every downstream consumer sees a zero-length final segment.
-    expect(route.geometry[6]).toEqual(LEG_SHAPE_PTS[6]);
-    expect(route.geometry[7]).toEqual(LEG_SHAPE_PTS[6]);
-  });
-
-  it.fails('returns exactly the decoded shape, with no duplicated last point', async () => {
+  it('returns exactly the decoded shape, with no duplicated last point', async () => {
+    // Valhalla's `shape` already contains the destination, and the last
+    // maneuver's end_shape_index is that coordinate's index. Appending it again
+    // produced a zero-length final segment for every consumer downstream.
     respond(TRIP_JSON);
     const route = await routeOnValhalla({ from: FROM, to: TO });
     const decoded = decodePolyline(LEG_SHAPE, 6);
     expect(route.geometry).toEqual(decoded);
+    // every coordinate distinct => no zero-length segment anywhere
     expect(new Set(route.geometry.map((p) => p.join(','))).size).toBe(decoded.length);
+    // the arrival maneuver's end index lands exactly on the final point
+    const last = route.maneuvers[route.maneuvers.length - 1];
+    expect(route.geometry[last.end_shape_index]).toEqual(LEG_SHAPE_PTS[LEG_SHAPE_PTS.length - 1]);
   });
 
   it('exposes maneuvers, summary, units and engine', async () => {
@@ -306,7 +296,7 @@ describe('routeOnValhalla — response parsing', () => {
     expect(route.geometry).toHaveLength(decodePolyline(LEG_SHAPE, 6).length);
   });
 
-  it('BUG: only the first leg ends up in route.geometry', async () => {
+  it('concatenates every leg into route.geometry', async () => {
     // `geometry: legs[0].geometry` drops every later leg, so a via-point trip
     // renders and routes on a truncated line.
     const leg2 = {
@@ -317,14 +307,32 @@ describe('routeOnValhalla — response parsing', () => {
     respond({ trip: { ...TRIP_JSON.trip, legs: [TRIP_JSON.trip.legs[0], leg2] } });
     const route = await routeOnValhalla({ from: FROM, to: TO });
     expect(route.legs).toHaveLength(2);
-    expect(route.geometry).toEqual(route.legs[0].geometry);
     expect(route.maneuvers).toEqual(route.legs[0].maneuvers);
-    // none of the second leg's coordinates ever reach the route geometry
-    expect(route.geometry.some((p) => p[0] === -83.03 || p[0] === -83.04)).toBe(false);
-    expect(route.geometry.length).toBe(route.legs[0].geometry.length);
+    // every coordinate of every leg reaches the drawn route
+    expect(route.geometry.some((p) => p[0] === -83.03 || p[0] === -83.04)).toBe(true);
   });
 
-  it.fails('concatenates every leg into route.geometry', async () => {
+  it('joins consecutive legs without inventing or losing coordinates', async () => {
+    // Real legs meet at the break coordinate, so leg 2 starts where leg 1
+    // ended. This fixture deliberately makes them differ, to prove the join only
+    // removes a genuine repeat: a real gap must not be papered over by silently
+    // discarding a coordinate.
+    const leg2 = {
+      maneuvers: [{ type: 1, instruction: 'Arrive.', begin_shape_index: 0, end_shape_index: 1, length: 1, time: 1 }],
+      summary: LEG_SUMMARY,
+      shape: encode6([[-83.045, 42.3295], [-83.04, 42.32]]), // starts at leg 1's end
+    };
+    respond({ trip: { ...TRIP_JSON.trip, legs: [TRIP_JSON.trip.legs[0], leg2] } });
+    const route = await routeOnValhalla({ from: FROM, to: TO });
+
+    // one copy of the shared break survives, and nothing else is lost
+    expect(route.geometry).toEqual([
+      ...route.legs[0].geometry.slice(0, -1),
+      ...route.legs[1].geometry,
+    ]);
+  });
+
+  it('keeps both endpoints when the legs do not actually meet', async () => {
     const leg2 = {
       maneuvers: [{ type: 1, instruction: 'Arrive.', begin_shape_index: 0, end_shape_index: 1, length: 1, time: 1 }],
       summary: LEG_SUMMARY,
@@ -332,8 +340,14 @@ describe('routeOnValhalla — response parsing', () => {
     };
     respond({ trip: { ...TRIP_JSON.trip, legs: [TRIP_JSON.trip.legs[0], leg2] } });
     const route = await routeOnValhalla({ from: FROM, to: TO });
-    const expected = [...route.legs[0].geometry.slice(0, -1), ...route.legs[1].geometry];
-    expect(route.geometry).toEqual(expected);
+
+    // leg 1 ends at [-83.045, 42.3295] and leg 2 starts at [-83.04, 42.32];
+    // nothing coincides, so every coordinate must survive
+    expect(route.geometry.length).toBe(
+      route.legs[0].geometry.length + route.legs[1].geometry.length,
+    );
+    expect(route.geometry.at(-2)).toEqual([-83.04, 42.32]);
+    expect(route.geometry.at(-1)).toEqual([-83.03, 42.31]);
   });
 });
 

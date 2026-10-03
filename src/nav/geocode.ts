@@ -41,9 +41,12 @@ function throttle<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/**
+ * No `Content-Type` here: every call this module makes is a bodyless GET, so a
+ * content type is meaningless (and some proxies reject it outright).
+ */
 function headers(): HeadersInit {
   return {
-    'Content-Type': 'application/json',
     'Accept-Language': 'en',
     // FOSSGIS asks distributed clients to identify themselves.
     'X-Client-Id': 'canopy-nav',
@@ -78,8 +81,18 @@ function toPlace(p: NominatimPlace): Place {
     type: p.type ?? p.addresstype ?? 'place',
     osmType: p.osm_type,
     osmId: p.osm_id,
+    // Nominatim returns `boundingbox` as [min_lat, max_lat, min_lon, max_lon]
+    // (= [S, N, W, E]). The rest of the app uses [west, south, east, north]
+    // (see `bboxOf` in src/geo.ts and `bboxContains`/`bboxOverlapFrac` in
+    // src/osm/regions.ts), so permute the two axis pairs rather than leaking a
+    // second, incompatible box ordering into `Place`.
     bbox: p.boundingbox
-      ? [parseFloat(p.boundingbox[0]), parseFloat(p.boundingbox[1]), parseFloat(p.boundingbox[2]), parseFloat(p.boundingbox[3])]
+      ? [
+          parseFloat(p.boundingbox[2]), // W
+          parseFloat(p.boundingbox[0]), // S
+          parseFloat(p.boundingbox[3]), // E
+          parseFloat(p.boundingbox[1]), // N
+        ]
       : undefined,
     importance: p.importance,
   };
@@ -94,15 +107,31 @@ export function searchPlaces(
   const params = new URLSearchParams({
     q,
     format: 'jsonv2',
-    addressdetails: String(opts.addressDetails ?? 1),
+    // Nominatim only accepts 0 or 1 here — `String(false)` would send the
+    // literal "false". Only an explicit `false` disables address details, so
+    // the default stays on (App.tsx never passes the flag).
+    addressdetails: opts.addressDetails === false ? '0' : '1',
     limit: String(opts.limit ?? 10),
     extratags: '1',
     namedetails: '1',
   });
   if (opts.near) {
-    // viewbox=NW,NE,SW,SE + bounded=0 biases results without excluding distant hits
+    // Nominatim documents viewbox as <x1>,<y1>,<x2>,<y2> where x is LONGITUDE
+    // and y is LATITUDE — i.e. [W, S, E, N], the same ordering as every other
+    // bbox in the app. `near` is a LatLng ([lon, lat]), so emit
+    // lon-d, lat-d, lon+d, lat+d: the south-west corner first, then the
+    // north-east. (Nominatim accepts either corner as first, but keeping
+    // min-before-max is self-documenting and matches how we build boxes
+    // locally.) The two corners are +/-0.6 deg, ~65 km out at this latitude.
+    // `bounded` is deliberately left unset (defaults to 0) so the box only
+    // *biases* ranking towards the map centre without excluding distant hits.
     const d = 0.6;
-    params.set('viewbox', [opts.near[1] + d, opts.near[0] + d, opts.near[1] - d, opts.near[0] - d].join(','));
+    params.set('viewbox', [
+      opts.near[0] - d, // W
+      opts.near[1] - d, // S
+      opts.near[0] + d, // E
+      opts.near[1] + d, // N
+    ].join(','));
   }
 
   return throttle(async () => {

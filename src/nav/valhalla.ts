@@ -82,20 +82,34 @@ function parseTrip(json: unknown, units: 'km' | 'miles'): Route {
   const trip = (json as { trip?: { legs?: ValhallaLeg[]; summary?: ValhallaLeg['summary']; units?: string; language?: string } }).trip;
   if (!trip || !trip.legs?.length) throw new RoutingError('Route not found between the selected points');
 
-  const legs = trip.legs.map((leg) => {
-    const geometry = decodePolyline(leg.shape, 6);
-    // Valhalla omits the final coordinate from `shape`; close it explicitly.
-    const last = leg.maneuvers[leg.maneuvers.length - 1];
-    if (last) {
-      const i = last.end_shape_index;
-      if (i < geometry.length) geometry.push(geometry[i]);
-    }
-    return { geometry, maneuvers: leg.maneuvers, summary: leg.summary };
-  });
+  // A leg's `shape` already includes its final coordinate, and the last
+  // maneuver's end_shape_index is that coordinate's index (geometry.length - 1).
+  // Appending it again produced a duplicated arrival point.
+  const legs = trip.legs.map((leg) => ({
+    geometry: decodePolyline(leg.shape, 6),
+    maneuvers: leg.maneuvers,
+    summary: leg.summary,
+  }));
 
   const summary = trip.summary ?? legs[0].summary;
+  // A multi-leg trip (via/break locations) must be drawn and snapped as one
+  // continuous line, or navigation silently ignores every leg after the first.
+  // Consecutive legs meet at the break coordinate, which both include, so drop
+  // the repeat -- but only when the points genuinely coincide, otherwise a real
+  // gap between legs would be closed by silently discarding a coordinate.
+  const geometry: LatLng[] = [];
+  for (const leg of legs) {
+    for (const [i, p] of leg.geometry.entries()) {
+      const prev = geometry[geometry.length - 1];
+      if (i === 0 && prev && Math.abs(prev[0] - p[0]) < 1e-9 && Math.abs(prev[1] - p[1]) < 1e-9) {
+        continue;
+      }
+      geometry.push(p);
+    }
+  }
+
   return {
-    geometry: legs[0].geometry,
+    geometry,
     legs,
     maneuvers: legs[0].maneuvers,
     summary,

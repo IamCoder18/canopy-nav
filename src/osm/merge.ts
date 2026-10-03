@@ -11,7 +11,6 @@
  */
 
 import type { RoadGraph } from './engine.worker';
-import { FLAG_ONEWAY_B } from './engine.worker';
 import type { Region } from './regions';
 
 /** Union-find with path halving. */
@@ -43,15 +42,43 @@ export interface MergeReport {
   regionIds: string[];
 }
 
-/** Unordered-pair key, safe for node counts up to ~2^31. */
+/**
+ * Unordered-pair key for two node slots, packed into one double.
+ *
+ * Exact only while `a * 2^32 + b` stays inside Number.MAX_SAFE_INTEGER, i.e.
+ * below ~2^21 nodes; the direction bit doubles it again, halving that to
+ * ~2^20. Comfortably beyond any extract this actually merges, but it is a hard
+ * ceiling: a province-scale merge would need a non-numeric (nested-map or
+ * string) key rather than a wider multiplier.
+ */
 function pairKey(a: number, b: number): number {
   return a < b ? a * 4294967296 + b : b * 4294967296 + a;
+}
+
+/**
+ * Copy a graph so callers can never scribble on a region's dataset through the
+ * merge result. Every multi-region merge already builds fresh arrays; making the
+ * single-region case do the same keeps the "the report owns its graph" contract
+ * uniform instead of handing back the caller's object by reference.
+ */
+function copyGraph(g: RoadGraph): RoadGraph {
+  return {
+    coords: g.coords.slice(),
+    osmIds: g.osmIds.slice(),
+    edgeStart: g.edgeStart.slice(),
+    edgeTo: g.edgeTo.slice(),
+    edgeCost: g.edgeCost.slice(),
+    edgeFlags: g.edgeFlags.slice(),
+    edgeName: g.edgeName.slice(),
+    nodeCount: g.nodeCount,
+    regionOf: g.regionOf ? g.regionOf.slice() : undefined,
+  };
 }
 
 export function mergeRegions(regions: Region[]): MergeReport {
   if (regions.length === 0) throw new Error('mergeRegions: no regions');
   if (regions.length === 1) {
-    const g = regions[0].dataset.graph;
+    const g = copyGraph(regions[0].dataset.graph);
     return {
       graph: g, nodes: g.nodeCount, sharedNodes: 0, sharedEdges: 0,
       components: countComponents(g), regionIds: [regions[0].id],
@@ -111,17 +138,32 @@ export function mergeRegions(regions: Region[]): MergeReport {
 
   /* ---------- pass 3: collect deduped edges with explicit sources ---------- */
 
-  // A directed edge (from -> to). Dedup per unordered pair + direction, since
-  // the two directions of a road are genuinely separate edges.
-  const seen = new Map<number, number>(); // packed pair -> index in the flat lists
+  // Dedup is keyed on the DIRECTED pair (from -> to), because the two records
+  // of a two-way road are two genuinely different edges and both must survive:
+  // buildDataset emits `a->b` and `b->a` for one untagged way. Keying on the
+  // *unordered* pair instead makes the reverse record of every two-way road
+  // collide with the forward record that is already stored, so every two-way
+  // road collapses into a single arbitrarily-oriented one-way.
+  //
+  // `seen` therefore points at the first record stored for a directed pair, and
+  // `flatRegion` remembers which extract stored it. Only a record from a
+  // *different* extract is a duplicate to be folded away; a repeat inside one
+  // extract is kept, because a single extract may legitimately hold parallel
+  // ways (two one-ways over the same node pair, or the same way listed twice).
+  const seen = new Map<number, number>(); // directed pair key -> index in the flat lists
+  const flatRegion: number[] = []; // index -> region that stored the record
   const flatFrom: number[] = [];
   const flatTo: number[] = [];
   const flatCost: number[] = [];
   const flatFlags: number[] = [];
   const flatName: string[] = [];
-  let sharedEdges = 0;
 
-  const pairSlot = new Map<number, number>(); // unordered pair -> first edge index
+  // `sharedEdges` counts roads present in more than one extract, which is a
+  // property of the unordered pair but must be counted once per pair and never
+  // for the second direction record of a single extract.
+  const pairRegion = new Map<number, number>(); // unordered pair -> region that first claimed it
+  const sharedPairs = new Set<number>(); // unordered pairs already counted
+  let sharedEdges = 0;
 
   for (let ri = 0; ri < regions.length; ri++) {
     const g = regions[ri].dataset.graph;
@@ -133,43 +175,48 @@ export function mergeRegions(regions: Region[]): MergeReport {
         if (from === to) continue; // self-loop once shared nodes collapse
 
         const pk = pairKey(from, to);
-        const directedKey = pk * 2 + (from < to ? 0 : 1);
-        if (seen.has(directedKey)) continue;
-        seen.set(directedKey, flatFrom.length);
+        const dir = from < to ? 0 : 1;
 
         // Keep track of duplicate undirected pairs across extracts.
-        const prior = pairSlot.get(pk);
-        if (prior !== undefined) {
+        const firstRegion = pairRegion.get(pk);
+        if (firstRegion === undefined) pairRegion.set(pk, ri);
+        else if (firstRegion !== ri && !sharedPairs.has(pk)) {
+          sharedPairs.add(pk);
           sharedEdges++;
-          // If this extract says the road is bidirectional but the stored copy
-          // was one-way, relax the restriction rather than lose connectivity.
-          if (!(g.edgeFlags[e] & FLAG_ONEWAY_B)) {
-            const storedIdx = prior;
-            // clear one-way on the stored forward edge
-            flatFlags[storedIdx] &= FLAG_ONEWAY_B;
-            const storedTo = flatTo[storedIdx];
-            const reverseIdx = seen.get(pairKey(from, to) * 2 + 1);
-            if (reverseIdx !== undefined) {
-              flatFlags[reverseIdx] &= FLAG_ONEWAY_B;
-            } else {
-              // add the missing reverse direction
-              flatFrom.push(storedTo);
-              flatTo.push(from);
-              flatCost.push(g.edgeCost[e]);
-              flatFlags.push(FLAG_ONEWAY_B);
-              flatName.push(g.edgeName[e]);
-              seen.set(pairKey(from, to) * 2 + 1, flatFrom.length - 1);
-            }
-          }
+        }
+
+        // NOTE: `seen` is written *after* the duplicate branch. Writing it first
+        // (as this loop used to) left the stored index one past the end of the
+        // flat lists, so every later lookup for the pair read a hole and the
+        // flag fix-ups that depend on a valid index could never run.
+        const key = pk * 2 + dir;
+        const prior = seen.get(key);
+        if (prior !== undefined && flatRegion[prior] !== ri) {
+          // The same directed road in a different extract. The two descriptions
+          // may disagree about which directions it allows (one clipped it into a
+          // one-way, the other kept the two-way), and the union of the
+          // permissions is what keeps it routable. So GRANT the missing bits:
+          // masking (`&=`) would clear the direction instead of relaxing it,
+          // and since stepCost() requires FLAG_ONEWAY_F forward and
+          // FLAG_ONEWAY_B backward, clearing both leaves a road that cannot be
+          // travelled in either direction at all.
+          flatFlags[prior] |= g.edgeFlags[e];
           continue;
         }
-        pairSlot.set(pk, flatFrom.length);
+
+        // No separate repair pass is needed for the opposite direction: whatever
+        // permits `to -> from` is either this record (stored just below, flags and
+        // all) or the reverse record of the same pair, which has its own directed
+        // key and is therefore stored as its own edge instead of being dropped as
+        // a duplicate of the forward record.
+        if (prior === undefined) seen.set(key, flatFrom.length);
 
         flatFrom.push(from);
         flatTo.push(to);
         flatCost.push(g.edgeCost[e]);
         flatFlags.push(g.edgeFlags[e]);
         flatName.push(g.edgeName[e]);
+        flatRegion.push(ri);
       }
     }
   }
