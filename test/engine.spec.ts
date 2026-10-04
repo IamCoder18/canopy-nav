@@ -335,6 +335,51 @@ describe('geo utilities', () => {
   });
 });
 
+describe('spatial index keying', () => {
+  it('does not alias cells 131 degrees of longitude apart', () => {
+    // The old key was `(floor(lon/cell) << 16) ^ floor(lat/cell)`. `<<`
+    // coerces to int32, so the longitude cell index -- about +-90000 at
+    // cellDeg 0.002 -- exceeded the 16 bits the shift preserved, and cells
+    // exactly 2^16 * cellDeg apart collided. `nearest()` near the antimeridian
+    // therefore also searched the opposite side of the planet.
+    const cell = 0.002;
+    const oldKey = (lon: number, lat: number) =>
+      (Math.floor(lon / cell) << 16) ^ Math.floor(lat / cell);
+
+    // 2^16 cells of 0.002 deg = 131.072 degrees of longitude.
+    const span = Math.pow(2, 16) * cell;
+    expect(oldKey(-180, 0)).toBe(oldKey(-180 + span, 0));
+    expect(oldKey(179.9, 0)).toBe(oldKey(179.9 - span, 0));
+
+    // The fix must keep genuinely adjacent cells distinct, which the old key
+    // also did -- so this asserts the aliasing was the only problem.
+    expect(oldKey(-114.0, 51.0)).not.toBe(oldKey(-114.001, 51.0));
+  });
+
+  it('routes correctly across a longitude range wider than the old key allowed', () => {
+    // Two clusters 140 degrees apart: far more than the 131-degree collision
+    // period, so the old index could have returned a node from the wrong one.
+    const xml = `<osm>
+  <node id="1" lat="0" lon="-140"/>
+  <node id="2" lat="0" lon="-140.01"/>
+  <node id="3" lat="0" lon="5"/>
+  <node id="4" lat="0" lon="5.01"/>
+  <way id="10"><nd ref="1"/><nd ref="2"/><tag k="highway" v="residential"/><tag k="name" v="West"/></way>
+  <way id="11"><nd ref="3"/><nd ref="4"/><tag k="highway" v="residential"/><tag k="name" v="East"/></way>
+</osm>`;
+    const { nodes, ways } = parseOsmXml(xml);
+    const ds = buildDataset(nodes, ways);
+
+    // each cluster routes to itself, never across 140 degrees of longitude
+    const west = routeOnGraph(ds.graph, [-140.005, 0], [-140.0, 0]);
+    const east = routeOnGraph(ds.graph, [5.0, 0], [5.005, 0]);
+    expect(west).not.toBeNull();
+    expect(east).not.toBeNull();
+    for (const [lon] of west!.geometry) expect(lon).toBeLessThan(-139);
+    for (const [lon] of east!.geometry) expect(lon).toBeGreaterThan(4);
+  });
+});
+
 describe('multi-region index isolation', () => {
   const mkRegion = (id: string, ds: ReturnType<typeof build>): Region => ({
     id, name: id, code: id, bbox: ds.bbox, loadedAt: 0, bytes: 0,

@@ -639,16 +639,41 @@ class MinHeap {
   }
 }
 
-/** Spatial hash: find the graph node nearest a query point in O(1). */
+/**
+ * Spatial hash: find the graph node nearest a query point.
+ *
+ * Bucket keys are a nested `Map` rather than a packed integer. The original
+ * `(floor(lon/cell) << 16) ^ floor(lat/cell)` looks safe but is not: `<<`
+ * coerces to int32, so the longitude cell index -- which spans about +-90000 at
+ * cellDeg 0.002 -- exceeds the 16 bits the shift preserves. Cells exactly
+ * 2^16 * cellDeg apart, i.e. **131 degrees of longitude**, hashed to the same
+ * key and ended up in the same bucket 9000 km apart. A `nearest()` query near
+ * the antimeridian therefore also searched nodes on the opposite side of the
+ * planet, and could return one of them.
+ *
+ * A nested Map has no arithmetic to overflow, so distinctness holds for any
+ * cell index a coordinate can produce.
+ */
 function buildIndex(g: RoadGraph, cellDeg: number) {
-  const buckets = new Map<number, number[]>();
+  /** cellDeg degrees, lon index -> (lat index -> node indices) */
+  const buckets = new Map<number, Map<number, number[]>>();
+
+  const bucket = (cx: number, cy: number): number[] | undefined => {
+    const inner = buckets.get(cx);
+    return inner?.get(cy);
+  };
+
   for (let i = 0; i < g.nodeCount; i++) {
     const lon = g.coords[i * 2], lat = g.coords[i * 2 + 1];
-    const key = (Math.floor(lon / cellDeg) << 16) ^ Math.floor(lat / cellDeg);
-    let b = buckets.get(key);
-    if (!b) buckets.set(key, (b = []));
+    const cx = Math.floor(lon / cellDeg);
+    const cy = Math.floor(lat / cellDeg);
+    let inner = buckets.get(cx);
+    if (!inner) buckets.set(cx, (inner = new Map()));
+    let b = inner.get(cy);
+    if (!b) inner.set(cy, (b = []));
     b.push(i);
   }
+
   return {
     /** Expanding-ring search for the closest routable node. */
     nearest(lon: number, lat: number, maxRings = 6): number {
@@ -658,7 +683,7 @@ function buildIndex(g: RoadGraph, cellDeg: number) {
         for (let dx = -ring; dx <= ring; dx++) {
           for (let dy = -ring; dy <= ring; dy++) {
             if (ring > 0 && Math.abs(dx) !== ring && Math.abs(dy) !== ring) continue;
-            const b = buckets.get(((cx + dx) << 16) ^ (cy + dy));
+            const b = bucket(cx + dx, cy + dy);
             if (!b) continue;
             for (const i of b) {
               const d = haversineM(lon, lat, g.coords[i * 2], g.coords[i * 2 + 1]);
@@ -674,14 +699,6 @@ function buildIndex(g: RoadGraph, cellDeg: number) {
   };
 }
 
-/**
- * Spatial index cache, keyed by graph identity.
- *
- * This used to be a single global entry keyed on node count, which silently
- * handed graph B's routing search graph A's buckets whenever two extracts
- * shared a node count — i.e. exactly the multi-region case. A WeakMap keeps one
- * index per graph and lets a discarded dataset be collected.
- */
 const indexCache = new WeakMap<RoadGraph, ReturnType<typeof buildIndex>>();
 
 function indexFor(g: RoadGraph) {
