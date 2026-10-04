@@ -5,7 +5,7 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v0.11.0
+**Latest release:** v0.11.1
 
 ---
 
@@ -75,9 +75,8 @@ stands. **Bold** = fully working and verified.
 | `valhalla.spec.ts` | 36 | request body, headers, response parsing, multi-leg, unit normalisation |
 | `download.spec.ts` | 31 | streaming, progress, abort, retry/resume, HTML-error detection, truncation, disk cache |
 | `geocode.spec.ts` | 29 | throttle serialisation and 1 req/s spacing, viewbox, place mapping |
-| `merge.spec.ts` | 37 | node-ID union, direction permissions, dead-edge sweep, >2²¹ node regression |
+| `merge.spec.ts` | 37 | node-ID union, direction permissions, dead-edge sweep, >2^21 node regression |
 | `persist.spec.ts` | 21 | typed-array round-trip, quota errors, corrupt records, rehydration |
-| `icons.spec.ts` | 4 | every maneuver kind renders distinct geometry |
 | `icons.spec.ts` | 4 | every maneuver kind renders distinct geometry |
 | `navigation.spec.ts` | 17 | off-route detection, speed-scaled thresholds, traffic verdicts |
 | `pbf.spec.ts` | 11 | PBF vs XML parser equivalence on a hand-built file and the whole fixture |
@@ -361,9 +360,11 @@ found only by the tests written to check them.
 **Inverted one-way direction flags** — no edge was ever created.
 Flags mean "direction *permitted*", but the builder tested
 `!(flags & FLAG_ONEWAY_B)`. For a normal two-way road (flags = 3) that is
-`!(2)` = false, so nothing was added: a **24-edge graph instead of 288**, 73
-disconnected nodes, and every route returning `null`. The single
-highest-impact bug in the project; the fixture exposed it.
+`!(2)` = false, so nothing was added. The fixture builds **288 directed edges**
+once fixed; before the fix it produced a graph with almost no edges at all, 73
+nodes with no incident edge, and every route returning `null`. The single
+highest-impact bug in the project — and invisible until the fixture made me
+count edges instead of assuming they existed.
 
 **Merged graphs turned every two-way road one-way.**
 Dedup keyed on the *unordered* node pair, so the reverse record collided with
@@ -416,14 +417,19 @@ blank. Now pinned by a type that makes a bare number a compile error.
 
 ### 4.3 UI
 
-- **Invisible nav icons** — defaulted to `#fff` on white buttons. Now
-  `currentColor`.
 - **Occluded first list row** — `padding-top: 0` under an absolutely-positioned
   app bar hid it on every list screen.
 - **Narrow-screen overflow** — a hard `min-width: 420px` on a 412dp phone, an ETA
   bar pushing buttons off-screen, three 156dp buttons needing 468px.
 - **Category chips searched names for the literal word "city"** and matched
   nothing; they now filter by tag category.
+- **Side arrivals rendered as a centred pin.** `destination-left` and
+  `destination-right` were declared in the icon union and mapped from Valhalla
+  maneuver types 5 and 6, but had no `case` in the switch, so they fell through
+  to `default`. `test/icons.spec.ts` now asserts every declared kind renders
+  distinct geometry, which is what catches a missing case.
+- **Invisible nav icons** were the same *kind* of bug as above: a hardcoded
+  default colour rather than one inherited from context.
 
 ### 4.4 Device-only
 
