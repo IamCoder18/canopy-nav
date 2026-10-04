@@ -158,6 +158,67 @@ try {
     }
   }
 
+  /* ---------------- rerouting: the flow requirement #18 names ---------------- */
+  // Requirement #18 asks for every screen and function verified, and names
+  // "rerouting mid-turn" as the gap. This runs on a route of its own so the
+  // navigation screen is live throughout — the reroute policy only exists while
+  // `navActive`, and unwinding to home first would test nothing.
+  //
+  // The driver is walked off the route line by moving the geolocation fix, which
+  // is the only position input the app trusts. The invariant under test is that
+  // guidance survives: a lost driver cannot also be left without directions.
+  console.log('\nrerouting');
+  {
+    await page.goto(BASE, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(2000);
+    const importInput = await page.$('input[type=file]');
+    if (importInput) {
+      await importInput.setInputFiles(join(__dirname, FIXTURE));
+      await page.waitForFunction(
+        () => !document.body.innerText.includes('Parsing') && !document.body.innerText.includes('Building graph'),
+        { timeout: 30000 },
+      );
+      await page.waitForTimeout(800);
+    }
+    await page.click('.search-field').catch(() => {});
+    await page.waitForTimeout(400);
+    await page.fill('.inline-search input', 'Elbow');
+    await page.waitForTimeout(1200);
+    const hit = await page.$('.result-row');
+    if (hit) {
+      await hit.click();
+      await page.waitForTimeout(2500);
+      const start = await page.$('button.primary-btn');
+      if (start) {
+        await start.click();
+        await page.waitForTimeout(1500);
+
+        const before = await page.evaluate(() => document.body.innerText);
+        check('navigation is live before the deviation', /Steps/.test(before) && /Exit/.test(before));
+
+        // Well off the line, held there past the 6 s confirmation window.
+        await context.setGeolocation({ latitude: 51.5400, longitude: -1.3990, accuracy: 8 });
+        await page.waitForTimeout(10000);
+
+        const during = await page.evaluate(() => document.body.innerText);
+        check('going off-route is reported to the driver',
+          /off the route|off route|new way|rejoining/i.test(during),
+          during.match(/[^\n]*(off the route|off route|new way|rejoining)[^\n]*/i)?.[0] ?? '');
+        check('guidance survives the reroute attempt',
+          /Steps/.test(during) && /Exit/.test(during));
+        await page.screenshot({ path: join(SHOTS, '11-offroute.png') });
+
+        // Back on the line: the notice must clear rather than stick.
+        await context.setGeolocation({ latitude: 51.503, longitude: -1.399, accuracy: 8 });
+        await page.waitForTimeout(5000);
+        const after = await page.evaluate(() => document.body.innerText);
+        check('the notice clears once back on route',
+          !/finding a new way|rejoining the route/i.test(after),
+          after.match(/[^\n]*(finding a new way|rejoining)[^\n]*/i)?.[0] ?? 'clear');
+      }
+    }
+  }
+
   /* ---------------- search after a loaded region ---------------- */
   console.log('\nsearch with a loaded region');
   // Back out to home. The stack is steps -> navigating -> home, and each screen

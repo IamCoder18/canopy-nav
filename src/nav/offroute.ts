@@ -22,8 +22,15 @@ export function offRouteThreshold(speed: number): number {
   return 25 + Math.min(65, speed * 2);
 }
 
-/** How long a deviation must persist before we act. */
-const CONFIRM_MS = 6000;
+/**
+ * How long a deviation must persist before we act.
+ *
+ * Exported because the confirmation window is part of the contract between the
+ * detector and whatever acts on it: a caller that wants to reason about when a
+ * reroute will be *allowed* has to be able to read the window rather than
+ * rediscover it as a magic number.
+ */
+export const CONFIRM_WINDOW_MS = 6000;
 
 export type OffRouteState = 'on-route' | 'suspect' | 'off-route';
 
@@ -63,7 +70,7 @@ export function updateTracker(
     if (t.state === 'on-route') {
       return { ...t, state: 'suspect', distance: snap.dist, snappedIndex: snap.index, correction: snap.point, since: now };
     }
-    const held = t.since !== null && now - t.since >= CONFIRM_MS;
+    const held = t.since !== null && now - t.since >= CONFIRM_WINDOW_MS;
     return {
       ...t,
       state: held ? 'off-route' : 'suspect',

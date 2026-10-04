@@ -19,6 +19,10 @@ import {
 } from './nav/traffic';
 import { offRouteThreshold, progressAlong as routeProgress } from './nav/offroute';
 import {
+  observeFix, beginReroute, finishReroute, resetReroute, rerouteBanner,
+  createRerouteState, type RerouteState,
+} from './nav/reroute';
+import {
   formatDistance, formatDuration, formatClock, haversine, lineLength,
   snapToPolyline, type LatLng,
 } from './geo';
@@ -693,6 +697,84 @@ export default function App() {
    *    GPS jitter would otherwise flicker the grey line.
    */
   const positionDrives = useRef(false);
+  const rerouteState = useRef<RerouteState>(createRerouteState());
+  const [rerouteNotice, setRerouteNotice] = useState<string | null>(null);
+
+  /**
+   * Feed each fix to the reroute policy.
+   *
+   * The policy is a pure function (`observeFix`), so all the judgement about
+   * when *not* to act lives in `nav/reroute.ts` where it can be tested. This
+   * effect only supplies the fix and does what the policy asks.
+   *
+   * The critical property is what happens on a trigger: `route` is deliberately
+   * not cleared. The old line and its guidance stay on screen for the whole
+   * request, so a driver who is lost is never also left without directions. A
+   * failed attempt restores nothing because nothing was removed.
+   */
+  useEffect(() => {
+    if (!navActive || !route) {
+      rerouteState.current = resetReroute();
+      setRerouteNotice(null);
+      return;
+    }
+    const geometry = route.geometry;
+    const { state, trigger, origin } = observeFix(
+      rerouteState.current,
+      geometry,
+      location,
+      fix.speed,
+      Date.now(),
+    );
+    rerouteState.current = state;
+    setRerouteNotice(rerouteBanner(state, geometry, units));
+
+    if (!trigger || !origin || !destination) return;
+    rerouteState.current = beginReroute(state);
+    setRerouteNotice('Off route — finding a new way');
+
+    void (async () => {
+      let ok = false;
+      let reason: string | undefined;
+      try {
+        const outcome = await resolveRoute(
+          {
+            from: origin,
+            to: destination.pos,
+            provider: enginePlan[0] ?? 'local',
+            plan: enginePlan,
+            strict: !selection.allowFallback,
+            units: valhallaUnits,
+            avoid: [],
+          },
+          dataset,
+          { apiKey, endpoint },
+        );
+        ok = true;
+        // Only now is the old route replaced, and it is replaced wholesale so
+        // guidance, steps and ETA all come from the engine that answered.
+        setRoute(outcome.route);
+        setProvenance({
+          used: outcome.used,
+          fellBack: outcome.fellBack,
+          attempts: outcome.attempts,
+          totalMs: 0,
+          when: Date.now(),
+        });
+        setProgressAlong(0);
+        resetTraffic({ from: origin, to: destination.pos });
+        setFitNonce((n) => n + 1);
+      } catch (e) {
+        reason = e instanceof NoRouteError ? e.message : (e as Error).message;
+      } finally {
+        rerouteState.current = finishReroute(rerouteState.current, ok, Date.now(), reason);
+        setRerouteNotice(
+          rerouteBanner(rerouteState.current, geometry, units),
+        );
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navActive, route, location]);
 
   useEffect(() => {
     if (!navActive || !route) return;
@@ -735,7 +817,13 @@ export default function App() {
 
   /* ----------------------------- render --------------------------- */
 
-  const banner = routeError ?? degraded[0] ?? null;
+  /**
+ * One banner, most urgent first.
+ *
+ * A reroute notice outranks a stale degradation note: if the driver has just
+ * gone off-route, why the last request mentioned a missing API key is history.
+ */
+const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
 
   return (
     <div className="app">
@@ -762,6 +850,7 @@ export default function App() {
           route={route}
           guidance={guidance}
           localGuidance={localGuidance}
+          rerouteNotice={rerouteNotice}
           location={location}
           progressAlong={progressAlong}
           units={units}
@@ -1119,6 +1208,15 @@ function NavOverlay(props: {
   muted: boolean;
   online: boolean;
   degraded: boolean;
+  /**
+   * Live reroute status, e.g. "122 m off the route" or "finding a new way".
+   *
+   * Rendered on the navigation screen rather than only in the settings area
+   * because it is the one message a driver must see *while* driving. A banner
+   * that only exists on a screen they have to navigate away from is not a
+   * warning.
+   */
+  rerouteNotice: string | null;
   locationMode: LocationMode;
   layer: LayerId;
   layerName: string;
@@ -1210,6 +1308,12 @@ function NavOverlay(props: {
           </div>
         </div>
       </div>
+
+      {props.rerouteNotice && (
+        <div className="offroute-banner" role="status" aria-live="polite">
+          {props.rerouteNotice}
+        </div>
+      )}
 
       {/* Right-hand control stack */}
       <div className="nav-controls">

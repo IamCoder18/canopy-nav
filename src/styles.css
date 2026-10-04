@@ -265,6 +265,26 @@ code {
   background: rgba(14, 16, 19, 0.94);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
 }
+/* Off-route notice. Sits directly beneath the maneuver banner so it never
+   covers the next instruction -- the driver needs both at once, and the
+   maneuver is the one they act on immediately. */
+.offroute-banner {
+  position: absolute;
+  left: 24px;
+  top: calc(96px + var(--inset-top) + 24px + 168px);
+  max-width: calc(100% - 48px);
+  padding: 12px 24px;
+  border-radius: 12px;
+  background: rgba(14, 16, 19, 0.94);
+  border-left: 4px solid #E8A33D;
+  color: #E8EAED;
+  font-size: 24px;
+  line-height: 32px;
+}
+@media (max-width: 500px) {
+  .offroute-banner { font-size: 20px; line-height: 28px; padding: 10px 16px; }
+}
+
 .maneuver-icon {
   width: 120px; height: 120px;
   display: grid; place-items: center;
