@@ -112,6 +112,57 @@ function remapPaint(layer: any): void {
   }
 }
 
+/**
+ * Order-comparison operators that compare a bare `["get", …]` against a number.
+ *
+ * `<`, `<=`, `>` and `>=` are the only operators MapLibre's expression parser
+ * wraps in a runtime type assertion when one side is untyped, which is what
+ * turns a missing property into a thrown error rather than a `false`.
+ */
+const ORDER_OPS = new Set(['<', '<=', '>', '>=']);
+
+/**
+ * Guard order comparisons against absent properties.
+ *
+ * The upstream style's three US route-shield layers filter on
+ * `["<=", ["get", "ref_length"], 6]`. `["get", …]` is statically untyped, so
+ * MapLibre wraps the comparison in an assertion that the value is a number. A
+ * named road with no route ref has no `ref_length`, the assertion throws, and
+ * `StyleExpression.evaluate` catches it and logs
+ * "Expected value to be of type number, but found null instead." — once per
+ * layer, on the first tile containing such a road. The filter result is correct
+ * either way (`false`); only the log is noise, but it looks like a fault in this
+ * app on every cold start.
+ *
+ * `["all", …]` short-circuits, so testing `has` first means the comparison is
+ * never evaluated for a feature that lacks the property.
+ */
+function guardOrderComparisons(node: any): any {
+  if (!Array.isArray(node)) return node;
+
+  // Already guarded by an earlier pass? Return it untouched, so the transform is
+  // idempotent. `buildStyle` always re-fetches the style so this cannot arise
+  // today, but a remap that wraps twice is a trap for the next caller.
+  if (
+    node[0] === 'all' &&
+    Array.isArray(node[1]) && node[1][0] === 'has' && typeof node[1][1] === 'string' &&
+    Array.isArray(node[2]) && ORDER_OPS.has(node[2][0]) &&
+    Array.isArray(node[2][1]) && node[2][1][0] === 'get' && node[2][1][1] === node[1][1]
+  ) {
+    return node;
+  }
+
+  if (
+    ORDER_OPS.has(node[0]) &&
+    Array.isArray(node[1]) &&
+    node[1][0] === 'get' &&
+    typeof node[1][1] === 'string'
+  ) {
+    return ['all', ['has', node[1][1]], node];
+  }
+  return node.map(guardOrderComparisons);
+}
+
 export async function buildStyle(): Promise<StyleSpecification> {
   const res = await fetch(TILES);
   if (!res.ok) throw new Error(`Tile style unavailable (HTTP ${res.status})`);
@@ -123,6 +174,7 @@ export async function buildStyle(): Promise<StyleSpecification> {
     remapPaint(layer);
     // Google Maps labels sit above the road network but below POI icons.
     if (layer.type === 'symbol') layer.layout = { ...(layer.layout ?? {}), 'symbol-z-order': 'source' };
+    if (layer.filter) layer.filter = guardOrderComparisons(layer.filter);
   }
 
   // The tile style has no offline overlay sources; add them (empty) so the
