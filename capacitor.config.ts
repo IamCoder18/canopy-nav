@@ -10,11 +10,16 @@ const config: CapacitorConfig = {
     allowMixedContent: true,
     webContentsDebuggingEnabled: true,
     // Android 15 (SDK 35) draws edge-to-edge by default, which puts the status
-    // and navigation bars over the WebView. The WebView then reports no
-    // safe-area insets to CSS, so env() stays 0 and the app bar ends up behind
-    // the clock. Letting Capacitor apply the system-bar margins means the page
-    // is laid out inside them and every fixed element lines up.
-    adjustMarginsForEdgeToEdge: 'force',
+    // and navigation bars over the WebView.
+    //
+    // This is 'auto', not 'force', and the reasoning matters. The overlap is
+    // solved in MainActivity by going fully immersive -- the bars are hidden and
+    // the app owns the display, which is what Android Auto itself does and what
+    // a navigation app wants anyway. Forcing Capacitor to apply system-bar
+    // margins here would contradict that: it would inset the WebView to make
+    // room for bars that MainActivity has just hidden, so the app would be
+    // padded by the height of chrome that is not on screen.
+    adjustMarginsForEdgeToEdge: 'auto',
   },
   server: {
     androidScheme: 'https',
