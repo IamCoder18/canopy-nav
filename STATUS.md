@@ -5,11 +5,8 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v0.11.1 — `main` is ahead and **untagged**: engine selection
-and provenance, rerouting, streaming parse, offline LOD, structural tokens, the
-in-repo test server, and fixes for a corrupt CSS rule, a broken screen-coverage
-gate, and three cold-start console warnings. Requirement #10 is corrected from
-"Done" to "Not done" in this revision — see §3.5.2.
+**Latest release:** v0.11.2 — CI and Release both green, APK attached. Requirement
+#10 is corrected from "Done" to "Not done" in this revision — see §3.5.2.
 
 ---
 
@@ -49,9 +46,9 @@ stands. **Bold** = fully working and verified.
 | 12 | Keep hosted Valhalla as an option | **Done.** Three hosted presets plus a custom endpoint — FOSSGIS, Simplerouting.io, and your own `valhalla_service` — each individually selectable and probeable, alongside the offline engine | §3.6, §3.6.1 |
 | 13 | Handle losing connectivity mid-trip | **Done.** Provider chain + snapshotted route + honest degradation | §3.7 |
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
-| 15 | CI that builds a release with the APK on tags | **Done.** 13 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
-| 16 | Small increments: one fix/feature per release | **Done.** 15 tags, 13 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 525 unit tests across 19 files, plus 2 browser suites | `test/` |
+| 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
+| 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 527 unit tests across 19 files, plus 2 browser suites | `test/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (35 checks each, 105 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what two 6-hour budgets covered, including what they did not | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -64,10 +61,11 @@ stands. **Bold** = fully working and verified.
 | Gate | Command | Result |
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
-| Unit tests | `npm test` | **525 passing**, 19 files |
+| Unit tests | `npm test` | **527 passing**, 19 files |
 | End-to-end | `npm run e2e` | **39 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **35 checks × 3 viewports = 105** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
-| APK | `npm run apk` | 7.8 MB debug APK, `com.canopy.nav`, minSdk 23, targetSdk 35 |
+| Release | v0.11.2 tag | **CI green, Release green**, APK attached (`canopy-nav-v0.11.2.apk`) |
+| APK | `npm run apk` | debug APK, `com.canopy.nav`, minSdk 23, targetSdk 35 |
 | Device | Android 14 emulator, API 34, 2340×1080 | installs, runs, **zero console output**, real GPS confirmed |
 
 **Every count in this table is measured**, by counting `PASS` lines from an
@@ -137,7 +135,7 @@ That was the last known console output in the project.
 | `reroute.spec.ts` | 23 | off-route confirmation window, storm guards, backoff growth, tracker reset semantics, banner content |
 | `stream.spec.ts` | 30 | streaming XML parse ≡ whole-file parse across chunk sizes, incl. 1-char and seeded fuzz; progress; degenerate input |
 | `mapstyle.spec.ts` | 20 | offline style LOD: every line layer has a low-zoom floor, arterials branch on class, layer ordering, no duplicate ids |
-| `serve.spec.ts` | 14 | test-server path containment against plain, encoded and dot-segment traversal |
+| `serve.spec.ts` | 16 | test-server path containment (plain, encoded, dot-segment traversal) and no side effects on import |
 | `theme.spec.ts` | 11 | `theme.ts` ↔ `styles.css` token-name agreement, fallbacks present, `:root` declarations |
 | `styletiles.spec.ts` | 9 | tile-style order-comparison guard: the actual shield filter, short-circuit shape, recursion, idempotency |
 
@@ -954,7 +952,7 @@ src/
     persist.ts             615  IndexedDB caching of parsed datasets
     download.ts           1270  streaming downloader
 
-test/            525 unit tests, 19 files
+test/            527 unit tests, 19 files
 test/e2e.mjs           39 browser checks, built bundle
 test/screens.mjs        35 checks x 3 viewports (105 total)
 tools/osm2pbf.mjs        XML -> PBF encoder (builds the test fixtures;
@@ -1028,7 +1026,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 525 unit tests
+npm test             # 527 unit tests
 npm run e2e          # 39 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -1054,9 +1052,10 @@ git commit -am "..." && git tag -a v0.11.2 -m "..." && git push origin main --ta
 the full gate" true.
 
 The Release workflow runs typecheck, unit tests and the build, then attaches the
-APK; the browser suites run on CI for the same commit. 13 releases so far (15 tags; `v0.7.0` and `v0.10.0` have tags but their Release
-runs failed):
-v0.1.0 → v0.11.0.
+APK; the browser suites run on CI for the same commit. **15 releases across 17
+tags**, latest v0.11.2. `v0.7.0` and `v0.10.0` have tags whose Release runs
+failed, and v0.11.2 needed one re-tag for the same reason (§9) — so a green tag is
+not evidence of a green release, and the release list is the thing to read.
 
 ### Android device testing
 
@@ -1104,7 +1103,13 @@ and the correction changed which gaps looked expensive.
 | 4 | Streaming parse | §7 gap 3 | **Done** (§3.12) |
 | 5 | Emulator: exercise nav + reroute on device | §7 gap 2 | **Partly done** |
 | 6 | Zoomed-out offline density as a style/LOD fix | §7 gap 4 | **Done** (§3.13) |
-| 7 | Tag, read the CI result, update STATUS | req #16, #21 | STATUS done; **untagged**, CI unread |
+| 7 | Tag, read the CI result, update STATUS | req #16, #21 | **Done** — released as v0.11.2, both workflows green |
+
+Block 7 is the one that only completes if someone looks at the result, and it did
+catch a failure: the first Release run died in the test step. That is the second
+time in this project's history that a "green" story turned out to be wrong
+(§3.16's seven red pushes, §4.6's screen-coverage regression), and the third time
+the fix was to go and read the output rather than trust the summary.
 
 The "Closes" column now names §7 gaps as they are numbered *in this revision*.
 The gap list was renumbered twice, and earlier versions of this table pointed at
@@ -1219,18 +1224,18 @@ handling. Unit tests went 380 → 516, e2e checks 23 → 39.
 
 ### Carried forward
 
-`main` is **untagged**; the next release is v0.11.2 (requirement #16 wants one
-increment per release). All planned blocks except the tag and the CI read are
-done.
+**v0.11.2 is released**: 15 commits, CI green, Release green, APK attached. The
+first Release run failed — 511 tests passed and then vitest died with
+`process.exit unexpectedly called with "1"`, because `tools/serve.mjs` ran a
+`process.exit(1)` start-up check *on import* and CI runs the tests before the
+build. Fixed, with a regression test that reproduces the CI condition; the
+original version of that test passed with the guard deliberately removed, because
+`dist/` exists locally. Verified by breaking the guard again.
 
-Two loose ends a resumer should not assume are handled:
-
-- **Nothing has been pushed.** Per §3.16, "CI runs the full gate" is only true if
-  someone reads the run, and that cannot happen until these commits are on the
-  remote. Every gate reported in this document was run locally.
-- **Cross-region routing is wrong** (§7 gap 1, §3.5.2) and is now the most
-  serious open item. It is not a regression — it has always been this way — but
-  it is the thing most likely to matter to a driver with two provinces loaded.
+Cross-region routing remains the most serious open item (§7 gap 1, §3.5.2). It is
+not a regression — it has always been this way — but it is the thing most likely
+to matter to a driver with two provinces loaded, and it is now documented rather
+than claimed.
 
 ### Serving for manual testing
 
