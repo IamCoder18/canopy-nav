@@ -14,7 +14,7 @@ import maplibregl, { type Map as MLMap, type StyleSpecification } from 'maplibre
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { LatLng } from '../geo';
 import type { TrafficLevel } from '../nav/traffic';
-import { buildStyle, overlaySources, trafficLayers, ROUTE_LINE_WIDTH } from './style';
+import { buildStyle, trafficLayers, offlineStyleSpec, ROUTE_LINE_WIDTH } from './style';
 import {
   greenToGeoJSON,
   lineToGeoJSON,
@@ -220,37 +220,17 @@ export function fitPoints(m: MLMap, pts: LatLng[], padding = 72) {
 
 /** Style used with no network: Google palette, our own .osm geometry. */
 function offlineStyle(): StyleSpecification {
-  return {
-    version: 8,
-    glyphs: undefined,
-    sources: overlaySources(),
-    layers: [
-      { id: 'bg', type: 'background', paint: { 'background-color': '#F8F7F5' } },
-      {
-        id: 'canopy-osm-green', type: 'fill', source: 'canopy-osm-green',
-        paint: { 'fill-color': ['match', ['get', 'class'], 'forest', '#A8D5A0', 'wood', '#A8D5A0', '#C5E8C0'], 'fill-opacity': 0.9 },
-      },
-      {
-        id: 'canopy-osm-water', type: 'line', source: 'canopy-osm-water',
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: { 'line-color': '#AADAFF', 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1, 14, 4, 18, 12] },
-      },
-      {
-        id: 'canopy-osm-casing', type: 'line', source: 'canopy-osm',
-        filter: ['==', ['geometry-type'], 'LineString'],
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: { 'line-color': '#E3E0D8', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2.5, 14, 5, 18, 12] },
-      },
-      ...(overlaysLayerDefs()),
-    ],
-  };
+  return offlineStyleSpec(overlaysLayerDefs());
 }
 
 /** Overlay layers for the offline style (no tile glyphs needed). */
 function overlaysLayerDefs(): any[] {
   const W = ['interpolate', ['linear'], ['zoom'], 4, 4, 10, 8, 14, 16, 18, 26];
   return [
-    { id: 'canopy-osm-roads', type: 'line', source: 'canopy-osm', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['match', ['get', 'class'], 'motorway', '#FFDFA6', 'trunk', '#FFDFA6', 'primary', '#FFE8A8', 'secondary', '#FFF3D0', '#FFFFFF'], 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1, 14, 3, 18, 8] } },
+    // The offline road layers are NOT here. `offlineStyle` owns
+    // `canopy-osm-casing` / `-minor` / `-roads` because they need a zoom ramp
+    // that starts well below 10; a second definition of `canopy-osm-roads` in
+    // this list would be a duplicate layer id, which MapLibre rejects outright.
     { id: 'canopy-route-casing', type: 'line', source: 'canopy-route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#0B4FB0', 'line-width': W, 'line-opacity': 0.55 } },
     { id: 'canopy-route', type: 'line', source: 'canopy-route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#1A73E8', 'line-width': ROUTE_LINE_WIDTH } },
     // Traffic tint above the route for the same reason as in the online style: it

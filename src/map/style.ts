@@ -315,6 +315,121 @@ export function overlays(): any[] {
   ];
 }
 
+/**
+ * Zoom-dependent width for the offline road layers.
+ *
+ * The offline map's problem was never missing geometry -- `roadsToGeoJSON`
+ * already mirrors every road in the dataset -- it was that the width ramp
+ * started at zoom 10, so a province fitted to the viewport (zoom ~6) drew as a
+ * one-pixel hairline and read as empty. Two rungs matter more than the rest:
+ *
+ *   - a floor at the low end, so the network is legible when zoomed out;
+ *   - arterials held near their high width down to zoom ~7, because at province
+ *     scale a motorway is the only thing that should still be readable.
+ *
+ * Keeping arterials and minor roads as separate layers (rather than one `match`
+ * on class) is what allows that: a single `line-width` cannot make one class
+ * thick at zoom 6 and another almost invisible.
+ */
+export function widthAt(stops: readonly (number | any[])[]): any {
+  return ['interpolate', ['linear'], ['zoom'], ...stops.flat()];
+}
+
+/** Highways that must stay legible at province zoom. */
+const ARTERIAL = ['motorway', 'trunk', 'primary', 'secondary'];
+
+/** Links and ramps: real roads, but not the structure of the network. */
+const LINK = ['motorway_link', 'trunk_link', 'primary_link', 'secondary_link'];
+
+/** MapLibre filter matching only arterial classes. */
+export function arterialFilter(): any {
+  return ['match', ['get', 'class'], ...ARTERIAL, true, false];
+}
+
+/**
+ * The offline style: Google's palette over our own parsed `.osm` geometry.
+ *
+ * Takes the navigation overlay layers as an argument rather than importing them,
+ * because those live with the map component that owns them, and importing the
+ * component here would drag `maplibre-gl` into a pure module.
+ */
+export function offlineStyleSpec(overlayLayerDefs: any[]): StyleSpecification {
+  return {
+    version: 8,
+    glyphs: undefined,
+    sources: overlaySources(),
+    layers: [
+      { id: 'bg', type: 'background', paint: { 'background-color': '#F8F7F5' } },
+      {
+        id: 'canopy-osm-green', type: 'fill', source: 'canopy-osm-green',
+        paint: {
+          'fill-color': ['match', ['get', 'class'], 'forest', '#A8D5A0', 'wood', '#A8D5A0', '#C5E8C0'],
+          'fill-opacity': 0.9,
+        },
+      },
+      {
+        id: 'canopy-osm-water', type: 'line', source: 'canopy-osm-water',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        // Floored for the same reason as the roads: a river that vanishes below
+        // zoom 9 makes a province look like it has no geography.
+        paint: {
+          'line-color': '#AADAFF',
+          'line-width': widthAt([4, 0.8, 8, 1.4, 14, 4, 18, 12]),
+        },
+      },
+      // Casing under everything, so a pale road still reads against the pale
+      // background. Drawn first for that reason.
+      {
+        id: 'canopy-osm-casing', type: 'line', source: 'canopy-osm',
+        filter: ['==', ['geometry-type'], 'LineString'],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': '#E3E0D8',
+          'line-width': widthAt([4, 1.4, 8, 2.2, 14, 5, 18, 12]),
+        },
+      },
+      // Minor roads: present when zoomed out, fading back as the arterial
+      // network takes over. Above zoom 13 they are the point, not the noise.
+      {
+        id: 'canopy-osm-minor', type: 'line', source: 'canopy-osm',
+        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['!', arterialFilter()]],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': '#FFFFFF',
+          'line-width': widthAt([5, 0.5, 9, 1, 13, 2.4, 16, 5, 18, 8]),
+          // Slightly translucent when far out: the point is to show that a
+          // network exists, not to compete with the arterials drawn on top.
+          'line-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0.55, 11, 0.85, 14, 1],
+        },
+      },
+      // Arterials, drawn last so they sit above the minor network.
+      {
+        id: 'canopy-osm-roads', type: 'line', source: 'canopy-osm',
+        filter: ['==', ['geometry-type'], 'LineString'],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': [
+            'match', ['get', 'class'],
+            'motorway', '#F0A03C', 'trunk', '#F0A03C',
+            ...LINK, '#FFD98A',
+            'primary', '#FFE8A8', 'secondary', '#FFF3D0',
+            '#FFFFFF',
+          ],
+          // Held wide down to zoom 6, which is where a province sits.
+          'line-width': [
+            'interpolate', ['linear'], ['zoom'],
+            6, ['match', ['get', 'class'], 'motorway', 2.2, 'trunk', 2.0, 1.5],
+            10, ['match', ['get', 'class'], 'motorway', 2.6, 'trunk', 2.4, 1.9],
+            14, ['match', ['get', 'class'], 'motorway', 4, 'trunk', 3.6, 2.6],
+            18, 9,
+          ],
+        },
+      },
+      ...overlayLayerDefs,
+    ],
+  } as StyleSpecification;
+}
+
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 
 /** Empty GeoJSON sources for every layer the overlays reference. */
