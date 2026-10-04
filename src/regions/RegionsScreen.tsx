@@ -11,6 +11,10 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  downloadRegion, checkRegionAvailable, clearCachedRegion,
+  formatBytes, DownloadError, type DownloadProgress,
+} from './download';
 import { CATALOG, catalogByCountry, type CatalogEntry } from '../osm/regions';
 import type { RouteResult } from '../osm/engine.worker';
 import type { BuildProgress } from '../osm/engine';
@@ -64,8 +68,96 @@ export function RegionsScreen(props: RegionsScreenProps) {
   const [fromKey, setFromKey] = useState('');
   const [toKey, setToKey] = useState('');
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  /** Live download progress, distinct from the parser's BuildProgress. */
+  const [dl, setDl] = useState<{ entry: CatalogEntry; progress: DownloadProgress } | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
+  const [availability, setAvailability] = useState<Record<string, boolean>>({});
 
   const groups = catalogByCountry();
+
+  /* ------------------------------ downloading ----------------------------- */
+
+  const startDownload = async (entry: CatalogEntry) => {
+    setError(null);
+    setWarnings([]);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setDl({ entry, progress: { received: 0, total: null, fraction: null } });
+
+    try {
+      // Probe first so a dead or redirected URL is reported before spending
+      // minutes on a download that cannot succeed.
+      const probe = new AbortController();
+      const probeTimer = setTimeout(() => probe.abort(), 15000);
+      const avail = await checkRegionAvailable(entry, { signal: probe.signal });
+      clearTimeout(probeTimer);
+      if (!avail.ok) {
+        throw new DownloadError(
+          'http',
+          `${entry.name} could not be reached (HTTP ${avail.status}). ` +
+          'The catalogue URL may have moved, or this device may be offline.',
+          avail.status,
+        );
+      }
+
+      const res = await downloadRegion(entry, {
+        onProgress: setDlProgress(entry),
+        signal: ctrl.signal,
+        expectedBytes: avail.bytes ?? undefined,
+      });
+
+      setWarnings(res.warnings);
+      const ds = await importRegionFile({
+        id: entry.id,
+        name: entry.name,
+        code: entry.id.toUpperCase(),
+        file: res.file,
+        onProgress: setProgress,
+        onError: setError,
+      });
+      if (ds) {
+        setError(null);
+        props.onActivated();
+      }
+    } catch (e) {
+      // Every failure path is surfaced with an actionable message; a download
+      // that silently half-succeeded would be worse than one that reports.
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      abortRef.current = null;
+      setDl(null);
+    }
+  };
+
+  const setDlProgress = (entry: CatalogEntry) => (p: DownloadProgress) =>
+    setDl({ entry, progress: p });
+
+  const cancelDownload = () => {
+    abortRef.current?.abort();
+  };
+
+  /* --------------------------- availability probe ------------------------- */
+
+  // A single catalogue can hold a dozen dead URLs; probe them lazily so the
+  // screen can grey out what genuinely cannot be downloaded.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const ids = catalogByCountry().flatMap((g) => g.entries).map((e) => e.id);
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          const entry = catalogByCountry()
+            .flatMap((g) => g.entries)
+            .find((e) => e.id === id);
+          return [id, await checkRegionAvailable(entry!)] as const;
+        }),
+      );
+      if (cancelled) return;
+      setAvailability(Object.fromEntries(results.map(([id, r]) => [id, r.ok])));
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   /* ---------------------------- picking a file --------------------------- */
 
@@ -145,7 +237,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
         <div className="spacer" />
         {/* Green only once something is actually loaded. */}
         <span className={`chip ${regions.length ? 'ok' : ''}`}>
-          {regions.length} loaded{totalBytes > 0 ? ` · ${fmtBytes(totalBytes)}` : ''}
+          {regions.length} loaded{totalBytes > 0 ? ` · ${formatBytes(totalBytes)}` : ''}
         </span>
       </div>
 
@@ -176,7 +268,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
                   {r.counts.routable.toLocaleString()} routable ways · {r.gazetteerSize.toLocaleString()} places indexed
                 </span>
                 <span style={{ ...T.sub2, color: ink.tertiary }}>
-                  Bounds {r.bbox.map((v) => v.toFixed(3)).join(', ')} · {fmtBytes(r.bytes)} · {r.code}
+                  Bounds {r.bbox.map((v) => v.toFixed(3)).join(', ')} · {formatBytes(r.bytes)} · {r.code}
                 </span>
               </span>
               <span className="region-actions">
@@ -189,7 +281,14 @@ export function RegionsScreen(props: RegionsScreenProps) {
                 </button>
                 {removing ? (
                   <>
-                    <button className="pill-btn danger" onClick={() => { removeRegion(r.id); setConfirmRemove(null); setOutcome(null); }}>
+                    <button className="pill-btn danger" onClick={() => {
+                      removeRegion(r.id);
+                      // Also drop the cached extract; otherwise the device keeps
+                      // a few hundred MB per province forever.
+                      void clearCachedRegion(r.id).catch(() => {});
+                      setConfirmRemove(null);
+                      setOutcome(null);
+                    }}>
                       Confirm
                     </button>
                     <button className="pill-btn ghost" onClick={() => setConfirmRemove(null)} aria-label="Cancel remove">
@@ -320,7 +419,19 @@ export function RegionsScreen(props: RegionsScreenProps) {
                     {have
                       ? <span className="chip ok">Downloaded</span>
                       : null}
-                    <button className="pill-btn" onClick={() => startPick(e)}>
+                    <button
+                      className="pill-btn"
+                      disabled={dl?.entry.id === e.id || availability[e.id] === false}
+                      title={availability[e.id] === false
+                        ? 'This download URL could not be reached'
+                        : `Download ${e.name} (${formatBytes(e.approxMb * 1024 * 1024)})`}
+                      onClick={() => void startDownload(e)}
+                    >
+                      {dl?.entry.id === e.id
+                        ? 'Downloading…'
+                        : availability[e.id] === false
+                          ? 'Unavailable'
+                          : 'Download'}
                       {have ? 'Replace' : 'Import'}
                     </button>
                   </span>
@@ -337,6 +448,26 @@ export function RegionsScreen(props: RegionsScreenProps) {
           <IconChevronRight size={ICON.secondary} />
         </button>
 
+        {/* Download progress. An indeterminate total is shown as an explicit
+            "size unknown" rather than a fake 0%, which would read as stalled. */}
+        {dl && (
+          <div className="progress-card" style={{ marginTop: DP.P3 }}>
+            <div style={T.body3m}>Downloading {dl.entry.name}</div>
+            <div className="bar">
+              <div
+                className={dl.progress.fraction === null ? 'fill anim' : 'fill'}
+                style={dl.progress.fraction === null ? undefined : { width: `${Math.round(dl.progress.fraction * 100)}%` }}
+              />
+            </div>
+            <div style={{ ...T.sub3, color: ink.secondary }}>
+              {formatBytes(dl.progress.received)}
+              {dl.progress.total !== null ? ` of ${formatBytes(dl.progress.total)}` : ' (size unknown)'}
+              {dl.progress.fraction !== null ? ` · ${Math.round(dl.progress.fraction * 100)}%` : ''}
+            </div>
+            <button className="pill-btn" onClick={cancelDownload}>Cancel</button>
+          </div>
+        )}
+
         {progress && (
           <div className="progress-card" style={{ marginTop: DP.P3 }}>
             <div style={T.body3m}>{progress.stage}</div>
@@ -344,6 +475,15 @@ export function RegionsScreen(props: RegionsScreenProps) {
             <div style={{ ...T.sub3, color: ink.secondary }}>{Math.round(progress.pct * 100)}%</div>
           </div>
         )}
+
+        {warnings.length > 0 && (
+          <div className="hint-card" style={{ marginTop: DP.P3 }}>
+            {warnings.map((w, i) => (
+              <div key={i} style={{ ...T.sub3, color: ink.secondary }}>{w}</div>
+            ))}
+          </div>
+        )}
+
         {error && <div className="error-card" style={{ marginTop: DP.P3 }}>{error}</div>}
       </div>
     </div>
@@ -365,11 +505,8 @@ function centroid(b: [number, number, number, number]): LatLng {
   return [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
 }
 
-function fmtBytes(n: number): string {
-  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
-  if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
-  return `${Math.max(1, Math.round(n / 1024))} KB`;
-}
+// `formatBytes` comes from ./download so the download progress and the manage
+// list cannot drift apart.
 
 /** Web-Mercator zoom that fits a bbox with a little breathing room. */
 function zoomFor(b: [number, number, number, number]): number {

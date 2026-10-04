@@ -208,6 +208,52 @@ try {
   check('restored region is searchable', restoredRows > 0, `${restoredRows} rows`);
   await page.screenshot({ path: join(SHOTS, '7-restored.png') });
 
+  /* ---------------- download availability ---------------- */
+  // The catalogue is probed on mount so dead URLs can be greyed out. With no
+  // network this must resolve to "unavailable" rather than hanging or throwing,
+  // which is the behaviour a driver on a dead link actually sees.
+  console.log('\ncatalogue probe');
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(2500);
+  const regionTile2 = await page.$('.quick-tile:has-text("Regions")');
+  if (regionTile2) {
+    await regionTile2.click();
+    // The availability probe fires a HEAD per catalogue entry and follows
+    // redirects; give it time to settle rather than racing it.
+    await page.waitForTimeout(12000);
+    const catalogue = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.pill-btn')].map((b) => b.textContent.trim());
+      return {
+        provinces: document.body.innerText.includes('Alberta') && document.body.innerText.includes('British Columbia'),
+        states: document.body.innerText.includes('California'),
+        downloadButtons: rows.filter((t) => /^(Download|Unavailable|Downloading)/.test(t)).length,
+        disabled: [...document.querySelectorAll('.pill-btn[disabled]')].length,
+        // textContent concatenates an icon's text, so match the whole trimmed
+        // string rather than a prefix.
+        rows: [...document.querySelectorAll('.pill-btn')]
+          .map((b) => ({ label: b.textContent.trim(), disabled: b.disabled }))
+          .filter((r) => r.label === 'Download' || r.label === 'Unavailable'
+                      || r.label === 'Downloading…'),
+      };
+    });
+    catalogue.consistent = catalogue.rows.every(
+      (r) => (r.label === 'Unavailable') === r.disabled);
+    catalogue.detail = catalogue.rows
+      .filter((r) => r.label === 'Unavailable' || r.disabled)
+      .slice(0, 3).map((r) => `${r.label}${r.disabled ? '/disabled' : '/enabled'}`)
+      .join(', ') || 'all downloadable';
+    check('catalogue lists Canadian provinces', catalogue.provinces);
+    check('catalogue lists US states', catalogue.states);
+    check('every catalogue row has a download control', catalogue.downloadButtons >= 16,
+      `${catalogue.downloadButtons} controls`);
+    // A row labelled "Unavailable" must be disabled, and a downloadable row must
+    // not be -- the label and the affordance have to agree, whatever the network
+    // happens to be doing.
+    check('unavailable rows are disabled and available rows are not', catalogue.consistent,
+      catalogue.detail);
+    await page.screenshot({ path: join(SHOTS, '8-regions-offline.png') });
+  }
+
   check('no uncaught page errors', pageErrors.length === 0, pageErrors.join(' | '));
 } catch (err) {
   check('harness completed', false, err.message);
