@@ -68,6 +68,40 @@ export const ICON = { primary: 44, secondary: 36, tertiary: 24 } as const;
 export const TOUCH_TARGET = 76;
 
 /**
+ * Structural dimensions that the layout repeats everywhere.
+ *
+ * These were previously CSS literals scattered across `styles.css` — `96px`
+ * nine times, `158px` once — which meant changing the app bar meant finding
+ * nine call sites and hoping the tenth was not a `calc()` that had drifted.
+ * They are the AAOS spec values: a 96dp app bar and a 158dp minimum grid cell.
+ *
+ * Declared here so the value has one home, and mirrored into CSS custom
+ * properties by `applyThemeTokens()` below. CSS cannot import from TypeScript,
+ * so the duplication moves to exactly one line instead of nine.
+ */
+export const STRUCTURE = {
+  /** App bar height. */
+  APP_BAR: 96,
+  /** Minimum content height of a grid cell. */
+  GRID_CELL: 158,
+} as const;
+
+/**
+ * Publish the structural tokens as CSS custom properties.
+ *
+ * Called once at startup. This is the seam that lets `styles.css` consume the
+ * tokens without a build-time CSS-in-JS dependency: TypeScript owns the values,
+ * CSS reads them, and `styles.css` falls back to the literal so a stylesheet
+ * loaded without this running still lays out correctly.
+ */
+export function applyThemeTokens(root: HTMLElement | undefined = globalThis.document?.documentElement): void {
+  if (!root) return;
+  for (const [name, value] of Object.entries(STRUCTURE)) {
+    root.style.setProperty(`--${name.toLowerCase().replace(/_/g, '-')}`, `${value}px`);
+  }
+}
+
+/**
  * A single entry of the type scale.
  *
  * `lineHeight` is deliberately typed as a `${number}px` string. React treats

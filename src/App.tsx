@@ -26,7 +26,7 @@ import {
   formatDistance, formatDuration, formatClock, haversine, lineLength,
   snapToPolyline, type LatLng,
 } from './geo';
-import { ink, accentNight, type as T, DP, ICON } from './theme';
+import { ink, accentNight, applyThemeTokens, type as T, DP, ICON } from './theme';
 import { useLocation, type LocationMode } from './nav/location';
 import RegionsScreen from './regions/RegionsScreen';
 import {
@@ -394,6 +394,13 @@ export default function App() {
 
 
   useEffect(() => watchConnectivity(setOnline), []);
+
+  // Publish the structural design tokens as CSS custom properties, so
+  // `styles.css` reads its app-bar and grid-cell dimensions from `theme.ts`
+  // instead of repeating the literals.
+  useEffect(() => {
+    applyThemeTokens();
+  }, []);
 
   // Losing traffic (signal dropped, provider changed) must not leave the map
   // claiming a layer it can no longer draw.
