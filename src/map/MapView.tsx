@@ -13,7 +13,8 @@ import { useEffect, useRef } from 'react';
 import maplibregl, { type Map as MLMap, type StyleSpecification } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { LatLng } from '../geo';
-import { buildStyle, overlaySources } from './style';
+import type { TrafficLevel } from '../nav/traffic';
+import { buildStyle, overlaySources, trafficLayers, ROUTE_LINE_WIDTH } from './style';
 import {
   greenToGeoJSON,
   lineToGeoJSON,
@@ -23,12 +24,24 @@ import {
 } from '../osm/engine';
 import type { OsmDataset } from '../osm/engine.worker';
 
+/** One stretch of the route, coloured by the congestion the provider reported. */
+export interface TrafficOverlay {
+  level: TrafficLevel;
+  /** The road coordinates this level applies to. */
+  path: LatLng[];
+}
+
 export interface MapViewProps {
   dataset: OsmDataset | null;
   useTiles: boolean;
   route: LatLng[] | null;
   /** Portion of the route already driven (drawn greyed out). */
   travelled: LatLng[] | null;
+  /**
+   * Congestion along the route. Empty means "no data", not "no congestion":
+   * nothing is drawn unless a provider actually said a stretch was slow.
+   */
+  traffic?: TrafficOverlay[];
   origin: LatLng | null;
   destination: LatLng | null;
   location: LatLng | null;
@@ -127,7 +140,7 @@ export function MapView(props: MapViewProps) {
     if (!m || !ready.current) return;
     applyOverlays(m, props);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.route, props.travelled, props.origin, props.destination, props.location, props.maneuverPoints, props.dataset]);
+  }, [props.route, props.travelled, props.traffic, props.origin, props.destination, props.location, props.maneuverPoints, props.dataset]);
 
   /* ---------------------------- camera ------------------------------- */
   useEffect(() => {
@@ -165,10 +178,31 @@ function applyOverlays(m: MLMap, p: MapViewProps) {
 
   set('canopy-route', lineToGeoJSON(p.route ?? []));
   set('canopy-route-travelled', lineToGeoJSON(p.travelled ?? []));
+  set('canopy-route-traffic', trafficToGeoJSON(p.traffic ?? []));
   set('canopy-maneuvers', pointsToGeoJSON(p.maneuverPoints));
   set('canopy-origin', pointsToGeoJSON(p.origin ? [p.origin] : []));
   set('canopy-destination', pointsToGeoJSON(p.destination ? [p.destination] : []));
   set('canopy-location', pointsToGeoJSON(p.location ? [p.location] : []));
+}
+
+/**
+ * GeoJSON for the traffic tint.
+ *
+ * `unknown` and `free` are dropped rather than drawn: "we have no idea" and
+ * "clear road" are different claims, and only the second one may be coloured.
+ * (A `free` stretch is drawn as the normal blue route underneath.)
+ */
+function trafficToGeoJSON(spans: TrafficOverlay[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: spans
+      .filter((s) => (s.level === 'slow' || s.level === 'dense') && s.path.length > 1)
+      .map((s) => ({
+        type: 'Feature',
+        properties: { level: s.level },
+        geometry: { type: 'LineString', coordinates: s.path },
+      })),
+  };
 }
 
 export function fitPoints(m: MLMap, pts: LatLng[], padding = 72) {
@@ -218,8 +252,12 @@ function overlaysLayerDefs(): any[] {
   return [
     { id: 'canopy-osm-roads', type: 'line', source: 'canopy-osm', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['match', ['get', 'class'], 'motorway', '#FFDFA6', 'trunk', '#FFDFA6', 'primary', '#FFE8A8', 'secondary', '#FFF3D0', '#FFFFFF'], 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1, 14, 3, 18, 8] } },
     { id: 'canopy-route-casing', type: 'line', source: 'canopy-route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#0B4FB0', 'line-width': W, 'line-opacity': 0.55 } },
-    { id: 'canopy-route-travelled', type: 'line', source: 'canopy-route-travelled', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#9AA0A6', 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 3, 10, 6, 14, 12, 18, 20], 'line-opacity': 0.75 } },
-    { id: 'canopy-route', type: 'line', source: 'canopy-route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#1A73E8', 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 3.5, 10, 6.5, 14, 13, 18, 22] } },
+    { id: 'canopy-route', type: 'line', source: 'canopy-route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#1A73E8', 'line-width': ROUTE_LINE_WIDTH } },
+    // Traffic tint above the route for the same reason as in the online style: it
+    // recolours the route stripe rather than hiding underneath it.
+    ...trafficLayers(),
+    // ...and the dimmed portion on top of both, which is the only way it is visible.
+    { id: 'canopy-route-travelled', type: 'line', source: 'canopy-route-travelled', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#9AA0A6', 'line-width': ROUTE_LINE_WIDTH, 'line-opacity': 0.75 } },
     { id: 'canopy-maneuver-markers', type: 'circle', source: 'canopy-maneuvers', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 4, 14, 7, 18, 10], 'circle-color': '#FFFFFF', 'circle-stroke-color': '#1A73E8', 'circle-stroke-width': 2.5 } },
     { id: 'canopy-origin-halo', type: 'circle', source: 'canopy-origin', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 9, 14, 16, 18, 24], 'circle-color': '#1A73E8', 'circle-opacity': 0.18 } },
     { id: 'canopy-origin', type: 'circle', source: 'canopy-origin', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 4.5, 14, 7.5, 18, 11], 'circle-color': '#FFFFFF', 'circle-stroke-color': '#1A73E8', 'circle-stroke-width': 3 } },

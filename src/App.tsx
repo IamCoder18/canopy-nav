@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { MapView } from './map/MapView';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MapView, type TrafficOverlay } from './map/MapView';
 import type { BuildProgress } from './osm/engine';
 import type { OsmDataset } from './osm/engine.worker';
 import { searchPlaces, type Place } from './nav/geocode';
@@ -10,7 +10,11 @@ import {
 import type { Route, ValhallaManeuver } from './nav/valhalla';
 import { maneuverIcon, isMajorManeuver, type LegStep } from './nav/maneuver';
 import {
-  formatDistance, formatDuration, formatClock, lineLength,
+  describeTraffic, routeWithTraffic, type TrafficLevel,
+} from './nav/traffic';
+import { offRouteThreshold, progressAlong as routeProgress } from './nav/offroute';
+import {
+  formatDistance, formatDuration, formatClock, haversine, lineLength,
   snapToPolyline, type LatLng,
 } from './geo';
 import { ink, type as T, DP, ICON } from './theme';
@@ -28,6 +32,110 @@ import {
 } from './icons';
 
 type Screen = 'home' | 'search' | 'preview' | 'navigating' | 'steps' | 'settings' | 'import' | 'regions';
+
+/* --------------------------- map layers --------------------------- */
+
+/**
+ * The map layers this app can honestly draw.
+ *
+ * Satellite/terrain is deliberately absent: no imagery source is configured
+ * anywhere in the codebase, and a grey rectangle labelled "Satellite" would be
+ * worse than offering nothing. If an imagery source is ever wired up it belongs
+ * in this list.
+ */
+type LayerId = 'default' | 'traffic';
+
+interface LayerOption {
+  id: LayerId;
+  label: string;
+  /** One honest line about what this layer can and cannot do right now. */
+  detail: string;
+  available: boolean;
+}
+
+/**
+ * What the routing provider told us about traffic, or why it told us nothing.
+ *
+ * This is a report of a query, never a guess: `status: 'ready'` only exists
+ * when `routeWithTraffic` came back with `live` or `estimated` confidence.
+ */
+interface TrafficVerdict {
+  status: 'idle' | 'probing' | 'ready' | 'unavailable';
+  confidence?: 'live' | 'estimated';
+  secondsSaved: number;
+  /** The provider's own wording for the verdict, used verbatim in the UI. */
+  note?: string;
+  /** Why there is no traffic data. Empty when there is. */
+  reason: string;
+}
+
+const NO_TRAFFIC: TrafficVerdict = { status: 'idle', secondsSaved: 0, reason: '' };
+
+/**
+ * Congestion along a route, measured from the provider's own numbers.
+ *
+ * Every Valhalla maneuver reports the length and the travel time of the road
+ * ahead of it, so `time / length` is the speed the provider actually predicted
+ * for that stretch — with live traffic loaded, that prediction is what the
+ * congestion did to the ETA. Bins are relative to the route's own median
+ * speed: a stretch covered at 60% of the typical pace for this trip is slow,
+ * whatever that road's speed limit happens to be. Absolute thresholds would be
+ * arbitrary; this only says "slower than the rest of this trip".
+ *
+ * Two rules keep it from inventing congestion:
+ *  - a maneuver with no time or no length contributes nothing at all;
+ *  - this is only ever called for a route the provider proved it had traffic
+ *    for. `estimateTraffic()` bins a geometry by point spacing and labels every
+ *    stretch `unknown`, so painting from it would be drawing fiction.
+ */
+function congestionSpans(route: Route): TrafficOverlay[] {
+  const geometry = route.geometry;
+  const last = geometry.length - 1;
+  if (last < 1) return [];
+
+  const measured: { i0: number; i1: number; mps: number }[] = [];
+  // Valhalla reports maneuver and summary lengths in the requested units, so a
+  // km route hands back kilometres. Getting this wrong would not show up as a
+  // visible bug — the bins are relative — but the numbers would be fiction.
+  const unitToMetres = route.units === 'miles' ? 1609.344 : 1000;
+  for (const m of route.maneuvers) {
+    const i0 = Math.max(0, Math.min(m.begin_shape_index, last));
+    const i1 = Math.max(0, Math.min(m.end_shape_index, last));
+    if (i1 <= i0 || !(m.time > 0)) continue;
+    // Prefer the provider's length; fall back to the real geometry only when it
+    // omitted one, and require a positive time either way.
+    const metres = m.length > 0 ? m.length * unitToMetres : lineLength(geometry.slice(i0, i1 + 1));
+    if (!(metres > 0)) continue;
+    measured.push({ i0, i1, mps: metres / m.time });
+  }
+  if (!measured.length) return [];
+
+  const sorted = measured.map((m) => m.mps).sort((a, b) => a - b);
+  const median = sorted[Math.floor((sorted.length - 1) / 2)] || 0;
+  if (!(median > 0)) return [];
+
+  const bin = (mps: number): TrafficLevel => {
+    const ratio = mps / median;
+    return ratio < 0.6 ? 'dense' : ratio < 0.85 ? 'slow' : 'free';
+  };
+
+  // Chop each stretch into chunks so the tint follows the road rather than
+  // cutting the corners as one long chord, without a feature per vertex.
+  const CHUNK = 8;
+  const spans: TrafficOverlay[] = [];
+  for (const m of measured) {
+    const level = bin(m.mps);
+    // A stretch reported as free-flow keeps the normal blue route: painting it
+    // green would claim a clear road we were never actually told about.
+    if (level === 'free') continue;
+    for (let i = m.i0; i < m.i1; i += CHUNK) {
+      const j = Math.min(m.i1, i + CHUNK);
+      const path = geometry.slice(i, j + 1);
+      if (path.length > 1) spans.push({ level, path });
+    }
+  }
+  return spans;
+}
 
 /* ------------------------------ App ------------------------------ */
 
@@ -55,6 +163,8 @@ export default function App() {
   const [focus, setFocus] = useState<{ center: LatLng; zoom: number } | null>(null);
   const [fitNonce, setFitNonce] = useState(0);
   const [muted, setMuted] = useState(false);
+  // A character typed on a hardware keyboard before the search screen mounted.
+  const [pendingInitialQuery, setPendingInitialQuery] = useState('');
   const [units, setUnits] = useState<'metric' | 'imperial'>('metric');
   // Valhalla expects km/miles; our formatters expect metric/imperial.
   const valhallaUnits: 'km' | 'miles' = units === 'imperial' ? 'miles' : 'km';
@@ -63,7 +173,213 @@ export default function App() {
   const { fix, mode: locationMode, error: locationError } = useLocation(true);
   const location = fix.pos;
 
+  /* ------------------------ layers and traffic ------------------------ */
+
+  const [layer, setLayer] = useState<LayerId>('default');
+  const [layersOpen, setLayersOpen] = useState(false);
+  const [traffic, setTraffic] = useState<TrafficVerdict>(NO_TRAFFIC);
+  // The pair a traffic query re-asks about: a route's ends, captured when the
+  // route was computed, since the driver has moved since then.
+  const [routeEnds, setRouteEnds] = useState<{ from: LatLng; to: LatLng } | null>(null);
+  // Bumped whenever a verdict is invalidated, so a probe that resolves late
+  // cannot resurrect it.
+  const trafficProbe = useRef(0);
+
+  /** A new route invalidates the previous route's traffic verdict with it. */
+  const resetTraffic = useCallback((ends: { from: LatLng; to: LatLng } | null) => {
+    trafficProbe.current += 1;
+    setTraffic(NO_TRAFFIC);
+    setRouteEnds(ends);
+    setLayer('default');
+    setLayersOpen(false);
+  }, []);
+
+  /**
+   * Ask the routing provider whether it has anything real to say about traffic.
+   *
+   * `routeWithTraffic` returns its own confidence verdict, so this never has to
+   * guess: `none` (or no answer, no online provider, no signal) leaves the
+   * traffic layer unavailable and its toggle disabled, rather than tinting the
+   * route with congestion nobody reported.
+   */
+  const probeTraffic = useCallback(async () => {
+    const r = route;
+    if (!r) return;
+    const seq = ++trafficProbe.current;
+
+    if (!online) {
+      setTraffic({ status: 'unavailable', secondsSaved: 0, reason: describeTraffic(null, false) });
+      return;
+    }
+    if (r.engine !== 'valhalla') {
+      setTraffic({
+        status: 'unavailable',
+        secondsSaved: 0,
+        reason: 'This route came from the offline map, which carries no live traffic',
+      });
+      return;
+    }
+    const ends = routeEnds ?? { from: origin ?? location, to: destination?.pos ?? r.geometry[0] };
+    const prov = PROVIDERS.find((p) => p.id === provider);
+    const target = provider === 'valhalla-custom' ? endpoint : prov?.endpoint ?? '';
+    if (!prov?.online || !target) {
+      setTraffic({
+        status: 'unavailable',
+        secondsSaved: 0,
+        reason: 'Traffic needs an online routing provider; none is selected',
+      });
+      return;
+    }
+
+    setTraffic({ status: 'probing', secondsSaved: 0, reason: 'Checking the routing provider for traffic data' });
+    const res = await routeWithTraffic(ends.from, ends.to, {
+      endpoint: target,
+      units: valhallaUnits,
+      headers: provider === 'valhalla-simplerouting' && apiKey
+        ? { Authorization: `Bearer ${apiKey}` }
+        : undefined,
+      offline: false,
+    });
+    // An answer that lands after the verdict was invalidated describes a road
+    // the driver is no longer on.
+    if (seq !== trafficProbe.current) return;
+
+    if (!res || res.confidence === 'none') {
+      setTraffic({ status: 'unavailable', secondsSaved: 0, reason: describeTraffic(res, true) });
+      return;
+    }
+    setTraffic({
+      status: 'ready',
+      confidence: res.confidence,
+      secondsSaved: res.secondsSaved,
+      note: res.note ?? describeTraffic(res, true),
+      reason: '',
+    });
+  }, [route, routeEnds, online, provider, endpoint, apiKey, valhallaUnits, origin, location, destination]);
+
+  /** The traffic overlay only ever exists when the provider proved data. */
+  const trafficReady = traffic.status === 'ready';
+
+  /**
+   * True when the verdict is real but can no longer be refreshed.
+   *
+   * Losing signal does not retract what the provider already told us about this
+   * route, so the overlay stays up — but it is labelled as last-known, because
+   * traffic an hour ago is not traffic now.
+   */
+  const trafficStale = trafficReady && !online;
+
+  /** Why there is no traffic overlay, in the driver's own words. */
+  const trafficReason = useMemo(() => {
+    if (!online) return describeTraffic(null, false);
+    if (route && route.engine !== 'valhalla') {
+      return 'This route came from the offline map, which carries no live traffic';
+    }
+    if (traffic.status === 'probing') return 'Checking the routing provider for traffic data';
+    if (traffic.status === 'ready') return traffic.note ?? describeTraffic(null, true);
+    if (traffic.status === 'unavailable') return traffic.reason || describeTraffic(null, true);
+    return 'Live traffic has not been checked yet';
+  }, [online, route, traffic]);
+
+  /** The verdict as a driver should read it, including whether it is current. */
+  const trafficDetail = useMemo(() => {
+    if (traffic.status === 'probing') return 'Checking the routing provider…';
+    if (!trafficReady) return trafficReason;
+    const how = `${traffic.confidence === 'live' ? 'Live data' : 'Estimated data'} — ${traffic.note ?? ''}`;
+    return trafficStale ? `${how} · no signal to refresh` : how;
+  }, [traffic, trafficReady, trafficStale, trafficReason]);
+
+  /** Layers we can genuinely offer, with the reason for anything missing. */
+  const layers = useMemo<LayerOption[]>(() => [
+    {
+      id: 'default',
+      label: 'Default',
+      detail: online
+        ? 'Standard style with online map tiles'
+        : 'Standard style drawn from your offline .osm map',
+      available: true,
+    },
+    {
+      id: 'traffic',
+      label: 'Traffic',
+      detail: trafficDetail,
+      available: trafficReady,
+    },
+  ], [online, trafficDetail, trafficReady]);
+
+  /** What is on the map right now, spelled out where the driver can read it. */
+  const layerName = layer === 'traffic' ? 'Traffic' : 'Default';
+
+  const trafficSpans = useMemo<TrafficOverlay[]>(
+    () => (layer === 'traffic' && trafficReady && route ? congestionSpans(route) : []),
+    [layer, trafficReady, route],
+  );
+  (window as unknown as { __dbg?: unknown }).__dbg = { location, fix, locationMode, progressAlong, layer, traffic: traffic.status, geom: route?.geometry ?? null };
+
   useEffect(() => watchConnectivity(setOnline), []);
+
+  // Losing traffic (signal dropped, provider changed) must not leave the map
+  // claiming a layer it can no longer draw.
+  useEffect(() => {
+    if (layer === 'traffic' && !trafficReady) setLayer('default');
+  }, [layer, trafficReady]);
+
+  // Opening the layers panel is the driver asking what the map can show, which
+  // is the moment worth spending a provider request on.
+  useEffect(() => {
+    if (!layersOpen || traffic.status !== 'idle') return;
+    void probeTraffic();
+  }, [layersOpen, traffic.status, probeTraffic]);
+
+  // Leaving a screen drops any query in flight along with its verdict.
+  useEffect(() => {
+    if (screen === 'navigating') return;
+    trafficProbe.current += 1;
+    setTraffic(NO_TRAFFIC);
+    setLayersOpen(false);
+  }, [screen]);
+
+  /* ----------------------- keyboard shortcuts ----------------------- */
+  // A head unit may have a hardware keyboard or voice input, and Android Auto
+  // convention is that typing anywhere jumps to search. Without this the search
+  // field has to be tapped first, which is exactly the wrong thing to make a
+  // driver do.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
+
+      // Escape and mute work even from inside the search field; every other
+      // shortcut is suppressed while typing so it cannot fight the query.
+      if (e.key === 'Escape') {
+        setScreen('home');
+        return;
+      }
+      if (typing) return;
+
+      if (e.key === '/') {
+        // preventDefault stops Chrome's own quick-find from also consuming it,
+        // and no seed character is set so "/" is not typed into the field.
+        e.preventDefault();
+        setPendingInitialQuery('');
+        setScreen('search');
+        requestAnimationFrame(() => {
+          document.querySelector<HTMLInputElement>('.inline-search input')?.focus();
+        });
+      } else if (e.key.length === 1 && /^[a-z0-9]$/i.test(e.key)) {
+        e.preventDefault();
+        setScreen('search');
+        setPendingInitialQuery(e.key);
+        requestAnimationFrame(() => {
+          document.querySelector<HTMLInputElement>('.inline-search input')?.focus();
+        });
+      } else if (e.key === 'm' || e.key === 'M') {
+        setMuted((m) => !m);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   /* ------------------- restore cached regions on start ------------------- */
   // Parsing a province takes tens of seconds, so previously imported regions
@@ -135,6 +451,7 @@ export default function App() {
       setRoute(outcome.route);
       setDegraded(outcome.degraded.map((d) => `${d.provider}: ${d.reason}`));
       setProgressAlong(0);
+      resetTraffic({ from, to: dest.pos });
       setScreen('preview');
       setFitNonce((n) => n + 1);
     } catch (e) {
@@ -145,17 +462,19 @@ export default function App() {
         setRoute(localToRoute(multi.result, valhallaUnits));
         setDegraded([`Region library: ${multi.regions.map((id) => regionLib.get(id)?.name ?? id).join(' → ')}`]);
         setProgressAlong(0);
+        resetTraffic({ from, to: dest.pos });
         setScreen('preview');
         setFitNonce((n) => n + 1);
       } else {
         setRoute(null);
         setRouteError(e instanceof NoRouteError ? e.message : (e as Error).message);
+        resetTraffic(null);
         setScreen('preview');
       }
     } finally {
       setRouting(false);
     }
-  }, [dataset, origin, location, provider, valhallaUnits, apiKey, endpoint, regions.length]);
+  }, [dataset, origin, location, provider, valhallaUnits, apiKey, endpoint, regions.length, resetTraffic]);
 
   /* ------------------------- guidance model ----------------------- */
 
@@ -230,15 +549,64 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route, dataset, progressAlong, location]);
 
-  /* ------------------------- simulation tick ---------------------- */
+  /* -------------------- position-driven progress -------------------- */
 
   const navActive = screen === 'navigating' && route !== null;
 
+  /**
+   * Advance "already driven" from where the car actually is.
+   *
+   * A timer can only guess at this; the GPS knows. Each fix is projected onto
+   * the route (`snapToPolyline`) and turned into a fraction of the way along it
+   * (`progressAlong`), so the dimmed part of the line tracks the driver instead
+   * of the clock. Two guards keep that honest:
+   *
+   *  - a projection that lands further from the line than `offRouteThreshold`
+   *    allows is ignored, because past that point "closest point on the route" is
+   *    a guess. That is also what rejects the simulated fallback position, which
+   *    sits thousands of kilometres from any route;
+   *  - progress never moves backwards, because you cannot un-drive a road, and
+   *    GPS jitter would otherwise flicker the grey line.
+   */
+  const positionDrives = useRef(false);
+
   useEffect(() => {
-    if (!navActive) return;
+    if (!navActive || !route) return;
+    const geometry = route.geometry;
+    if (geometry.length < 2) {
+      positionDrives.current = false;
+      return;
+    }
+    const snap = snapToPolyline(location, geometry);
+    if (snap.dist > offRouteThreshold(fix.speed)) {
+      positionDrives.current = false;
+      return;
+    }
+    // `snapToPolyline` reports the index of the *segment* it projected onto, so a
+    // two-point route — which is what the offline engine returns for a straight
+    // hop along one way — can only ever report index 0 and would never reach its
+    // destination. With two points there is nothing to interpolate, so use
+    // whichever end of the line the car is actually nearer.
+    const index = geometry.length === 2
+      ? (haversine(location, geometry[0]) <= haversine(location, geometry[1]) ? 0 : 1)
+      : snap.index;
+    positionDrives.current = true;
+    setProgressAlong((prev) => Math.max(prev, routeProgress(geometry, index)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navActive, route, location]);
+
+  /**
+   * Fallback tick, for when there is no usable position.
+   *
+   * It stays off while a fix is placing the car on the route: a car waiting at a
+   * junction must not watch its route crawl forward, and a moving one is already
+   * being tracked from its own position.
+   */
+  useEffect(() => {
+    if (!navActive || !route) return;
     const id = setInterval(() => {
+      if (positionDrives.current) return;
       setProgressAlong((p) => {
-        if (!route) return p;
         // Advance in proportion to route duration, so a 5-minute and a
         // 2-hour trip both animate at a believable pace.
         const total = route.summary.time || 1;
@@ -247,7 +615,7 @@ export default function App() {
       });
     }, 1000);
     return () => clearInterval(id);
-  }, [navActive, route, guidance, localGuidance]);
+  }, [navActive, route]);
 
   /* ----------------------------- render --------------------------- */
 
@@ -260,6 +628,7 @@ export default function App() {
         useTiles={online}
         route={route?.geometry ?? null}
         travelled={guidance?.travelled ?? localGuidance?.travelled ?? null}
+        traffic={trafficSpans}
         origin={origin ?? location}
         destination={destination?.pos ?? null}
         location={location}
@@ -283,11 +652,30 @@ export default function App() {
           muted={muted}
           online={online}
           degraded={degraded.length > 0}
+          locationMode={locationMode}
+          layer={layer}
+          layerName={layerName}
+          layers={layers}
+          layersOpen={layersOpen}
+          traffic={traffic}
+          trafficOn={layer === 'traffic'}
+          trafficReady={trafficReady}
+          trafficStale={trafficStale}
+          trafficReason={trafficReason}
           onMute={() => setMuted((m) => !m)}
           onExit={() => { setScreen('home'); setProgressAlong(0); }}
           onOverview={() => setFitNonce((n) => n + 1)}
           onRecenter={() => setFocus({ center: location, zoom: 17 })}
           onSteps={() => setScreen('steps')}
+          onToggleTraffic={() =>
+            setLayer((l) => (l === 'traffic' && trafficReady ? 'default' : 'traffic'))}
+          onToggleLayers={() => setLayersOpen((o) => !o)}
+          onPickLayer={(id) => {
+            setLayer(id);
+            setLayersOpen(false);
+          }}
+          onCloseLayers={() => setLayersOpen(false)}
+          onCheckTraffic={() => { void probeTraffic(); }}
         />
       )}
 
@@ -323,7 +711,7 @@ export default function App() {
           onContinue={() => route && setScreen('navigating')}
           onSettings={() => setScreen('settings')}
           onRoute={(pos, label) => doRoute({ pos, label })}
-          onClear={() => { setRoute(null); setDestination(null); setOrigin(null); }}
+          onClear={() => { setRoute(null); setDestination(null); setOrigin(null); resetTraffic(null); }}
         />
       )}
 
@@ -333,6 +721,8 @@ export default function App() {
           regions={regions}
           online={online}
           location={location}
+          initialQuery={pendingInitialQuery}
+          onInitialQueryConsumed={() => setPendingInitialQuery('')}
           onPick={(pos, label) => { setScreen('home'); doRoute({ pos, label }); }}
           onBack={() => setScreen('home')}
         />
@@ -386,6 +776,7 @@ export default function App() {
             setRouteError(null);
             setDegraded([`Region library: ${via.map((id) => regionLib.get(id)?.name ?? id).join(' → ')}`]);
             setProgressAlong(0);
+            resetTraffic({ from: location, to });
             setScreen('preview');
             setFitNonce((n) => n + 1);
           }}
@@ -577,11 +968,26 @@ function NavOverlay(props: {
   muted: boolean;
   online: boolean;
   degraded: boolean;
+  locationMode: LocationMode;
+  layer: LayerId;
+  layerName: string;
+  layers: LayerOption[];
+  layersOpen: boolean;
+  traffic: TrafficVerdict;
+  trafficOn: boolean;
+  trafficReady: boolean;
+  trafficStale: boolean;
+  trafficReason: string;
   onMute: () => void;
   onExit: () => void;
   onOverview: () => void;
   onRecenter: () => void;
   onSteps: () => void;
+  onToggleTraffic: () => void;
+  onToggleLayers: () => void;
+  onPickLayer: (id: LayerId) => void;
+  onCloseLayers: () => void;
+  onCheckTraffic: () => void;
 }) {
   const { route, units, muted, online, degraded } = props;
   const g = props.guidance;
@@ -598,6 +1004,21 @@ function NavOverlay(props: {
   // Google Maps dims the instruction once you're within ~30 m.
   const imminent = distToTurn < 40;
   const laneDist = imminent ? distToTurn : Math.min(distToTurn, 9999);
+
+  // The traffic control's label carries its state *and* its reason: a driver
+  // reaching for it must learn from the label alone what it will do.
+  const trafficLabel = props.trafficReady
+    ? `${props.trafficOn ? 'Hide' : 'Show'} the traffic overlay (${props.traffic.confidence === 'live' ? 'live' : 'estimated'} data${props.trafficStale ? ', last known — no signal to refresh' : ''})`
+    : `Traffic unavailable — ${props.trafficReason}`;
+
+  // One honest sentence about the map as it stands, under the buttons that change it.
+  const statusDetail = props.trafficOn
+    ? (props.trafficStale ? `${props.traffic.note ?? ''} · no signal to refresh` : props.traffic.note ?? '')
+    : !props.trafficReady
+      ? 'No traffic data'
+      : props.locationMode === 'simulated'
+        ? 'Simulated GPS'
+        : '';
 
   return (
     <div className="nav-root">
@@ -641,19 +1062,53 @@ function NavOverlay(props: {
 
       {/* Right-hand control stack */}
       <div className="nav-controls">
-        <button className="round-btn" onClick={props.onRecenter} aria-label="Recenter">
+        <button className="round-btn" onClick={props.onRecenter} aria-label="Recenter on my position">
           <IconLocate size={ICON.primary} />
         </button>
         <button className="round-btn" onClick={props.onOverview} aria-label="Route overview">
           <IconOverview size={ICON.primary} />
         </button>
-        <button className="round-btn" onClick={() => {}} aria-label="Traffic">
+        {/* Traffic is a toggle: it looks pressed while the overlay is up, and is
+            visibly disabled — not merely inert — when no provider data backs it. */}
+        <button
+          className={`round-btn ${props.trafficOn ? 'on' : ''}`}
+          onClick={props.onToggleTraffic}
+          disabled={!props.trafficReady}
+          aria-pressed={props.trafficOn}
+          aria-label={trafficLabel}
+          title={trafficLabel}
+        >
           <IconTraffic size={ICON.primary} />
         </button>
-        <button className="round-btn" onClick={() => {}} aria-label="Layers">
+        <button
+          className={`round-btn ${props.layersOpen ? 'on' : ''}`}
+          onClick={props.onToggleLayers}
+          aria-expanded={props.layersOpen}
+          aria-label={`Map layers — ${props.layerName}`}
+        >
           <IconLayers size={ICON.primary} />
         </button>
+
+        {/* Current layer name, so the map is never showing something unnamed. */}
+        <div className="nav-status" role="status">
+          <span style={T.body3m}>{props.layerName}</span>
+          {statusDetail && (
+            <span style={{ ...T.body3, color: ink.secondary }}>{statusDetail}</span>
+          )}
+        </div>
       </div>
+
+      {props.layersOpen && (
+        <NavPanel
+          layer={props.layer}
+          options={props.layers}
+          onPick={props.onPickLayer}
+          onClose={props.onCloseLayers}
+          onCheckTraffic={props.onCheckTraffic}
+          checking={props.traffic.status === 'probing'}
+          canCheckTraffic={props.route.engine === 'valhalla' && props.traffic.status !== 'probing'}
+        />
+      )}
 
       {/* Bottom bar */}
       <div className="nav-bottom">
@@ -693,6 +1148,67 @@ export interface LocalGuidanceModel {
   steps: LegStep[];
   travelled: LatLng[];
   idx: number;
+}
+
+/* ----------------------------- NavPanel ---------------------------- */
+
+/**
+ * The layers the map can be showing.
+ *
+ * Every option states what it is doing and, when it cannot be used, exactly
+ * why — a greyed-out row with a reason is the honest alternative to a toggle
+ * that silently does nothing, or to an option that lies about what it draws.
+ */
+function NavPanel(props: {
+  layer: LayerId;
+  options: LayerOption[];
+  onPick: (id: LayerId) => void;
+  onClose: () => void;
+  onCheckTraffic: () => void;
+  checking: boolean;
+  canCheckTraffic: boolean;
+}) {
+  return (
+    <div className="nav-panel" role="dialog" aria-label="Map layers">
+      <div className="panel-head">
+        <span style={T.body3m}>Map layers</span>
+        {/* Re-asking is a header action, not a row: it keeps the panel short
+            enough to clear the maneuver banner on a head unit. */}
+        {props.canCheckTraffic && (
+          <button
+            className="icon-btn"
+            onClick={props.onCheckTraffic}
+            disabled={props.checking}
+            aria-label="Ask the routing provider for traffic data again"
+          >
+            <IconRefresh size={ICON.secondary} />
+          </button>
+        )}
+        <button className="icon-btn" onClick={props.onClose} aria-label="Close map layers">
+          <IconClose size={ICON.secondary} />
+        </button>
+      </div>
+
+      {props.options.map((o) => (
+        <button
+          key={o.id}
+          className={`layer-row ${o.id === props.layer ? 'on' : ''}`}
+          onClick={() => props.onPick(o.id)}
+          disabled={!o.available}
+          aria-pressed={o.id === props.layer}
+          aria-label={`${o.label} map layer. ${o.detail}`}
+        >
+          <span className="layer-text">
+            <span style={T.body3m}>{o.label}</span>
+            <span style={{ ...T.body3, color: o.available ? ink.secondary : ink.tertiary }}>
+              {o.detail}
+            </span>
+          </span>
+          <span className={`radio ${o.id === props.layer ? 'on' : ''}`} />
+        </button>
+      ))}
+    </div>
+  );
 }
 
 /* ---------------------------- PreviewCard --------------------------- */
@@ -770,6 +1286,9 @@ function categoriesFor(regions: ReturnType<typeof useRegions>, dataset: OsmDatas
 function SearchScreen(props: {
   dataset: OsmDataset | null;
   regions: ReturnType<typeof useRegions>;
+  /** Seed query from a hardware keyboard shortcut. */
+  initialQuery?: string;
+  onInitialQueryConsumed?: () => void;
   online: boolean;
   location: LatLng;
   onPick: (pos: LatLng, label: string) => void;
@@ -779,7 +1298,14 @@ function SearchScreen(props: {
     () => categoriesFor(props.regions, props.dataset),
     [props.regions, props.dataset],
   );
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState(props.initialQuery ?? '');
+  // Adopt a keyboard-seeded query whenever the screen is reopened.
+  useEffect(() => {
+    if (props.initialQuery) {
+      setQ(props.initialQuery);
+      props.onInitialQueryConsumed?.();
+    }
+  }, [props.initialQuery, props.onInitialQueryConsumed]);
   // A category chip filters the gazetteer by tag category. It is deliberately
   // not a text query: searching the literal word "city" matches no place names.
   const [cat, setCat] = useState<string | null>(null);

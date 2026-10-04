@@ -43,16 +43,43 @@ export interface MergeReport {
 }
 
 /**
- * Unordered-pair key for two node slots, packed into one double.
+ * A map keyed on an *ordered* pair of node slots, stored as nested Maps (first
+ * slot in the outer Map, second slot in the inner one).
  *
- * Exact only while `a * 2^32 + b` stays inside Number.MAX_SAFE_INTEGER, i.e.
- * below ~2^21 nodes; the direction bit doubles it again, halving that to
- * ~2^20. Comfortably beyond any extract this actually merges, but it is a hard
- * ceiling: a province-scale merge would need a non-numeric (nested-map or
- * string) key rather than a wider multiplier.
+ * Why not the obvious `min * 2^32 + max` in one number? A double carries only
+ * 53 bits of integer precision, so that packing is exact just while
+ * `min < 2^21` (2,097,152) — and `pk * 2 + dir` for the directed variant needs
+ * `min < 2^20` (1,048,576). Past those ceilings keys silently round onto each
+ * other: two unrelated roads get the same key, so the merge reads the second as
+ * a duplicate of the first, DROPS it from the graph, and ORs its direction
+ * flags onto the wrong road. Concretely, with slots 2,097,152 / 2,097,155 and
+ * 2,097,152 / 2,097,156 the old packing produced `9007199256838148` for both
+ * distinct roads. A province extract is well past both ceilings, so merging is
+ * exactly the case this feature exists for.
+ *
+ * Nested Maps have no arithmetic to overflow: `(a, b)` occupies its own entry,
+ * so every pair of slots is distinct for any slot index a merge can produce
+ * (bounded only by `Number.MAX_SAFE_INTEGER`), and the cost is a flat Map plus
+ * one extra object per distinct first slot. A `${a}/${b}` string key is equally
+ * exact but allocates a string per edge, which is measurable on a multi-million
+ * edge merge. `undefined` means "absent", so `V` must not include it.
  */
-function pairKey(a: number, b: number): number {
-  return a < b ? a * 4294967296 + b : b * 4294967296 + a;
+export class PairKeyMap<V> {
+  private readonly byFirst = new Map<number, Map<number, V>>();
+
+  get(a: number, b: number): V | undefined {
+    return this.byFirst.get(a)?.get(b);
+  }
+
+  set(a: number, b: number, value: V): void {
+    let inner = this.byFirst.get(a);
+    if (inner === undefined) this.byFirst.set(a, (inner = new Map<number, V>()));
+    inner.set(b, value);
+  }
+
+  has(a: number, b: number): boolean {
+    return this.byFirst.get(a)?.has(b) === true;
+  }
 }
 
 /**
@@ -150,7 +177,7 @@ export function mergeRegions(regions: Region[]): MergeReport {
   // *different* extract is a duplicate to be folded away; a repeat inside one
   // extract is kept, because a single extract may legitimately hold parallel
   // ways (two one-ways over the same node pair, or the same way listed twice).
-  const seen = new Map<number, number>(); // directed pair key -> index in the flat lists
+  const seen = new PairKeyMap<number>(); // directed pair (from, to) -> index in the flat lists
   const flatRegion: number[] = []; // index -> region that stored the record
   const flatFrom: number[] = [];
   const flatTo: number[] = [];
@@ -160,9 +187,11 @@ export function mergeRegions(regions: Region[]): MergeReport {
 
   // `sharedEdges` counts roads present in more than one extract, which is a
   // property of the unordered pair but must be counted once per pair and never
-  // for the second direction record of a single extract.
-  const pairRegion = new Map<number, number>(); // unordered pair -> region that first claimed it
-  const sharedPairs = new Set<number>(); // unordered pairs already counted
+  // for the second direction record of a single extract. Keys are the unordered
+  // pair written low slot first, so both directions of one road land on the
+  // same key: `pairRegion.get(lo, hi)`.
+  const pairRegion = new PairKeyMap<number>(); // unordered pair -> region that first claimed it
+  const sharedPairs = new PairKeyMap<true>(); // unordered pairs already counted
   let sharedEdges = 0;
 
   for (let ri = 0; ri < regions.length; ri++) {
@@ -174,14 +203,13 @@ export function mergeRegions(regions: Region[]): MergeReport {
         const to = slotOf[base + g.edgeTo[e]];
         if (from === to) continue; // self-loop once shared nodes collapse
 
-        const pk = pairKey(from, to);
-        const dir = from < to ? 0 : 1;
-
         // Keep track of duplicate undirected pairs across extracts.
-        const firstRegion = pairRegion.get(pk);
-        if (firstRegion === undefined) pairRegion.set(pk, ri);
-        else if (firstRegion !== ri && !sharedPairs.has(pk)) {
-          sharedPairs.add(pk);
+        const lo = from < to ? from : to;
+        const hi = from < to ? to : from;
+        const firstRegion = pairRegion.get(lo, hi);
+        if (firstRegion === undefined) pairRegion.set(lo, hi, ri);
+        else if (firstRegion !== ri && !sharedPairs.has(lo, hi)) {
+          sharedPairs.set(lo, hi, true);
           sharedEdges++;
         }
 
@@ -189,8 +217,7 @@ export function mergeRegions(regions: Region[]): MergeReport {
         // (as this loop used to) left the stored index one past the end of the
         // flat lists, so every later lookup for the pair read a hole and the
         // flag fix-ups that depend on a valid index could never run.
-        const key = pk * 2 + dir;
-        const prior = seen.get(key);
+        const prior = seen.get(from, to);
         if (prior !== undefined && flatRegion[prior] !== ri) {
           // The same directed road in a different extract. The two descriptions
           // may disagree about which directions it allows (one clipped it into a
@@ -206,10 +233,10 @@ export function mergeRegions(regions: Region[]): MergeReport {
 
         // No separate repair pass is needed for the opposite direction: whatever
         // permits `to -> from` is either this record (stored just below, flags and
-        // all) or the reverse record of the same pair, which has its own directed
-        // key and is therefore stored as its own edge instead of being dropped as
-        // a duplicate of the forward record.
-        if (prior === undefined) seen.set(key, flatFrom.length);
+        // all) or the reverse record of the same pair, which is a different
+        // ordered pair and is therefore stored as its own edge instead of being
+        // dropped as a duplicate of the forward record.
+        if (prior === undefined) seen.set(from, to, flatFrom.length);
 
         flatFrom.push(from);
         flatTo.push(to);

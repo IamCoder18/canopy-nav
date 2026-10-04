@@ -139,6 +139,47 @@ export async function buildStyle(): Promise<StyleSpecification> {
 }
 
 /**
+ * Google Maps' route line width, shared by the route, the portion already
+ * driven and the traffic tint. All three are the same physical stripe: the tint
+ * recolours it rather than sitting beside it.
+ */
+export const ROUTE_LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 4, 3.5, 10, 6.5, 14, 14, 18, 24];
+
+/** GeoJSON source holding the traffic tint, one feature per stretch of road. */
+export const TRAFFIC_SOURCE = 'canopy-route-traffic';
+
+/**
+ * The traffic tint, as separate layers over one GeoJSON source.
+ *
+ * Only `slow` and `dense` stretches get a layer. A stretch the provider reported
+ * no congestion for is left as the normal blue route, because a green line
+ * would claim "clear road" that we were never told about.
+ *
+ * These are drawn *after* `canopy-route`: a tint underneath a route of at least
+ * the same width is not a tint, it is a hidden layer.
+ */
+export function trafficLayers(): any[] {
+  return [
+    {
+      id: 'canopy-route-traffic',
+      type: 'line',
+      source: TRAFFIC_SOURCE,
+      filter: ['==', ['get', 'level'], 'dense'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-width': ROUTE_LINE_WIDTH, 'line-color': '#E5484D' },
+    },
+    {
+      id: 'canopy-route-traffic-slow',
+      type: 'line',
+      source: TRAFFIC_SOURCE,
+      filter: ['==', ['get', 'level'], 'slow'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-width': ROUTE_LINE_WIDTH, 'line-color': '#E8A33D' },
+    },
+  ];
+}
+
+/**
  * Navigation overlays, in draw order.
  * Google draws the route as a thick blue line with a darker blue casing and
  * slightly rounded joins; traffic tints the line amber/red rather than replacing it.
@@ -168,38 +209,26 @@ export function overlays(): any[] {
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#0B4FB0', 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 5, 10, 10, 14, 20, 18, 30], 'line-opacity': 0.55 },
     },
-    // --- traffic tint ---
-    {
-      id: 'canopy-route-traffic',
-      type: 'line',
-      source: 'canopy-route',
-      filter: ['==', ['get', 'traffic'], 'slow'],
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 3, 10, 6, 14, 13, 18, 22], 'line-color': '#E5484D' },
-    },
-    {
-      id: 'canopy-route-traffic-slow',
-      type: 'line',
-      source: 'canopy-route',
-      filter: ['==', ['get', 'traffic'], 'dense'],
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 3, 10, 6, 14, 13, 18, 22], 'line-color': '#E8A33D' },
-    },
-    // --- travelled portion (dimmed, Google Maps greys out the part already driven) ---
-    {
-      id: 'canopy-route-travelled',
-      type: 'line',
-      source: 'canopy-route-travelled',
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': '#9AA0A6', 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 3, 10, 6, 14, 13, 18, 22], 'line-opacity': 0.75 },
-    },
     // --- the route itself ---
     {
       id: 'canopy-route',
       type: 'line',
       source: 'canopy-route',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': '#1A73E8', 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 3.5, 10, 6.5, 14, 14, 18, 24] },
+      paint: { 'line-color': '#1A73E8', 'line-width': ROUTE_LINE_WIDTH },
+    },
+    // --- traffic tint, above the route so it can actually be seen ---
+    ...trafficLayers(),
+    // --- travelled portion (dimmed, Google Maps greys out the part already driven) ---
+    // Drawn last of the three, and deliberately: all three are the same stripe
+    // in the same place, so a grey line *under* a blue line of equal width is
+    // not a dimmed route, it is an invisible one.
+    {
+      id: 'canopy-route-travelled',
+      type: 'line',
+      source: 'canopy-route-travelled',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#9AA0A6', 'line-width': ROUTE_LINE_WIDTH, 'line-opacity': 0.75 },
     },
 
     // --- maneuver markers along the route ---
@@ -293,6 +322,9 @@ export function overlaySources(): Record<string, any> {
   return {
     'canopy-route': { type: 'geojson', data: EMPTY },
     'canopy-route-travelled': { type: 'geojson', data: EMPTY },
+    // The tint is its own source so a stretch of road can carry a `level`
+    // without every other feature having to pretend to be a road.
+    [TRAFFIC_SOURCE]: { type: 'geojson', data: EMPTY },
     'canopy-maneuvers': { type: 'geojson', data: EMPTY },
     'canopy-origin': { type: 'geojson', data: EMPTY },
     'canopy-destination': { type: 'geojson', data: EMPTY },

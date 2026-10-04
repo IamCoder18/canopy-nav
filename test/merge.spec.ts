@@ -16,7 +16,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { mergeRegions, countComponents, diagnoseMerge } from '../src/osm/merge';
+import { mergeRegions, countComponents, diagnoseMerge, PairKeyMap } from '../src/osm/merge';
 import {
   FLAG_ONEWAY_F,
   FLAG_ONEWAY_B,
@@ -65,7 +65,7 @@ function makeGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoadGraph {
   const edgeFlags = new Uint8Array(total);
   const edgeName = new Array<string>(total);
   const cursor = Uint32Array.from(edgeStart.subarray(0, n));
-  edges.forEach((e, k) => {
+  edges.forEach((e) => {
     const w = cursor[idx(e.from)]++;
     edgeTo[w] = idx(e.to);
     edgeCost[w] = e.cost ?? 10;
@@ -448,10 +448,12 @@ describe('mergeRegions — edge dedup', () => {
     // exactly 144 of them. Merging an extract with itself must be a no-op on the
     // edge set.
     const ds = fixtureDataset();
-    const undirected = new Set<number>();
+    const undirected = new Set<string>();
     for (let i = 0; i < ds.graph.nodeCount; i++) {
       for (let e = ds.graph.edgeStart[i]; e < ds.graph.edgeStart[i + 1]; e++) {
-        undirected.add(Math.min(i, ds.graph.edgeTo[e]) * 1e6 + Math.max(i, ds.graph.edgeTo[e]));
+        // A string key, not `min * 1e6 + max`: arithmetic keys are exactly the
+        // trap the pair keys fell into (see the "2^21 packing ceiling" block).
+        undirected.add(`${Math.min(i, ds.graph.edgeTo[e])}/${Math.max(i, ds.graph.edgeTo[e])}`);
       }
     }
     expect(ds.graph.edgeTo.length).toBe(288);
@@ -496,6 +498,151 @@ describe('mergeRegions — edge dedup', () => {
       expect(r!.geometry.length).toBe(plain.geometry.length);
     }
   });
+});
+
+/**
+ * The bug guarded here: the merge used to key its dedup tables on a single
+ * packed double, `pairKey(a, b) = min * 2^32 + max`, and `pk * 2 + dir` for the
+ * directed variant. A double carries only 53 bits of integer precision, so the
+ * packing is exact only while `min < 2^21` (2,097,152) — and the directed
+ * variant needs `min < 2^20` (1,048,576). Past those ceilings keys silently
+ * round onto each other, two unrelated roads hash alike, the merge reads the
+ * second as a duplicate of the first, DROPS it from the graph and ORs its
+ * direction flags onto the wrong road. A province extract is well past both
+ * ceilings, i.e. this is exactly the case merging exists for.
+ *
+ * `oldPackedKey` is the deleted formula, kept here so each test can prove its
+ * own indices really did alias. Without that, a green test could just mean the
+ * fixture indices were harmless.
+ */
+function oldPackedKey(a: number, b: number): number {
+  return a < b ? a * 4294967296 + b : b * 4294967296 + a;
+}
+/** The old directed key: `pairKey(from, to) * 2 + dir`, dir 1 when from > to. */
+function oldDirectedKey(from: number, to: number): number {
+  return oldPackedKey(from, to) * 2 + (from < to ? 0 : 1);
+}
+
+/** First slot index where `min * 2^32 + max` stops being an exact integer. */
+const PACK_CEILING = 2 ** 21; // 2,097,152
+
+/**
+ * A CSR graph with `n` nodes, slot `i` carrying OSM id `idBase + i`, and only
+ * the given edges. `makeGraph` resolves node ids with findIndex, which is fine
+ * for the hand-built fixtures but O(n²) at the millions of nodes this block
+ * needs. Slots therefore map straight through the merge: the extracts share
+ * every OSM id, so each node keeps the slot it had here.
+ */
+function makeSparseGraph(
+  n: number,
+  idBase: number,
+  edges: { from: number; to: number; flags: number }[],
+): RoadGraph {
+  const coords = new Float64Array(n * 2);
+  const osmIds = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    coords[i * 2] = (i % 360) * 1e-4;
+    coords[i * 2 + 1] = (i % 170) * 1e-4;
+    osmIds[i] = idBase + i;
+  }
+  const edgeStart = new Uint32Array(n + 1);
+  for (const e of edges) edgeStart[e.from + 1]++;
+  for (let i = 0; i < n; i++) edgeStart[i + 1] += edgeStart[i];
+  const edgeTo = new Int32Array(edges.length);
+  const edgeCost = new Float32Array(edges.length);
+  const edgeFlags = new Uint8Array(edges.length);
+  const edgeName = new Array<string>(edges.length);
+  const cursor = Uint32Array.from(edgeStart.subarray(0, n));
+  edges.forEach((e) => {
+    const w = cursor[e.from]++;
+    edgeTo[w] = e.to;
+    edgeCost[w] = 10;
+    edgeFlags[w] = e.flags;
+    edgeName[w] = 'Road';
+  });
+  return { coords, osmIds, edgeStart, edgeTo, edgeCost, edgeFlags, edgeName, nodeCount: n };
+}
+
+describe('pair keys above the 2^21 packing ceiling', () => {
+  it('the deleted packing really did alias above the ceiling', () => {
+    // One below the ceiling the packing is exact; at the ceiling it is not.
+    expect(Number.isSafeInteger(oldPackedKey(PACK_CEILING - 1, PACK_CEILING + 2))).toBe(true);
+    expect(Number.isSafeInteger(oldPackedKey(PACK_CEILING, PACK_CEILING + 3))).toBe(false);
+    // Distinct roads, identical key.
+    expect(oldPackedKey(PACK_CEILING, PACK_CEILING + 3)).toBe(
+      oldPackedKey(PACK_CEILING, PACK_CEILING + 4),
+    );
+    // The direction bit doubled the key, so the directed variant gave out first,
+    // at 2^20: these two roads also collided.
+    const half = 2 ** 20;
+    expect(oldDirectedKey(half + 1, half)).toBe(oldDirectedKey(half, half + 2));
+    expect(Number.isSafeInteger(oldDirectedKey(half + 1, half))).toBe(false);
+  });
+
+  it('keeps every pair in a high-index neighbourhood distinct', () => {
+    const pairs: [number, number][] = [];
+    for (let m = PACK_CEILING - 3; m <= PACK_CEILING + 3; m++) {
+      for (let d = 1; d <= 96; d++) pairs.push([m, m + d]);
+    }
+    // The fixture is only meaningful if the old key aliased inside it.
+    const oldKeys = new Set(pairs.map(([a, b]) => oldPackedKey(a, b)));
+    expect(oldKeys.size).toBeLessThan(pairs.length);
+
+    const seen = new PairKeyMap<number>();
+    pairs.forEach(([a, b], i) => seen.set(a, b, i));
+    pairs.forEach(([a, b], i) => {
+      expect(seen.has(a, b)).toBe(true);
+      // Every pair must still read back the value stored under it alone; one
+      // aliased pair would hand back its neighbour's index here.
+      expect(seen.get(a, b)).toBe(i);
+    });
+  });
+
+  it('separates the two directions of one road', () => {
+    // Dedup is keyed per DIRECTED pair so both records of a two-way road
+    // survive; a key that conflated (a, b) with (b, a) would halve every road.
+    const seen = new PairKeyMap<string>();
+    seen.set(5, 9, 'forward');
+    seen.set(9, 5, 'backward');
+    expect(seen.get(5, 9)).toBe('forward');
+    expect(seen.get(9, 5)).toBe('backward');
+    expect(seen.has(9, 7)).toBe(false);
+    expect(seen.get(9, 7)).toBeUndefined();
+    expect(seen.has(5, 9)).toBe(true);
+  });
+
+  it('merges a graph whose slots are past 2^21 without dropping a road', () => {
+    // Two genuinely different roads between three shared border nodes, in two
+    // extracts. Their old packed keys were both 9007199256838148, so the merge
+    // folded road B into road A as a duplicate: road B vanished from the graph
+    // (nothing to route along) and road A inherited B's FLAG_ONEWAY_B.
+    const roadA = { from: PACK_CEILING, to: PACK_CEILING + 3, flags: FLAG_ONEWAY_F };
+    const roadB = { from: PACK_CEILING, to: PACK_CEILING + 4, flags: FLAG_ONEWAY_B };
+    expect(oldPackedKey(roadA.from, roadA.to)).toBe(oldPackedKey(roadB.from, roadB.to));
+
+    // 2,097,168 slots so the compacted indices really do sit above the ceiling.
+    // A merge this size takes a few seconds and a few hundred MB, hence the
+    // timeout; the pairs above prove the same property for pennies.
+    const n = PACK_CEILING + 16;
+    const a = makeSparseGraph(n, 1_000_000, [roadA]);
+    const b = makeSparseGraph(n, 1_000_000, [roadB]);
+    const report = mergeRegions([makeRegion('a', a), makeRegion('b', b)]);
+
+    expect(report.nodes).toBe(n);
+    expect(report.sharedNodes).toBe(n); // every node id is in both extracts
+    expect(report.graph.edgeTo.length).toBe(2); // was 1: road B was dropped
+    expect(edgeSet(report.graph)).toEqual([
+      `${PACK_CEILING}->${PACK_CEILING + 3} flags=1`,
+      `${PACK_CEILING}->${PACK_CEILING + 4} flags=2`,
+    ]);
+    // Different roads, so neither is a shared edge (the alias counted one).
+    expect(report.sharedEdges).toBe(0);
+    // And no permission was invented: the old fold OR'd FLAG_ONEWAY_B from road
+    // B onto road A, claiming travel CEIL+3 -> CEIL that neither extract had.
+    const allowed = [...new Set([...permissions(a), ...permissions(b)])].sort();
+    expect(permissions(report.graph)).toEqual(allowed);
+    expect(deadEdges(report.graph)).toEqual([]);
+  }, 60_000);
 });
 
 describe('mergeRegions — one-way relaxation', () => {
