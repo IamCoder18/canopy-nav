@@ -17,7 +17,7 @@ import { createServer } from 'node:http';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.SERVE_ROOT
@@ -54,7 +54,21 @@ export function resolveRequestPath(root, urlPath) {
   return file.startsWith(root + '/') || file === root ? file : null;
 }
 
-if (!existsSync(join(ROOT, 'index.html'))) {
+/**
+ * Only when run as a program.
+ *
+ * The `import.meta.url === pathToFileURL(process.argv[1]).href` guard matters
+ * because `test/serve.spec.ts` imports `resolveRequestPath` from this module. The
+ * start-up check below used to run on import, and since the unit tests run before
+ * `npm run build` in CI it found no `dist/index.html` and called `process.exit(1)`
+ * -- killing the whole test run. 511 tests passed and then the process died with
+ * "process.exit unexpectedly called with 1".
+ */
+const isMain =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isMain && !existsSync(join(ROOT, 'index.html'))) {
   console.error(`No build found at ${ROOT}. Run \`npm run build\` first.`);
   process.exit(1);
 }
@@ -71,45 +85,57 @@ function send(res, path) {
   createReadStream(path).pipe(res);
 }
 
-createServer((req, res) => {
-  const raw = (req.url || '/').split('?')[0];
+/**
+ * Build the request handler.
+ *
+ * Exported so a test can drive it without binding a port, which is what let the
+ * `process.exit` bug above be caught by a unit test rather than only by CI.
+ */
+export function createRequestHandler(root = ROOT, apk = APK) {
+  return (req, res) => {
+    const raw = (req.url || '/').split('?')[0];
 
-  if (raw === '/dl/canopy-nav.apk') {
-    if (!existsSync(APK)) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      return res.end('No APK built. Run `npm run apk`.');
+    if (raw === '/dl/canopy-nav.apk') {
+      if (!existsSync(apk)) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        return res.end('No APK built. Run `npm run apk`.');
+      }
+      return send(res, apk);
     }
-    return send(res, APK);
-  }
 
-  const file = resolveRequestPath(ROOT, raw);
-  if (!file) {
-    res.writeHead(403, { 'Content-Type': 'text/plain' });
-    return res.end('forbidden');
-  }
+    const file = resolveRequestPath(root, raw);
+    if (!file) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      return res.end('forbidden');
+    }
 
-  let st;
-  try {
-    st = statSync(file);
-  } catch {
-    // Single-page app: unknown paths fall back to the shell.
+    let st;
     try {
-      return send(res, join(ROOT, 'index.html'));
+      st = statSync(file);
     } catch {
-      res.writeHead(404);
-      return res.end('not found');
+      // Single-page app: unknown paths fall back to the shell.
+      try {
+        return send(res, join(root, 'index.html'));
+      } catch {
+        res.writeHead(404);
+        return res.end('not found');
+      }
     }
-  }
 
-  if (st.isDirectory()) return send(res, join(file, 'index.html'));
-  return send(res, file);
-}).listen(PORT, HOST, () => {
-  const nets = Object.values(networkInterfaces())
-    .flat()
-    .filter((n) => n && n.family === 'IPv4' && !n.internal)
-    .map((n) => n.address);
-  console.log(`serving ${ROOT}`);
-  console.log(`  local    http://localhost:${PORT}`);
-  for (const a of nets) console.log(`  network  http://${a}:${PORT}`);
-  console.log(`  apk      ${existsSync(APK) ? 'http://HOST:' + PORT + '/dl/canopy-nav.apk' : 'not built (npm run apk)'}`);
-});
+    if (st.isDirectory()) return send(res, join(file, 'index.html'));
+    return send(res, file);
+  };
+}
+
+if (isMain) {
+  createServer(createRequestHandler()).listen(PORT, HOST, () => {
+    const nets = Object.values(networkInterfaces())
+      .flat()
+      .filter((n) => n && n.family === 'IPv4' && !n.internal)
+      .map((n) => n.address);
+    console.log(`serving ${ROOT}`);
+    console.log(`  local    http://localhost:${PORT}`);
+    for (const a of nets) console.log(`  network  http://${a}:${PORT}`);
+    console.log(`  apk      ${existsSync(APK) ? 'http://HOST:' + PORT + '/dl/canopy-nav.apk' : 'not built (npm run apk)'}`);
+  });
+}
