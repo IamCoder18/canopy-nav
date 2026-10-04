@@ -68,7 +68,7 @@ stands. **Bold** = fully working and verified.
 | End-to-end | `npm run e2e` | **39 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **35 checks × 3 viewports = 105** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | APK | `npm run apk` | 7.8 MB debug APK, `com.canopy.nav`, minSdk 23, targetSdk 35 |
-| Device | Android 14 emulator, API 34, 2340×1080 | installs, runs, **no console errors**, real GPS confirmed |
+| Device | Android 14 emulator, API 34, 2340×1080 | installs, runs, **zero console output**, real GPS confirmed |
 
 **Every count in this table is measured**, by counting `PASS` lines from an
 actual run or by counting call sites in the source. Three figures in this
@@ -112,7 +112,10 @@ noise, but it read as a fault in this app on every launch.
 
 **The fix** (§3.15) guards those comparisons in `buildStyle`. Verified at **0**
 occurrences in Chromium after panning and zooming through dozens of tiles, against
-3 before. The device gate above is now clean with no known exceptions.
+3 before. The device gate above is now genuinely clean: `adb logcat` filtered for
+`Capacitor/Console`, `AndroidRuntime` and `FATAL` returns **nothing at all** on a
+cold start, where the same filter previously returned three warnings per launch.
+That was the last known console output in the project.
 
 ### Test breakdown
 
