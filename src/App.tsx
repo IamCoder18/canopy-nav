@@ -137,6 +137,7 @@ function congestionSpans(route: Route): TrafficOverlay[] {
   return spans;
 }
 
+<<<<<<< HEAD
 /**
  * Where on the route a position sits, as a vertex index.
  *
@@ -154,6 +155,8 @@ function snappedIndex(pt: LatLng, line: LatLng[], segmentIndex: number): number 
   return haversine(pt, line[0]) <= haversine(pt, line[last]) ? 0 : last;
 }
 
+=======
+>>>>>>> 72f330af7a8892d456700a08d99f0ead384dbc02
 /* ------------------------------ App ------------------------------ */
 
 export default function App() {
@@ -302,6 +305,7 @@ export default function App() {
   const trafficDetail = useMemo(() => {
     if (traffic.status === 'probing') return 'Checking the routing provider…';
     if (!trafficReady) return trafficReason;
+<<<<<<< HEAD
     const how = traffic.confidence === 'live' ? 'Live data' : 'Estimated data';
     // The provider's own saving, in its own units. The panel needs one line, so
     // it gets the number; the status line under the buttons keeps the sentence.
@@ -310,6 +314,10 @@ export default function App() {
       : traffic.note ?? 'a faster route was picked';
     const short = `${how} · ${saved}`;
     return trafficStale ? `${short} · no signal to refresh` : short;
+=======
+    const how = `${traffic.confidence === 'live' ? 'Live data' : 'Estimated data'} — ${traffic.note ?? ''}`;
+    return trafficStale ? `${how} · no signal to refresh` : how;
+>>>>>>> 72f330af7a8892d456700a08d99f0ead384dbc02
   }, [traffic, trafficReady, trafficStale, trafficReason]);
 
   /** Layers we can genuinely offer, with the reason for anything missing. */
@@ -317,7 +325,13 @@ export default function App() {
     {
       id: 'default',
       label: 'Default',
+<<<<<<< HEAD
       detail: online ? 'Online map tiles' : 'Your offline .osm map',
+=======
+      detail: online
+        ? 'Standard style with online map tiles'
+        : 'Standard style drawn from your offline .osm map',
+>>>>>>> 72f330af7a8892d456700a08d99f0ead384dbc02
       available: true,
     },
     {
@@ -335,6 +349,10 @@ export default function App() {
     () => (layer === 'traffic' && trafficReady && route ? congestionSpans(route) : []),
     [layer, trafficReady, route],
   );
+<<<<<<< HEAD
+=======
+  (window as unknown as { __dbg?: unknown }).__dbg = { location, fix, locationMode, progressAlong, layer, traffic: traffic.status, geom: route?.geometry ?? null };
+>>>>>>> 72f330af7a8892d456700a08d99f0ead384dbc02
 
   useEffect(() => watchConnectivity(setOnline), []);
 
@@ -605,8 +623,21 @@ export default function App() {
       positionDrives.current = false;
       return;
     }
+<<<<<<< HEAD
     positionDrives.current = true;
     setProgressAlong((prev) => Math.max(prev, routeProgress(geometry, snappedIndex(location, geometry, snap.index))));
+=======
+    // `snapToPolyline` reports the index of the *segment* it projected onto, so a
+    // two-point route — which is what the offline engine returns for a straight
+    // hop along one way — can only ever report index 0 and would never reach its
+    // destination. With two points there is nothing to interpolate, so use
+    // whichever end of the line the car is actually nearer.
+    const index = geometry.length === 2
+      ? (haversine(location, geometry[0]) <= haversine(location, geometry[1]) ? 0 : 1)
+      : snap.index;
+    positionDrives.current = true;
+    setProgressAlong((prev) => Math.max(prev, routeProgress(geometry, index)));
+>>>>>>> 72f330af7a8892d456700a08d99f0ead384dbc02
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navActive, route, location]);
 
@@ -1104,6 +1135,7 @@ function NavOverlay(props: {
           <IconLayers size={ICON.primary} />
         </button>
 
+<<<<<<< HEAD
         {/* Current layer name, so the map is never showing something unnamed.
             Hidden while the panel is open: the panel names every layer, and two
             copies of the same sentence on a phone-sized screen is noise. */}
@@ -1115,6 +1147,15 @@ function NavOverlay(props: {
             )}
           </div>
         )}
+=======
+        {/* Current layer name, so the map is never showing something unnamed. */}
+        <div className="nav-status" role="status">
+          <span style={T.body3m}>{props.layerName}</span>
+          {statusDetail && (
+            <span style={{ ...T.body3, color: ink.secondary }}>{statusDetail}</span>
+          )}
+        </div>
+>>>>>>> 72f330af7a8892d456700a08d99f0ead384dbc02
       </div>
 
       {props.layersOpen && (
@@ -1208,6 +1249,7 @@ function NavPanel(props: {
         </button>
       </div>
 
+<<<<<<< HEAD
       <div className="layer-list">
         {props.options.map((o) => (
           <button
@@ -1228,6 +1270,26 @@ function NavPanel(props: {
           </button>
         ))}
       </div>
+=======
+      {props.options.map((o) => (
+        <button
+          key={o.id}
+          className={`layer-row ${o.id === props.layer ? 'on' : ''}`}
+          onClick={() => props.onPick(o.id)}
+          disabled={!o.available}
+          aria-pressed={o.id === props.layer}
+          aria-label={`${o.label} map layer. ${o.detail}`}
+        >
+          <span className="layer-text">
+            <span style={T.body3m}>{o.label}</span>
+            <span style={{ ...T.body3, color: o.available ? ink.secondary : ink.tertiary }}>
+              {o.detail}
+            </span>
+          </span>
+          <span className={`radio ${o.id === props.layer ? 'on' : ''}`} />
+        </button>
+      ))}
+>>>>>>> 72f330af7a8892d456700a08d99f0ead384dbc02
     </div>
   );
 }
