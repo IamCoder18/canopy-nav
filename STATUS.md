@@ -5,7 +5,7 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v0.11.1
+**Latest release:** v0.11.1 (unreleased on `main`: engine selection + provenance)
 
 ---
 
@@ -40,13 +40,13 @@ stands. **Bold** = fully working and verified.
 | 9 | Multi-region: download by city/province (Alberta, BC…), route between them | **Done.** 16-entry catalogue, streaming download, seamless merge | §3.5 |
 | 10 | Merging the two regions rather than stitching | **Done** — union-find on OSM node IDs (§3.5.2) | `src/osm/merge.ts` |
 | 11 | Is self-hosting Valhalla on Android unreasonable? | Answered: not unreasonable, but not achievable in the time available (§5.3) | — |
-| 12 | Keep hosted Valhalla as an option | **Done.** 3 presets + custom endpoint | §3.6 |
+| 12 | Keep hosted Valhalla as an option | **Done.** 3 presets + custom endpoint, each individually selectable and probeable | §3.6, §3.6.1 |
 | 13 | Handle losing connectivity mid-trip | **Done.** Provider chain + snapshotted route + honest degradation | §3.7 |
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 13 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 15 tags, 13 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 380 unit tests across 12 files, plus 2 browser suites | `test/` |
-| 18 | Every screen and function verified in real Chromium at mobile size | **Mostly done.** All 8 screens are visited at 3 viewports, 2 of them mobile-sized. Not covered: destructive/long-tail flows such as rerouting mid-turn, and the emulator is not a phone | `test/screens.mjs` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 418 unit tests across 13 files, plus 2 browser suites | `test/` |
+| 18 | Every screen and function verified in real Chromium at mobile size | **Mostly done.** All 9 screens are visited at 3 viewports, 2 of them mobile-sized. Engine selection, per-engine readiness and the post-route provenance trace are covered in `e2e.mjs`. Still not covered: destructive/long-tail flows such as rerouting mid-turn, and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | Ongoing — see §7 | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** http://192.168.1.83:8080, APK at `/dl/canopy-nav.apk` | — |
 | 21 | Update STATUS.md continuously | **This document** | — |
@@ -58,11 +58,17 @@ stands. **Bold** = fully working and verified.
 | Gate | Command | Result |
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
-| Unit tests | `npm test` | **380 passing**, 12 files |
-| End-to-end | `npm run e2e` | **23 checks** against the built bundle |
-| Screen coverage | `node test/screens.mjs` | **29 checks × 3 viewports = 87** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
+| Unit tests | `npm test` | **418 passing**, 13 files |
+| End-to-end | `npm run e2e` | **34 checks** against the built bundle |
+| Screen coverage | `node test/screens.mjs` | **32 checks × 3 viewports = 96** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | APK | `npm run apk` | 7.8 MB debug APK, `com.canopy.nav`, minSdk 23, targetSdk 35 |
 | Device | Android 14 emulator, API 34, 2340×1080 | installs, runs, **no console errors**, real GPS confirmed |
+
+**Note on the device gate.** The app logs three `Expected value to be of type
+number, but found null instead` warnings on launch. These are **pre-existing**,
+not new: the v0.11.1 baseline APK was rebuilt and reinstalled and produces the
+same three, so the engine work neither introduced nor fixed them. They are not
+yet traced to a source.
 
 ### Test breakdown
 
@@ -80,6 +86,7 @@ stands. **Bold** = fully working and verified.
 | `icons.spec.ts` | 4 | every maneuver kind renders distinct geometry |
 | `navigation.spec.ts` | 17 | off-route detection, speed-scaled thresholds, traffic verdicts |
 | `pbf.spec.ts` | 11 | PBF vs XML parser equivalence on a hand-built file and the whole fixture |
+| `engines.spec.ts` | 38 | engine selection policy, plan ordering, per-engine readiness reasons, the attempt trace, strict mode |
 
 ---
 
@@ -251,6 +258,47 @@ as ordinary continuous road.
 **Why.** See §5.3 for why Valhalla is not the on-device default. Nominatim is
 throttled to 1 req/s with a promise chain so concurrent calls serialise and never
 overlap, as its usage policy requires.
+
+### 3.6.1 Choosing and seeing engines
+
+**What.** Pick which engine routes, decide whether another may substitute, and
+see which one actually answered the last request.
+
+**How.** `src/nav/engines.ts` holds selection and readiness;
+`src/nav/providers.ts` keeps only the mechanics of fetching a route. Selection
+is two orthogonal controls:
+
+| Control | Values |
+|---|---|
+| Route with | Any online engine, Offline (.osm), FOSSGIS, Simplerouting.io, custom |
+| If it cannot route | Use another engine (default) / Fail instead |
+
+Those are separate because "I want Valhalla" and "let me have the offline engine
+if Valhalla is down" are different requests, and one radio group cannot express
+both. "Any online engine" expands to every hosted engine in registry order, so
+"any" means genuinely any. `planRoute` turns a selection into the ordered plan
+`resolveRoute` walks.
+
+Every engine on the plan gets a trace row — including ones never reached, marked
+`not tried`. A trace listing only what was attempted cannot answer "why did it
+use that engine", which is the only reason to keep one. `degraded` deliberately
+keeps its old narrow meaning (only reasons that cost something: no link, no key)
+so the banner and its tests are untouched; the trace carries the detail the
+banner has no room for.
+
+**Why.** This fixed a real honesty bug rather than only adding a panel. The
+status pill named the *selected* engine, so pinning FOSSGIS, letting it fail and
+falling back to the offline engine still displayed "Valhalla — FOSSGIS" — a
+locally-computed route wearing a hosted provider's name, implying turn-by-turn
+the offline engine does not produce. Provenance is now recorded as state at the
+moment of the request rather than derived from the selection, precisely because
+the two diverge exactly when something failed. Traffic also asks the engine that
+served the route rather than the top of the plan, so congestion is never
+attributed to a different server than the one that produced the geometry.
+
+Selection policy lives in its own module so it is testable without routing, and
+the import direction is one-way (`engines.ts` → `providers.ts`) so the routing
+core stays free of selection policy.
 
 ### 3.7 Mid-trip connectivity loss
 
@@ -428,6 +476,12 @@ blank. Now pinned by a type that makes a bare number a compile error.
   maneuver types 5 and 6, but had no `case` in the switch, so they fell through
   to `default`. `test/icons.spec.ts` now asserts every declared kind renders
   distinct geometry, which is what catches a missing case.
+- **The status pill named the selected engine, not the serving one.** Pin a
+  hosted provider, let it fail, and the offline engine answered while the pill
+  still read "Valhalla — FOSSGIS" — a local route wearing a hosted provider's
+  name, implying turn-by-turn the offline engine does not produce. Invisible
+  because the two only diverge on failure, which the browser suite never
+  provoked. Fixed with §3.6.1.
 - **Invisible nav icons** were the same *kind* of bug as above: a hardcoded
   default colour rather than one inherited from context.
 
@@ -508,7 +562,7 @@ does not have.
 
 ```
 src/
-  App.tsx                 1622  screens, navigation state, keyboard shortcuts
+  App.tsx                ~1800  screens, navigation state, keyboard shortcuts
   theme.ts                 143  AAOS design tokens (colour, type, layout, shape)
   icons.tsx                345  29 maneuver kinds + system icons, hand-drawn SVG
   geo.ts                   173  polyline codec, haversine, formatting, snapping
@@ -524,7 +578,8 @@ src/
 
   nav/
     valhalla.ts            249  Valhalla /route client
-    providers.ts           241  provider chain, fallback, connectivity
+    providers.ts           ~350 provider chain, attempt trace, connectivity
+    engines.ts             ~230 engine selection, readiness, provenance
     geocode.ts             178  Nominatim client, 1 req/s throttle
     traffic.ts             163  fastest-of-N-alternates traffic verdict
     location.ts            138  device/browser/simulated location
@@ -541,9 +596,9 @@ src/
     persist.ts             615  IndexedDB caching of parsed datasets
     download.ts           1270  streaming downloader
 
-test/            380 unit tests, 12 files
-test/e2e.mjs           23 browser checks, built bundle
-test/screens.mjs        29 checks x 3 viewports (87 total)
+test/            418 unit tests, 13 files
+test/e2e.mjs           34 browser checks, built bundle
+test/screens.mjs        32 checks x 3 viewports (96 total)
 tools/osm2pbf.mjs        XML -> PBF encoder (builds the test fixtures;
                             extract slicing is done by osmium on a desktop)
 ```
@@ -558,7 +613,13 @@ Ordered by how much they matter.
    Android 14 emulator. WebView behaviour, real GPS quality, SAF file import and
    on-phone memory pressure are unproven. This is the largest remaining risk.
 2. **SAF file import untested on device.** The picker UI was not automatable over
-   adb; browser-tested only.
+   adb; browser-tested only. Re-confirmed while building the engine screen: the
+   file picker cannot be driven through `adb shell input`, so device runs start
+   with no map loaded and the offline engine correctly reports
+   "No offline map loaded".
+2b. **Three untraced launch warnings.** `Expected value to be of type number, but
+   found null instead` × 3 on every cold start, including the v0.11.1 baseline.
+   Pre-existing, not a regression, and not yet traced to a source.
 3. **Parse is not streaming.** The download streams; `OsmEngine` reads the whole
    file, so peak memory during parse is roughly twice the file size — workable but
    tight for a 900 MB province. Documented in the module header, not solved.
@@ -570,6 +631,10 @@ Ordered by how much they matter.
    future-proofing only.
 7. **Emulator cutout band.** A black band remains where the emulator simulates a
    display cutout. Believed cosmetic and device-specific; not confirmed.
+7b. **App bar and grid cell are CSS literals, not tokens.** `96px` appears 9
+   times in `styles.css` and `158px` once; `theme.ts` has no `APP_BAR` or
+   `GRID_CELL` token. They are the correct AAOS spec values, so this is a
+   consistency gap against requirement #2 rather than a visual one.
 8. **Rerouting is implemented and tested in isolation** (`nav/offroute.ts`, speed-
    scaled threshold, 6 s confirmation hold, reroute origin from the projected
    point) but is **not yet wired into the navigation screen**, so the app does not
@@ -584,8 +649,8 @@ Ordered by how much they matter.
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 380 unit tests
-npm run e2e          # 23 browser checks against the built bundle
+npm test             # 418 unit tests
+npm run e2e          # 34 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
 npm run sync         # build, clear android assets, cap sync
