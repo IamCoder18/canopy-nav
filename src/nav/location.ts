@@ -39,79 +39,29 @@ function simulatedFix(): Fix {
   return { pos: FALLBACK, speed: 0, heading: 0, accuracy: 12, ts: Date.now() };
 }
 
-async function loadCapacitorGeolocation() {
-  try {
-    const mod = await import('@capacitor/geolocation');
-    return mod.Geolocation;
-  } catch {
-    return null;
-  }
-}
-
-async function watchDevice(onFix: (f: Fix) => void, onError: (e: string) => void): Promise<() => void> {
-  const Geolocation = await loadCapacitorGeolocation();
-  if (!Geolocation) {
-    onError('Capacitor geolocation unavailable');
+/**
+ * Location on a real device.
+ *
+ * Uses the WebView's own `navigator.geolocation` rather than the Capacitor
+ * geolocation plugin. The plugin's native object is a Proxy whose returned
+ * value is awaited by the bridge, and awaiting it calls `then()` on the plugin
+ * itself, which fails on device with
+ * `Geolocation.then() is not implemented on android`. The Web Geolocation API
+ * is backed by the same platform LocationManager inside a WebView, returns a
+ * real Promise, supports the error callback we need, and is the exact code path
+ * the browser build already exercises -- so device and desktop now share one
+ * implementation instead of two that can silently diverge.
+ */
+function watchDevice(onFix: (f: Fix) => void, onError: (e: string) => void): () => void {
+  if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+    onError('Geolocation unsupported on this device');
     return () => {};
   }
-
   let cancelled = false;
-  let watchId: string | null = null;
 
-  // Capacitor's watchPosition has no error callback, so a denied permission
-  // would simply never fire. Probe once up front to surface the real reason.
-  Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 10000 })
-    .then((position) => {
-      if (cancelled) return;
-      const pos = position?.coords;
-      if (pos) {
-        onFix({
-          pos: [pos.longitude, pos.latitude],
-          speed: pos.speed ?? 0,
-          heading: pos.heading ?? 0,
-          accuracy: pos.accuracy ?? 0,
-          ts: position!.timestamp,
-        });
-      }
-    })
-    .catch((err: Error) => {
-      if (cancelled) return;
-      onError(err?.message || 'Location permission denied');
-    });
-
-  Geolocation.watchPosition(
-    { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
-    (position) => {
-      if (cancelled) return;
-      const pos = position?.coords;
-      if (!pos) return;
-      onFix({
-        pos: [pos.longitude, pos.latitude],
-        speed: pos.speed ?? 0,
-        heading: pos.heading ?? 0,
-        accuracy: pos.accuracy ?? 0,
-        ts: position!.timestamp,
-      });
-    },
-  )
-    .then((id) => {
-      watchId = id;
-      if (cancelled && id) void Geolocation.clearWatch({ id });
-    }).catch(() => {});
-
-  return () => {
-    cancelled = true;
-    if (watchId) void Geolocation.clearWatch({ id: watchId });
-  };
-}
-
-function watchBrowser(onFix: (f: Fix) => void, onError: (e: string) => void): () => void {
-  if (!('geolocation' in navigator)) {
-    onError('Geolocation unsupported in this browser');
-    return () => {};
-  }
-  const id = navigator.geolocation.watchPosition(
+  navigator.geolocation.watchPosition(
     (pos) => {
+      if (cancelled) return;
       onFix({
         pos: [pos.coords.longitude, pos.coords.latitude],
         speed: pos.coords.speed ?? 0,
@@ -120,10 +70,14 @@ function watchBrowser(onFix: (f: Fix) => void, onError: (e: string) => void): ()
         ts: pos.timestamp,
       });
     },
-    (err) => onError(err.message || 'Location permission denied'),
+    (err) => {
+      if (cancelled) return;
+      onError(err.message || 'Location permission denied');
+    },
     { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
   );
-  return () => navigator.geolocation.clearWatch(id);
+
+  return () => { cancelled = true; };
 }
 
 /**
@@ -157,16 +111,13 @@ export function useLocation(enabled = true): LocationState {
       const onF = (f: Fix) => onFix.current(f);
       const onE = (e: string) => onError.current(e);
 
-      const stop = isNative ? await watchDevice(onF, onE) : watchBrowser(onF, onE);
+      // Both paths are the Web Geolocation API now, so the choice is only about
+      // how the resulting fix is *labelled* in the UI.
+      const stop = watchDevice(onF, onE);
       if (cancelled) stop();
       else cleanup = stop;
 
-      setState((s) => ({
-        ...s,
-        mode: isNative ? 'device' : 'browser',
-        // If no fix arrives promptly, fall back to simulation so the UI still runs.
-        error: s.error,
-      }));
+      setState((s) => ({ ...s, mode: isNative ? 'device' : 'browser' }));
 
       // Safety net: if nothing arrives in 6s, keep simulating.
       const timer = setTimeout(() => {

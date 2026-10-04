@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "sync": "npm run build && npx cap sync android",
+    "sync": "npm run build && rm -rf android/app/src/main/assets/public && npx cap sync android",
     "apk": "npm run sync && cd android && JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64} ./gradlew assembleDebug",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
@@ -17,7 +17,6 @@
     "@capacitor/android": "^7.0.0",
     "@capacitor/core": "^7.0.0",
     "@capacitor/filesystem": "^7.0.0",
-    "@capacitor/geolocation": "^7.1.8",
     "maplibre-gl": "^5.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
