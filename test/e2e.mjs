@@ -116,6 +116,46 @@ try {
       check('steps list renders', /Route steps/i.test(steps));
       await page.screenshot({ path: join(SHOTS, '5-steps.png') });
     }
+
+    /* ---- provenance: who actually answered ---- */
+    // The claim under test is that the app attributes the route to the engine
+    // that served it and admits the offline engine has no turn-by-turn. A route
+    // from the local engine must therefore say so rather than borrowing the
+    // selected engine's name.
+    console.log('\nprovenance');
+    for (let i = 0; i < 4; i++) {
+      if (await page.$('button[aria-label="Settings"]')) break;
+      const back = await page.$('button[aria-label="Back"]');
+      const exit = await page.$('button[aria-label="Exit navigation"]');
+      if (back) await back.click();
+      else if (exit) await exit.click();
+      else break;
+      await page.waitForTimeout(700);
+    }
+    if (await page.$('button[aria-label="Settings"]')) {
+      await page.click('button[aria-label="Settings"]');
+      await page.waitForTimeout(400);
+      const prov = await page.evaluate(() => document.body.innerText);
+      check('settings reports the engine that answered', /Last route answered by/.test(prov),
+        prov.match(/Last route answered by[^\n]*/)?.[0] ?? '');
+
+      const enginesLink = await page.$('.hint-card');
+      if (enginesLink) {
+        await enginesLink.click();
+        await page.waitForTimeout(600);
+        const trace = await page.evaluate(() => document.body.innerText);
+        check('trace names the answering engine', /Answered by/.test(trace),
+          trace.match(/Answered by[^\n]*/)?.[0] ?? '');
+        // The offline engine produces no maneuvers; claiming otherwise would be
+        // the exact dishonesty this surface exists to prevent.
+        check('trace admits when turn-by-turn is unavailable',
+          /turn-by-turn available|no turn-by-turn from this engine/.test(trace),
+          trace.match(/(no turn-by-turn from this engine|turn-by-turn available)/)?.[0] ?? '');
+        check('trace shows a total time', /\d+\s*ms total/.test(trace),
+          trace.match(/\d+\s*ms total/)?.[0] ?? '');
+        await page.screenshot({ path: join(SHOTS, '10-engine-trace.png') });
+      }
+    }
   }
 
   /* ---------------- search after a loaded region ---------------- */
@@ -252,6 +292,57 @@ try {
     check('unavailable rows are disabled and available rows are not', catalogue.consistent,
       catalogue.detail);
     await page.screenshot({ path: join(SHOTS, '8-regions-offline.png') });
+  }
+
+  /* ---------------- engine selection + provenance ---------------- */
+  // The claim under test is an honesty claim: the app must name the engine that
+  // answered, not the one that was selected. With the offline engine pinned and
+  // fallback allowed, an online engine may legitimately answer -- but then the
+  // trace must say so rather than reporting the selection.
+  console.log('\nengines');
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(1500);
+
+  const settingsBtn = await page.$('button[aria-label="Settings"]');
+  if (settingsBtn) {
+    await settingsBtn.click();
+    await page.waitForTimeout(400);
+    const enginesLink = await page.$('.hint-card');
+    check('settings offers an engine control', !!enginesLink);
+    await enginesLink.click();
+    await page.waitForTimeout(600);
+
+    const engineScreen = await page.evaluate(() => {
+      const text = document.body.innerText;
+      const rows = [...document.querySelectorAll('.provider-row')];
+      return {
+        title: /Engines/.test(text),
+        // "Any online engine" plus the four registry entries.
+        rows: rows.length,
+        labels: rows.map((r) => r.textContent.trim()),
+        // Every row must state availability either way -- a bare engine name
+        // tells the driver nothing about whether it can be used right now.
+        allExplained: rows.every((r) => /Ready —|Unavailable —/.test(r.textContent)),
+        fallbackControl: /Use another engine/.test(text) && /Fail instead/.test(text),
+        unproven: /No route requested yet/.test(text),
+      };
+    });
+    check('engines screen opens', engineScreen.title);
+    check('every engine is listed and selectable', engineScreen.rows === 5,
+      `${engineScreen.rows} rows: ${engineScreen.labels.map((l) => l.split('\n')[0]).join(', ')}`);
+    check('each engine states whether it is usable', engineScreen.allExplained);
+    check('fallback is an explicit choice', engineScreen.fallbackControl);
+    check('no provenance is claimed before a route', engineScreen.unproven);
+    await page.screenshot({ path: join(SHOTS, '9-engines.png') });
+
+    // Pin the offline engine so a route is guaranteed to be attributable.
+    const offlineRow = await page.$('.provider-row:has-text("Offline (.osm)")');
+    if (offlineRow) {
+      await offlineRow.click();
+      await page.waitForTimeout(300);
+      await page.goBack().catch(() => {});
+      await page.waitForTimeout(400);
+    }
   }
 
   check('no uncaught page errors', pageErrors.length === 0, pageErrors.join(' | '));

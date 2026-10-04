@@ -156,6 +156,16 @@ for (const vp of VIEWPORTS) {
   await page.click('button[aria-label="Settings"]');
   await visit('settings', 'settings');
 
+  // engines -- the longest list of labelled rows in the app, so the most likely
+  // to overflow at 412dp.
+  const enginesLink = await page.$('.hint-card');
+  if (enginesLink) {
+    await enginesLink.click().catch(() => {});
+    await visit('engines', 'engines');
+    await page.goBack().catch(() => {});
+    await page.waitForTimeout(400);
+  }
+
   // regions
   const regionTile = await page.$('.quick-tile:has-text("Regions")');
   if (regionTile) {

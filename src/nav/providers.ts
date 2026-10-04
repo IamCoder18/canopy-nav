@@ -77,6 +77,44 @@ export interface RouteRequest {
   units?: 'km' | 'miles';
   avoid?: LatLng[][];
   provider: ProviderId;
+  /**
+   * Ordered engines to try, best first.
+   *
+   * Optional so the single-provider call shape stays valid: when absent the plan
+   * is derived from `provider` exactly as it behaved before plans existed (an
+   * online provider still falls through to the local engine).
+   */
+  plan?: ProviderId[];
+  /**
+   * Treat the plan as the whole world: never append the offline engine, and fail
+   * with an explanation rather than a generic "no route".
+   *
+   * Walking *within* the plan is still allowed — that is what `any-online` means,
+   * since its plan is three hosted engines and stopping at the first failure
+   * would make the choice a lie.
+   */
+  strict?: boolean;
+}
+
+/** What happened to one engine during a route request. */
+export type AttemptOutcome = 'served' | 'failed' | 'skipped' | 'not-tried';
+
+/**
+ * One row of the engine trace.
+ *
+ * Every engine on the plan gets a row, including the ones never reached
+ * (`not-tried`). A trace that only lists what was tried cannot answer "why did
+ * it use that engine", which is the question this whole record exists to answer.
+ */
+export interface EngineAttempt {
+  engine: ProviderId;
+  label: string;
+  online: boolean;
+  outcome: AttemptOutcome;
+  /** Why it was skipped or failed. Null only when it served the route. */
+  reason: string | null;
+  /** Wall-clock cost, when an attempt was actually made. */
+  ms: number | null;
 }
 
 export type RouteAttempt =
@@ -89,6 +127,16 @@ export interface RouteOutcome {
   used: ProviderId;
   /** Providers that were tried and failed, for the UI banner. */
   degraded: { provider: ProviderId; reason: string }[];
+  /** Every engine on the plan and what became of it, in order. */
+  attempts: EngineAttempt[];
+  /**
+   * True when the engine that answered was not the one that was asked for.
+   *
+   * Worth showing on its own: the route is valid, but it came from somewhere
+   * other than where the driver pointed, and its capabilities differ (the local
+   * engine has no maneuvers, so turn-by-turn is simply absent).
+   */
+  fellBack: boolean;
 }
 
 export class NoRouteError extends Error {
@@ -158,73 +206,129 @@ export function watchConnectivity(cb: ConnectivityListener): () => void {
 }
 
 /**
- * Resolve a route, falling back down the provider chain.
+ * Resolve a route, walking an ordered plan of engines.
  *
- * Order: if the caller picked an online provider and we believe we have
- * connectivity, try it first; the local engine is always the safety net so a
- * trip never fails outright because the network dropped.
+ * The plan is the visibility surface and the fallback policy in one: each engine
+ * is tried in turn, every outcome recorded, and the engine that actually
+ * answered is reported as `used` — never the one that was asked for. `strict`
+ * stops the walk after the first real attempt so a pinned engine fails loudly
+ * instead of quietly answering from somewhere else.
  */
 export async function resolveRoute(
   req: RouteRequest,
   dataset: OsmDataset | null,
   providerState: { endpoint?: string; apiKey?: string },
 ): Promise<RouteOutcome> {
-  const degraded: { provider: ProviderId; reason: string }[] = [];
-  const provider = PROVIDERS.find((p) => p.id === req.provider) ?? PROVIDERS[0];
   const units = req.units ?? 'km';
+  const strict = req.strict ?? false;
+  const meta = (id: ProviderId) => PROVIDERS.find((p) => p.id === id);
 
-  const tryLocal = (): RouteOutcome | null => {
-    if (!dataset) return null;
-    const r = routeOnGraph(dataset.graph, req.from, req.to);
-    if (!r) return null;
-    return { route: localToRoute(r, units), used: 'local', degraded: [...degraded] };
+  // Preserve the pre-plan call shape: an online provider still falls through to
+  // the local engine, a local one never does.
+  // Normalise unknown ids to the offline engine, which is what an unrecognised
+  // provider has always meant: no route is better than a crash.
+  const plan: ProviderId[] = (req.plan?.length
+    ? req.plan
+    : meta(req.provider)?.online
+      ? [req.provider, 'local' as ProviderId]
+      : [req.provider]
+  ).map((id) => (meta(id) ? id : ('local' as ProviderId)));
+
+  const attempts: EngineAttempt[] = plan.map((engine) => ({
+    engine,
+    label: meta(engine)?.label ?? engine,
+    online: meta(engine)?.online ?? false,
+    outcome: 'not-tried',
+    reason: null,
+    ms: null,
+  }));
+  const degraded: { provider: ProviderId; reason: string }[] = [];
+  /**
+   * `degraded` is what the UI banner shows, so it stays narrow: only the reasons
+   * that actually cost something — a request we could not make because there was
+   * no link, or no key. Everything else (a missing endpoint, an engine that
+   * simply lost) is recorded on the attempt row, which is the surface built to
+   * hold detail the banner has no room for.
+   */
+  const skip = (row: EngineAttempt, reason: string, report = false) => {
+    row.outcome = 'skipped';
+    row.reason = reason;
+    if (report) degraded.push({ provider: row.engine, reason });
   };
 
-  if (provider.online && isOnline()) {
-    const endpoint =
-      provider.id === 'valhalla-custom' ? (providerState.endpoint ?? '') : provider.endpoint;
+  for (let i = 0; i < plan.length; i++) {
+    const id = plan[i];
+    const row = attempts[i];
+    const provider = meta(id)!;
 
-    // Don't send a request we know cannot succeed: a hosted provider that needs
-    // a key and has none would otherwise come back 401 and surface as a server
-    // error instead of "API key required".
-    if (provider.requiresKey && !providerState.apiKey) {
-      degraded.push({ provider: provider.id, reason: 'API key required' });
-    } else if (endpoint) {
-      try {
-        const route = await routeOnValhalla(
-          { from: req.from, to: req.to, costing: req.costing, units, avoid: req.avoid },
-          endpoint,
-          provider.id === 'valhalla-simplerouting' && providerState.apiKey
-            ? { Authorization: `Bearer ${providerState.apiKey}` }
-            : undefined,
-        );
-        return { route, used: provider.id, degraded };
-      } catch (err) {
-        const reason =
-          err instanceof RoutingError ? err.message : (err as Error).message || 'Routing request failed';
-        degraded.push({ provider: provider.id, reason });
-        // A 4xx from Valhalla is a bad request, not a network problem — don't retry offline.
-        // A 4xx (other than 429) is a bad request rather than a network
-        // problem. Only one online provider is ever tried per call, so this
-        // branch must not also test the degraded count — it never gets past 1.
-        const fatal = err instanceof RoutingError && typeof err.status === 'number' &&
-          err.status < 500 && err.status !== 429;
-        if (fatal) {
-          throw new NoRouteError(`${reason}.`);
+    if (provider.online) {
+      const endpoint = id === 'valhalla-custom' ? (providerState.endpoint ?? '') : provider.endpoint;
+
+      // Don't send a request we know cannot succeed: a hosted provider that
+      // needs a key and has none would otherwise come back 401 and surface as a
+      // server error instead of "API key required".
+      if (!isOnline()) skip(row, 'No network connection', true);
+      else if (provider.requiresKey && !providerState.apiKey) skip(row, 'API key required', true);
+      else if (!endpoint) skip(row, 'No endpoint configured');
+      else {
+        const t0 = Date.now();
+        try {
+          const route = await routeOnValhalla(
+            { from: req.from, to: req.to, costing: req.costing, units, avoid: req.avoid },
+            endpoint,
+            id === 'valhalla-simplerouting' && providerState.apiKey
+              ? { Authorization: `Bearer ${providerState.apiKey}` }
+              : undefined,
+          );
+          row.outcome = 'served';
+          row.ms = Date.now() - t0;
+          return { route, used: id, degraded, attempts, fellBack: degraded.length > 0 || i > 0 };
+        } catch (err) {
+          const reason =
+            err instanceof RoutingError ? err.message : (err as Error).message || 'Routing request failed';
+          row.outcome = 'failed';
+          row.reason = reason;
+          row.ms = Date.now() - t0;
+          degraded.push({ provider: id, reason });
+
+          // A 4xx from Valhalla is a bad request, not a network problem, so
+          // trying the offline engine would only produce a second wrong answer.
+          const fatal = err instanceof RoutingError && typeof err.status === 'number' &&
+            err.status < 500 && err.status !== 429;
+          if (fatal) throw new NoRouteError(`${reason}.`);
         }
       }
+    } else {
+      const t0 = Date.now();
+      const r = dataset ? routeOnGraph(dataset.graph, req.from, req.to) : null;
+      if (r) {
+        row.outcome = 'served';
+        row.ms = Date.now() - t0;
+        return {
+          route: localToRoute(r, units),
+          used: id,
+          degraded,
+          attempts,
+          fellBack: degraded.length > 0 || i > 0,
+        };
+      }
+      row.outcome = 'failed';
+      row.ms = Date.now() - t0;
+      row.reason = dataset
+        ? 'No route in the offline map for this pair'
+        : 'No offline map loaded';
     }
-  } else if (provider.online) {
-    degraded.push({ provider: provider.id, reason: 'No network connection' });
   }
 
-  const local = tryLocal();
-  if (local) return local;
-
+  // With fallback off the offline engine was never consulted, so the old closing
+  // message ("no route found in the offline map") would blame a map that was
+  // never asked. Say what actually happened instead.
   throw new NoRouteError(
-    degraded.length
-      ? `${degraded[0].reason}. No route found in the offline map for this pair.`
-      : 'No route found. Import an .osm file covering this area, or connect to the network.',
+    strict
+      ? `${degraded[0]?.reason ?? 'The selected engine could not route.'} Fallback is off, so no other engine was tried.`
+      : degraded.length
+        ? `${degraded[0].reason}. No route found in the offline map for this pair.`
+        : 'No route found. Import an .osm file covering this area, or connect to the network.',
   );
 }
 

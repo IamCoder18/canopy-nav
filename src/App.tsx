@@ -5,8 +5,13 @@ import type { OsmDataset } from './osm/engine.worker';
 import { searchPlaces, type Place } from './nav/geocode';
 import {
   resolveRoute, isOnline, watchConnectivity, PROVIDERS, localToRoute,
-  NoRouteError, type ProviderId,
+  NoRouteError, type ProviderId, type EngineAttempt,
 } from './nav/providers';
+import {
+  DEFAULT_SELECTION, planRoute, engineStatuses, probeEngine, describeProvenance,
+  describeAttempt, hasManeuvers, ANY_ONLINE, ANY_ONLINE_LABEL,
+  type EngineSelection, type EngineId, type EngineProbe,
+} from './nav/engines';
 import type { Route, ValhallaManeuver } from './nav/valhalla';
 import { maneuverIcon, isMajorManeuver, type LegStep } from './nav/maneuver';
 import {
@@ -17,7 +22,7 @@ import {
   formatDistance, formatDuration, formatClock, haversine, lineLength,
   snapToPolyline, type LatLng,
 } from './geo';
-import { ink, type as T, DP, ICON } from './theme';
+import { ink, accentNight, type as T, DP, ICON } from './theme';
 import { useLocation, type LocationMode } from './nav/location';
 import RegionsScreen from './regions/RegionsScreen';
 import {
@@ -31,7 +36,26 @@ import {
   IconFile, IconLocate, IconCar, IconRefresh,
 } from './icons';
 
-type Screen = 'home' | 'search' | 'preview' | 'navigating' | 'steps' | 'settings' | 'import' | 'regions';
+type Screen = 'home' | 'search' | 'preview' | 'navigating' | 'steps' | 'settings' | 'import' | 'regions' | 'engines';
+
+/* ---------------------------- engines ---------------------------- */
+
+/**
+ * Who answered the current route, and what happened to every other engine.
+ *
+ * Held as state rather than derived from the selection because the selection is
+ * a preference and this is a record of an event. They coincide only when nothing
+ * failed, and the whole point of tracking them separately is the case where they
+ * do not.
+ */
+interface RouteProvenance {
+  used: ProviderId;
+  fellBack: boolean;
+  attempts: EngineAttempt[];
+  /** Wall-clock for the whole request, engine time included. */
+  totalMs: number;
+  when: number;
+}
 
 /* --------------------------- map layers --------------------------- */
 
@@ -159,9 +183,32 @@ function snappedIndex(pt: LatLng, line: LatLng[], segmentIndex: number): number 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('home');
   const [online, setOnline] = useState(isOnline());
-  const [provider, setProvider] = useState<ProviderId>('local');
+  /**
+   * Which engine answers, and whether another may answer instead.
+   *
+   * Two controls rather than one radio group, because "I want Valhalla" and "let
+   * me have the offline engine if Valhalla is down" are different requests. See
+   * `nav/engines.ts`.
+   */
+  const [selection, setSelection] = useState<EngineSelection>(DEFAULT_SELECTION);
   const [apiKey, setApiKey] = useState('');
   const [endpoint, setEndpoint] = useState('');
+
+  /** The ordered engine plan implied by the current selection. */
+  const enginePlan = useMemo(
+    () => planRoute(selection, { endpoint, apiKey }),
+    [selection, endpoint, apiKey],
+  );
+  /**
+   * Who actually answered the current route, and what became of every other
+   * engine on the plan.
+   *
+   * Recorded as a fact rather than read back off the selection, because the two
+   * genuinely differ whenever a fallback fires — and the fallback engine has
+   * different capabilities, so labelling a locally-computed route with a hosted
+   * provider's name would imply turn-by-turn that is not there.
+   */
+  const [provenance, setProvenance] = useState<RouteProvenance | null>(null);
 
   const [dataset, setDataset] = useState<OsmDataset | null>(null);
   const [progress, setProgress] = useState<BuildProgress | null>(null);
@@ -237,13 +284,18 @@ export default function App() {
       return;
     }
     const ends = routeEnds ?? { from: origin ?? location, to: destination?.pos ?? r.geometry[0] };
-    const prov = PROVIDERS.find((p) => p.id === provider);
-    const target = provider === 'valhalla-custom' ? endpoint : prov?.endpoint ?? '';
+    // Traffic needs a real online engine. Use the one that actually served the
+    // route rather than the top of the plan: the route's geometry came from
+    // somewhere specific, and asking a different server about it would attribute
+    // one engine's congestion to another's route.
+    const serving = provenance?.used;
+    const prov = serving ? PROVIDERS.find((p) => p.id === serving) : null;
+    const target = serving === 'valhalla-custom' ? endpoint : prov?.endpoint ?? '';
     if (!prov?.online || !target) {
       setTraffic({
         status: 'unavailable',
         secondsSaved: 0,
-        reason: 'Traffic needs an online routing provider; none is selected',
+        reason: 'Traffic needs an online routing provider; none is available',
       });
       return;
     }
@@ -252,7 +304,7 @@ export default function App() {
     const res = await routeWithTraffic(ends.from, ends.to, {
       endpoint: target,
       units: valhallaUnits,
-      headers: provider === 'valhalla-simplerouting' && apiKey
+      headers: serving === 'valhalla-simplerouting' && apiKey
         ? { Authorization: `Bearer ${apiKey}` }
         : undefined,
       offline: false,
@@ -272,7 +324,7 @@ export default function App() {
       note: res.note ?? describeTraffic(res, true),
       reason: '',
     });
-  }, [route, routeEnds, online, provider, endpoint, apiKey, valhallaUnits, origin, location, destination]);
+  }, [route, routeEnds, online, provenance?.used, endpoint, apiKey, valhallaUnits, origin, location, destination]);
 
   /** The traffic overlay only ever exists when the provider proved data. */
   const trafficReady = traffic.status === 'ready';
@@ -463,14 +515,32 @@ export default function App() {
     setRouting(true);
     setDegraded([]);
     const from = origin ?? location;
+    const t0 = Date.now();
     try {
       const outcome = await resolveRoute(
-        { from, to: dest.pos, provider, units: valhallaUnits, avoid: [] },
+        {
+          from,
+          to: dest.pos,
+          // `provider` is only the head of the plan; it is kept in the request so
+          // the shape stays valid for callers that predate plans.
+          provider: enginePlan[0] ?? 'local',
+          plan: enginePlan,
+          strict: !selection.allowFallback,
+          units: valhallaUnits,
+          avoid: [],
+        },
         dataset,
         { apiKey, endpoint },
       );
       setRoute(outcome.route);
       setDegraded(outcome.degraded.map((d) => `${d.provider}: ${d.reason}`));
+      setProvenance({
+        used: outcome.used,
+        fellBack: outcome.fellBack,
+        attempts: outcome.attempts,
+        totalMs: Date.now() - t0,
+        when: Date.now(),
+      });
       setProgressAlong(0);
       resetTraffic({ from, to: dest.pos });
       setScreen('preview');
@@ -482,6 +552,33 @@ export default function App() {
       if (multi) {
         setRoute(localToRoute(multi.result, valhallaUnits));
         setDegraded([`Region library: ${multi.regions.map((id) => regionLib.get(id)?.name ?? id).join(' → ')}`]);
+        // This route came from the region library, not from any engine on the
+        // plan, so it needs a trace of its own. Without this the status pill
+        // would keep naming whichever engine last answered a *different* route.
+        setProvenance({
+          used: 'local',
+          fellBack: true,
+          attempts: [
+            ...enginePlan.map((engine) => ({
+              engine,
+              label: PROVIDERS.find((p) => p.id === engine)?.label ?? engine,
+              online: PROVIDERS.find((p) => p.id === engine)?.online ?? false,
+              outcome: 'failed' as const,
+              reason: 'Could not route this pair alone',
+              ms: null,
+            })),
+            {
+              engine: 'local' as ProviderId,
+              label: 'Region library',
+              online: false,
+              outcome: 'served' as const,
+              reason: null,
+              ms: Date.now() - t0,
+            },
+          ],
+          totalMs: Date.now() - t0,
+          when: Date.now(),
+        });
         setProgressAlong(0);
         resetTraffic({ from, to: dest.pos });
         setScreen('preview');
@@ -491,11 +588,14 @@ export default function App() {
         setRouteError(e instanceof NoRouteError ? e.message : (e as Error).message);
         resetTraffic(null);
         setScreen('preview');
+        // Clear the trace: leaving the previous route's provenance on screen
+        // would attribute a failure to whichever engine served the last success.
+        setProvenance(null);
       }
     } finally {
       setRouting(false);
     }
-  }, [dataset, origin, location, provider, valhallaUnits, apiKey, endpoint, regions.length, resetTraffic]);
+  }, [dataset, origin, location, enginePlan, selection.allowFallback, valhallaUnits, apiKey, endpoint, regions.length, resetTraffic]);
 
   /* ------------------------- guidance model ----------------------- */
 
@@ -714,7 +814,7 @@ export default function App() {
           dataset={dataset}
           regionCount={regions.length}
           online={online}
-          provider={provider}
+          provenance={provenance}
           locationMode={locationMode}
           locationError={locationError}
           progress={progress}
@@ -753,8 +853,8 @@ export default function App() {
 
       {screen === 'settings' && (
         <SettingsScreen
-          provider={provider}
-          setProvider={setProvider}
+          selection={selection}
+          setSelection={setSelection}
           online={online}
           dataset={dataset}
           regionCount={regions.length}
@@ -764,9 +864,26 @@ export default function App() {
           setEndpoint={setEndpoint}
           units={units}
           setUnits={setUnits}
+          provenance={provenance}
           onBack={() => setScreen('home')}
           onImport={() => setScreen('import')}
           onRegions={() => setScreen('regions')}
+          onEngines={() => setScreen('engines')}
+        />
+      )}
+
+      {screen === 'engines' && (
+        <EnginesScreen
+          selection={selection}
+          setSelection={setSelection}
+          online={online}
+          hasMap={dataset !== null || regions.length > 0}
+          apiKey={apiKey}
+          setApiKey={setApiKey}
+          endpoint={endpoint}
+          setEndpoint={setEndpoint}
+          provenance={provenance}
+          onBack={() => setScreen('settings')}
         />
       )}
 
@@ -830,7 +947,7 @@ interface HomeProps {
   dataset: OsmDataset | null;
   regionCount: number;
   online: boolean;
-  provider: ProviderId;
+  provenance: RouteProvenance | null;
   locationMode: LocationMode;
   locationError: string | null;
   progress: BuildProgress | null;
@@ -869,7 +986,7 @@ function HomeScreen(p: HomeProps) {
         <div className="spacer" />
         <StatusPill
           online={p.online}
-          provider={p.provider}
+          provenance={p.provenance}
           locationMode={p.locationMode}
           locationError={p.locationError}
         />
@@ -926,20 +1043,38 @@ function HomeScreen(p: HomeProps) {
 
 function StatusPill({
   online,
-  provider,
+  provenance,
   locationMode,
   locationError,
 }: {
   online: boolean;
-  provider: ProviderId;
+  provenance: RouteProvenance | null;
   locationMode: LocationMode;
   locationError: string | null;
 }) {
-  const label = online ? PROVIDERS.find((x) => x.id === provider)?.label ?? 'Online' : 'Offline';
+  /**
+   * Name the engine that answered, not the one that was selected.
+   *
+   * These differ whenever a fallback fires, and the difference is not cosmetic:
+   * the offline engine produces no maneuvers, so labelling its route with a
+   * hosted provider's name implies turn-by-turn that is not there. When there is
+   * no route yet there is nothing to attribute, so connectivity is reported
+   * instead — which is the honest thing to say at that moment.
+   */
+  const label = provenance
+    ? describeProvenance(provenance.used, provenance.fellBack)
+    : online
+      ? 'Online'
+      : 'Offline';
   const gps = locationMode === 'device' ? 'GPS'
     : locationMode === 'browser' ? 'Browser GPS'
     : 'Simulated GPS';
-  const title = locationError ? `${gps} - ${locationError}` : gps;
+  const engineTitle = provenance
+    ? `${label} · ${provenance.totalMs} ms${provenance.fellBack ? ' · another engine answered' : ''}`
+    : online
+      ? 'No route yet — engine unproven'
+      : 'No route yet — no network';
+  const title = [engineTitle, locationError ? `${gps} - ${locationError}` : gps].join('\n');
   return (
     <div
       className={`status-pill ${online ? 'on' : 'off'}`}
@@ -1502,18 +1637,191 @@ function StepsScreen({ steps, onBack }: { steps: LegStep[]; onBack: () => void }
   );
 }
 
+/* --------------------------- EnginesScreen -------------------------- */
+
+/**
+ * The engine control and trace surface.
+ *
+ * Two jobs, deliberately on one screen. Choosing an engine is a setting, but the
+ * consequence of that choice — which engine actually answered the last route, and
+ * what became of the others — is a fact about a past event, and a driver
+ * debugging "why was this route slow" needs both without navigating between them.
+ */
+function EnginesScreen(props: {
+  selection: EngineSelection;
+  setSelection: (s: EngineSelection) => void;
+  online: boolean;
+  hasMap: boolean;
+  apiKey: string; setApiKey: (v: string) => void;
+  endpoint: string; setEndpoint: (v: string) => void;
+  provenance: RouteProvenance | null;
+  onBack: () => void;
+}) {
+  const statuses = engineStatuses(
+    { endpoint: props.endpoint, apiKey: props.apiKey },
+    props.hasMap,
+  );
+  const [probes, setProbes] = useState<Record<string, EngineProbe>>({});
+  const [probing, setProbing] = useState<string | null>(null);
+
+  const test = async (id: EngineId) => {
+    setProbing(id);
+    // Probes are deliberately not cached: a stale "reachable" is worse than no
+    // answer at all when the question is "is it up right now".
+    const r = await probeEngine(id, { endpoint: props.endpoint, apiKey: props.apiKey }, props.hasMap);
+    setProbes((p) => ({ ...p, [id]: r }));
+    setProbing(null);
+  };
+
+  const chosen = props.selection.preferred;
+  const servedNow = props.provenance?.used;
+
+  return (
+    <div className="search-root">
+      <div className="top-app-bar">
+        <button className="icon-btn" onClick={props.onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
+        <div style={{ ...T.body1m, marginLeft: DP.P2 }}>Engines</div>
+      </div>
+
+      <div className="settings-body">
+        <div className="section-head" style={T.body3m}>Route with</div>
+        {statuses.map((s) => (
+          <button
+            key={s.id}
+            className={`provider-row ${chosen === s.id ? 'selected' : ''}`}
+            onClick={() => props.setSelection({ ...props.selection, preferred: s.id })}
+            aria-pressed={chosen === s.id}
+          >
+            <span className="result-icon">
+              {s.online ? <IconTraffic size={ICON.secondary} /> : <IconFile size={ICON.secondary} />}
+            </span>
+            <span className="result-text">
+              <span style={T.body3m}>{s.label}</span>
+              {/* State the verdict explicitly rather than leaving it to be
+                  inferred from the subtitle. "Ready" and the reason it is not are
+                  the two things a driver needs before choosing, and a subtitle
+                  that merely describes the engine answers neither. */}
+              <span style={{ ...T.sub3, color: s.ready ? accentNight : '#E8A0A0' }}>
+                {s.ready ? `Ready — ${s.subtitle}` : `Unavailable — ${s.reason}`}
+              </span>
+              {servedNow === s.id && props.provenance && (
+                <span style={{ ...T.sub3, color: accentNight }}>served the current route</span>
+              )}
+            </span>
+            <span className={`radio ${chosen === s.id ? 'on' : ''}`} />
+          </button>
+        ))}
+
+        <div className="section-head" style={T.body3m}>If it cannot route</div>
+        <div className="seg">
+          <button
+            className={props.selection.allowFallback ? 'on' : ''}
+            onClick={() => props.setSelection({ ...props.selection, allowFallback: true })}
+          >
+            Use another engine
+          </button>
+          <button
+            className={!props.selection.allowFallback ? 'on' : ''}
+            onClick={() => props.setSelection({ ...props.selection, allowFallback: false })}
+          >
+            Fail instead
+          </button>
+        </div>
+        <div className="hint-card" style={{ marginTop: DP.P2 }}>
+          <div style={{ ...T.sub3, color: ink.secondary }}>
+            {props.selection.allowFallback
+              ? 'Engines are tried in order and the first one that can route wins. The route is labelled with whichever engine actually answered.'
+              : 'Only the engine above may answer. If it cannot route, the request fails instead of quietly using another one.'}
+          </div>
+        </div>
+
+        {(chosen === 'valhalla-simplerouting' || chosen === ANY_ONLINE) && (
+          <label className="field">
+            <span style={{ ...T.sub2, color: ink.secondary }}>API key (Simplerouting.io)</span>
+            <input value={props.apiKey} onChange={(e) => props.setApiKey(e.target.value)} placeholder="sk-…" />
+          </label>
+        )}
+        {(chosen === 'valhalla-custom' || chosen === ANY_ONLINE) && (
+          <label className="field">
+            <span style={{ ...T.sub2, color: ink.secondary }}>Custom endpoint</span>
+            <input value={props.endpoint} onChange={(e) => props.setEndpoint(e.target.value)} placeholder="http://192.168.1.10:8002" />
+          </label>
+        )}
+
+        <div className="section-head" style={T.body3m}>Last route request</div>
+        {props.provenance ? (
+          <div className="hint-card">
+            <div style={T.body3m}>
+              Answered by {describeProvenance(props.provenance.used, props.provenance.fellBack)}
+            </div>
+            <div style={{ ...T.sub3, color: ink.secondary, marginBottom: DP.P2 }}>
+              {props.provenance.totalMs} ms total ·{' '}
+              {hasManeuvers(props.provenance.used)
+                ? 'turn-by-turn available'
+                : 'no turn-by-turn from this engine'}
+            </div>
+            {props.provenance.attempts.map((a) => (
+              <div key={a.engine} style={{ ...T.sub3, color: ink.secondary, marginBottom: DP.P1 / 2 }}>
+                <span
+                  style={{
+                    color: a.outcome === 'served'
+                      ? accentNight
+                      : a.outcome === 'not-tried'
+                        ? ink.secondary
+                        : '#E8A0A0',
+                  }}
+                >
+                  {describeAttempt(a)}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="hint-card">
+            <div style={{ ...T.sub3, color: ink.secondary }}>
+              No route requested yet, so no engine has proven itself.
+            </div>
+          </div>
+        )}
+
+        <div className="section-head" style={T.body3m}>Test engines</div>
+        {statuses.map((s) => (
+          <div key={s.id} className="region-actions" style={{ marginBottom: DP.P2 }}>
+            <span style={{ ...T.sub3, color: ink.secondary, flex: 1 }}>
+              {s.label}
+              {probes[s.id] ? ` — ${probes[s.id].detail}` : ''}
+            </span>
+            <button
+              className="text-btn"
+              onClick={() => test(s.id)}
+              disabled={probing === s.id}
+            >
+              {probing === s.id ? 'Testing…' : 'Test'}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* --------------------------- SettingsScreen ------------------------- */
 
 function SettingsScreen(props: {
-  provider: ProviderId; setProvider: (p: ProviderId) => void;
+  selection: EngineSelection; setSelection: (s: EngineSelection) => void;
   online: boolean;
   dataset: OsmDataset | null;
   regionCount: number;
   apiKey: string; setApiKey: (v: string) => void;
   endpoint: string; setEndpoint: (v: string) => void;
   units: 'metric' | 'imperial'; setUnits: (u: 'metric' | 'imperial') => void;
+  provenance: RouteProvenance | null;
   onBack: () => void; onImport: () => void; onRegions: () => void;
+  onEngines: () => void;
 }) {
+  const serving = props.provenance
+    ? describeProvenance(props.provenance.used, props.provenance.fellBack)
+    : null;
   return (
     <div className="search-root">
       <div className="top-app-bar">
@@ -1522,36 +1830,24 @@ function SettingsScreen(props: {
       </div>
 
       <div className="settings-body">
-        <div className="section-head" style={T.body3m}>Routing provider</div>
-        {PROVIDERS.map((prov) => (
-          <button
-            key={prov.id}
-            className={`provider-row ${props.provider === prov.id ? 'selected' : ''}`}
-            onClick={() => props.setProvider(prov.id)}
-          >
-            <span className="result-icon">
-              {prov.online ? <IconTraffic size={ICON.secondary} /> : <IconFile size={ICON.secondary} />}
-            </span>
-            <span className="result-text">
-              <span style={T.body3m}>{prov.label}</span>
-              <span style={{ ...T.sub3, color: ink.secondary }}>{prov.subtitle}</span>
-            </span>
-            <span className={`radio ${props.provider === prov.id ? 'on' : ''}`} />
-          </button>
-        ))}
-
-        {props.provider === 'valhalla-simplerouting' && (
-          <label className="field">
-            <span style={{ ...T.sub2, color: ink.secondary }}>API key</span>
-            <input value={props.apiKey} onChange={(e) => props.setApiKey(e.target.value)} placeholder="sk-…" />
-          </label>
-        )}
-        {props.provider === 'valhalla-custom' && (
-          <label className="field">
-            <span style={{ ...T.sub2, color: ink.secondary }}>Endpoint</span>
-            <input value={props.endpoint} onChange={(e) => props.setEndpoint(e.target.value)} placeholder="http://192.168.1.10:8002" />
-          </label>
-        )}
+        <div className="section-head" style={T.body3m}>Routing</div>
+        <button className="hint-card" onClick={props.onEngines} style={{ textAlign: 'left', width: '100%' }}>
+          <div style={T.body3m}>
+            {props.selection.preferred === ANY_ONLINE
+              ? ANY_ONLINE_LABEL
+              : PROVIDERS.find((p) => p.id === props.selection.preferred)?.label ?? 'Engine'}
+          </div>
+          <div style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1 }}>
+            {serving
+              ? `Last route answered by ${serving}`
+              : 'No route requested yet — choose an engine'}
+          </div>
+          <div style={{ ...T.sub3, color: ink.secondary }}>
+            {props.selection.allowFallback
+              ? 'May substitute another engine if this one cannot route'
+              : 'Fails rather than substituting'}
+          </div>
+        </button>
 
         <div className="section-head" style={T.body3m}>Units</div>
         <div className="seg">
