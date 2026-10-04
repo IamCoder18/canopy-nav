@@ -54,23 +54,24 @@ export async function routeWithTraffic(
   }
 
   try {
-    const routes: Route[] = [];
-    for (let i = 0; i < maxAlternates; i++) {
-      const r = await routeOnValhalla(
-        {
-          from,
-          to,
-          costing: opts.costing ?? 'auto',
-          units: opts.units ?? 'km',
-          // Ask Valhalla for distinct alternates; it de-duplicates internally.
-          ...(i === 0 ? {} : { avoid: [] }),
-        },
-        opts.endpoint,
-        opts.headers,
-      );
-      routes.push(r);
-      // If the provider won't produce a new distinct route, stop early.
-      if (i > 0 && sameGeometry(routes[0], r)) break;
+    // One request asking for several distinct paths. Repeating the same request
+    // with an empty `avoid` is a no-op, so a deterministic provider would return
+    // the identical route every time and no comparison would ever be possible.
+    const primary = await routeOnValhalla(
+      {
+        from,
+        to,
+        costing: opts.costing ?? 'auto',
+        units: opts.units ?? 'km',
+        alternates: maxAlternates,
+      },
+      opts.endpoint,
+      opts.headers,
+    );
+
+    const routes: Route[] = [primary];
+    for (const alt of primary.alternates ?? []) {
+      routes.push(alt);
     }
 
     if (!routes.length) return null;
@@ -80,9 +81,11 @@ export async function routeWithTraffic(
     const secondsSaved = Math.max(0, slowest.summary.time - fastest.summary.time);
 
     // A meaningful saving implies the times really did diverge, i.e. the
-    // provider had traffic to work with. Otherwise be honest that it didn't.
+    // provider had genuinely distinct paths to compare. Otherwise be honest that
+    // it did not, rather than dressing a single route up as a traffic verdict.
+    const distinct = routes.filter((r, i) => i === 0 || !sameGeometry(routes[0], r));
     const confidence: TrafficAwareRoute['confidence'] =
-      routes.length === 1 ? 'none' : secondsSaved > 60 ? 'live' : 'estimated';
+      distinct.length === 1 ? 'none' : secondsSaved > 60 ? 'live' : 'estimated';
 
     // A `note` is only set when there is something true to say, so the UI never
     // has to invent wording for a verdict we did not actually reach.

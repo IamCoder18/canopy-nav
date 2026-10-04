@@ -28,7 +28,7 @@ import { searchAll } from './osm/regions';
 import {
   ManeuverIcon, IconSearch, IconBack, IconClose, IconMute, IconSound, IconOverview,
   IconLayers, IconTraffic, IconSettings, IconHome, IconGoto, IconChevronRight,
-  IconFile, IconLocate, IconCar,
+  IconFile, IconLocate, IconCar, IconRefresh,
 } from './icons';
 
 type Screen = 'home' | 'search' | 'preview' | 'navigating' | 'steps' | 'settings' | 'import' | 'regions';
@@ -135,6 +135,23 @@ function congestionSpans(route: Route): TrafficOverlay[] {
     }
   }
   return spans;
+}
+
+/**
+ * Where on the route a position sits, as a vertex index.
+ *
+ * `snapToPolyline` reports the index of the *segment* it projected onto, which
+ * is what you want for "which leg am I on" but cannot express arrival: a
+ * two-point route — what the offline engine returns for a straight hop along one
+ * way — has a single segment, so its index is always 0 and the destination can
+ * never be reached. With no segment to interpolate, fall back to whichever end
+ * of the line the car is actually nearer.
+ */
+function snappedIndex(pt: LatLng, line: LatLng[], segmentIndex: number): number {
+  const last = line.length - 1;
+  if (last < 1) return 0;
+  if (last > 1) return Math.min(segmentIndex, last);
+  return haversine(pt, line[0]) <= haversine(pt, line[last]) ? 0 : last;
 }
 
 /* ------------------------------ App ------------------------------ */
@@ -285,8 +302,14 @@ export default function App() {
   const trafficDetail = useMemo(() => {
     if (traffic.status === 'probing') return 'Checking the routing provider…';
     if (!trafficReady) return trafficReason;
-    const how = `${traffic.confidence === 'live' ? 'Live data' : 'Estimated data'} — ${traffic.note ?? ''}`;
-    return trafficStale ? `${how} · no signal to refresh` : how;
+    const how = traffic.confidence === 'live' ? 'Live data' : 'Estimated data';
+    // The provider's own saving, in its own units. The panel needs one line, so
+    // it gets the number; the status line under the buttons keeps the sentence.
+    const saved = traffic.secondsSaved >= 60
+      ? `saves about ${Math.max(1, Math.round(traffic.secondsSaved / 60))} min`
+      : traffic.note ?? 'a faster route was picked';
+    const short = `${how} · ${saved}`;
+    return trafficStale ? `${short} · no signal to refresh` : short;
   }, [traffic, trafficReady, trafficStale, trafficReason]);
 
   /** Layers we can genuinely offer, with the reason for anything missing. */
@@ -294,9 +317,7 @@ export default function App() {
     {
       id: 'default',
       label: 'Default',
-      detail: online
-        ? 'Standard style with online map tiles'
-        : 'Standard style drawn from your offline .osm map',
+      detail: online ? 'Online map tiles' : 'Your offline .osm map',
       available: true,
     },
     {
@@ -314,7 +335,6 @@ export default function App() {
     () => (layer === 'traffic' && trafficReady && route ? congestionSpans(route) : []),
     [layer, trafficReady, route],
   );
-  (window as unknown as { __dbg?: unknown }).__dbg = { location, fix, locationMode, progressAlong, layer, traffic: traffic.status, geom: route?.geometry ?? null };
 
   useEffect(() => watchConnectivity(setOnline), []);
 
@@ -526,8 +546,11 @@ export default function App() {
     if (geometry.length < 2) return null;
     const idx = Math.floor(progressAlong * (geometry.length - 1));
     const snap = snapToPolyline(location, geometry);
+    // Where the car actually is on the line, which is what the dimmed portion and
+    // the remaining distance both hang off.
+    const here = snappedIndex(location, geometry, snap.index);
     const totalM = lineLength(geometry);
-    const remainingM = lineLength(geometry.slice(snap.index));
+    const remainingM = lineLength(geometry.slice(here));
 
     // Derive turn instructions from bearing change at each vertex.
     const steps: LegStep[] = [];
@@ -545,7 +568,7 @@ export default function App() {
         distanceLabel: '', distanceMeters: 0, shapeIndex: i,
       });
     }
-    return { snap, remainingM, totalM, steps, travelled: geometry.slice(0, snap.index + 1), idx };
+    return { snap, remainingM, totalM, steps, travelled: geometry.slice(0, here + 1), idx };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route, dataset, progressAlong, location]);
 
@@ -582,16 +605,8 @@ export default function App() {
       positionDrives.current = false;
       return;
     }
-    // `snapToPolyline` reports the index of the *segment* it projected onto, so a
-    // two-point route — which is what the offline engine returns for a straight
-    // hop along one way — can only ever report index 0 and would never reach its
-    // destination. With two points there is nothing to interpolate, so use
-    // whichever end of the line the car is actually nearer.
-    const index = geometry.length === 2
-      ? (haversine(location, geometry[0]) <= haversine(location, geometry[1]) ? 0 : 1)
-      : snap.index;
     positionDrives.current = true;
-    setProgressAlong((prev) => Math.max(prev, routeProgress(geometry, index)));
+    setProgressAlong((prev) => Math.max(prev, routeProgress(geometry, snappedIndex(location, geometry, snap.index))));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navActive, route, location]);
 
@@ -1089,13 +1104,17 @@ function NavOverlay(props: {
           <IconLayers size={ICON.primary} />
         </button>
 
-        {/* Current layer name, so the map is never showing something unnamed. */}
-        <div className="nav-status" role="status">
-          <span style={T.body3m}>{props.layerName}</span>
-          {statusDetail && (
-            <span style={{ ...T.body3, color: ink.secondary }}>{statusDetail}</span>
-          )}
-        </div>
+        {/* Current layer name, so the map is never showing something unnamed.
+            Hidden while the panel is open: the panel names every layer, and two
+            copies of the same sentence on a phone-sized screen is noise. */}
+        {!props.layersOpen && (
+          <div className="nav-status" role="status">
+            <span style={T.body3m}>{props.layerName}</span>
+            {statusDetail && (
+              <span style={{ ...T.body3, color: ink.secondary }}>{statusDetail}</span>
+            )}
+          </div>
+        )}
       </div>
 
       {props.layersOpen && (
@@ -1189,24 +1208,26 @@ function NavPanel(props: {
         </button>
       </div>
 
-      {props.options.map((o) => (
-        <button
-          key={o.id}
-          className={`layer-row ${o.id === props.layer ? 'on' : ''}`}
-          onClick={() => props.onPick(o.id)}
-          disabled={!o.available}
-          aria-pressed={o.id === props.layer}
-          aria-label={`${o.label} map layer. ${o.detail}`}
-        >
-          <span className="layer-text">
-            <span style={T.body3m}>{o.label}</span>
-            <span style={{ ...T.body3, color: o.available ? ink.secondary : ink.tertiary }}>
-              {o.detail}
+      <div className="layer-list">
+        {props.options.map((o) => (
+          <button
+            key={o.id}
+            className={`layer-row ${o.id === props.layer ? 'on' : ''}`}
+            onClick={() => props.onPick(o.id)}
+            disabled={!o.available}
+            aria-pressed={o.id === props.layer}
+            aria-label={`${o.label} map layer. ${o.detail}`}
+          >
+            <span className="layer-text">
+              <span style={T.body3m}>{o.label}</span>
+              <span style={{ ...T.body3, color: o.available ? ink.secondary : ink.tertiary }}>
+                {o.detail}
+              </span>
             </span>
-          </span>
-          <span className={`radio ${o.id === props.layer ? 'on' : ''}`} />
-        </button>
-      ))}
+            <span className={`radio ${o.id === props.layer ? 'on' : ''}`} />
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

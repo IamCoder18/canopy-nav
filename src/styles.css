@@ -350,12 +350,16 @@ code {
 .nav-panel {
   position: absolute;
   left: 12%;
-  bottom: 152px;
-  width: min(420px, calc(100% - 24% - 24px));
-  max-height: calc(100% - 440px);
+  bottom: 136px;
+  width: min(560px, calc(100% - 24% - 24px));
+  max-height: calc(100% - 424px);
   overflow-y: auto;
+  /* .nav-root is click-through to the map; a popover is not. */
+  pointer-events: auto;
+  /* Above the bottom bar: the panel is rendered before it in the document. */
+  z-index: 2;
   display: flex; flex-direction: column;
-  padding: 8px 16px 12px;
+  padding: 4px 16px;
   border-radius: 8px;
   background: rgba(14, 16, 19, 0.96);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
@@ -366,11 +370,15 @@ code {
 }
 .panel-head > span:first-child { flex: 1; padding-left: 8px; }
 
+.layer-list { display: block; }
 .layer-row {
   display: flex; align-items: center; gap: 16px;
   width: 100%;
+  /* Never let the panel's height cap squeeze a row: a row whose text spills
+     past its own border reads as a rendering fault, not as scrollable content. */
+  flex: 0 0 auto;
   min-height: 84px;
-  padding: 12px 8px;
+  padding: 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   text-align: left;
   color: inherit;
@@ -603,7 +611,31 @@ code {
     justify-content: flex-end;
     max-height: none;
   }
-  .nav-panel { bottom: 112px; max-height: calc(100% - 240px); }
+  /* A 412dp-tall screen has no room for a floating card between the maneuver
+     banner and the bottom bar, so the panel moves clear of the control stack,
+     sits on the bottom bar's top edge, and puts its two options side by side
+     instead of stacked. */
+  .nav-panel {
+    left: 24px; right: 208px; bottom: 96px;
+    width: auto;
+    max-height: calc(100% - 196px);
+    padding: 0 8px 4px;
+  }
+  .layer-list { display: grid; grid-template-columns: 1fr 1fr; column-gap: 8px; }
+}
+
+/* Tall but narrow (portrait phone): the control stack owns the right edge down
+   to y=472, so the panel takes the full width *below* it instead of squeezing
+   into the 190dp that is left beside the stack. 488 = stack top 120 + four 76dp
+   buttons + three 16dp gaps + 16dp of breathing room. */
+@media (max-width: 560px) and (min-height: 521px) {
+  .nav-panel {
+    left: 24px; right: 24px;
+    top: 488px; bottom: 136px;
+    width: auto;
+    max-height: none;
+    padding: 4px 16px;
+  }
 }
 
 /* Category chips — browse the offline gazetteer by what it actually contains */

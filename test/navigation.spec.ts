@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   createTracker, updateTracker, offRouteThreshold, progressAlong,
   rerouteOrigin, distanceToRouteAhead,
@@ -102,6 +102,55 @@ describe('off-route detection', () => {
 });
 
 describe('traffic', () => {
+  it('never claims traffic from a single undifferentiated route', () => {
+    // One route means the provider gave no alternative to compare against, so
+    // any verdict beyond 'none' would be invention.
+    const r = describeTraffic({ route: mkRoute(600), confidence: 'none', secondsSaved: 0 }, true);
+    expect(r).toMatch(/no live traffic/i);
+  });
+
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('asks for distinct alternates instead of repeating one request', async () => {
+    // Sending the same request three times with `avoid: []` is a no-op, so a
+    // deterministic provider returns the identical route every time and the
+    // verdict can only ever be 'none' -- the traffic toggle stays permanently
+    // disabled against a stock Valhalla.
+    const calls: any[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: any) => {
+      const body = JSON.parse(init.body);
+      calls.push(body);
+      const trip = (time: number, shape: string) => ({
+        trip: {
+          units: 'km',
+          summary: { length: 1, time, min_lat: 0, min_lon: 0, max_lat: 0, max_lon: 1 },
+          legs: [{ maneuvers: [{ type: 1, instruction: 'Go', begin_shape_index: 0, end_shape_index: 1, length: 1, time }], summary: { length: 1, time, min_lat: 0, min_lon: 0, max_lat: 0, max_lon: 1 }, shape }],
+        },
+      });
+      return {
+        ok: true, status: 200,
+        json: async () => ({
+          trip: trip(600, 'oh`eBoh`eB').trip,
+          alternatives: [{ trip: trip(300, 'oh`eBoh`fB').trip }],
+        }),
+      };
+    }));
+
+    const r = await routeWithTraffic([0, 0], [0.01, 0], {
+      endpoint: 'https://example.test', offline: false, maxAlternates: 3,
+    } as any);
+
+    // exactly one request, and it asked for alternates
+    expect(calls).toHaveLength(1);
+    expect(calls[0].alternates).toBe(3);
+
+    // the genuinely different path is found and the saving reported
+    expect(r).not.toBeNull();
+    expect(r!.confidence).toBe('live');
+    expect(r!.secondsSaved).toBe(300);
+    expect(r!.note).toMatch(/saving/i);
+  });
+
   const mkRoute = (time: number): Route => ({
     geometry: ROUTE,
     legs: [],

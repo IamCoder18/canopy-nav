@@ -249,7 +249,11 @@ describe('routeOnValhalla — response parsing', () => {
     const route = await routeOnValhalla({ from: FROM, to: TO });
     expect(route.maneuvers).toEqual(TRIP_JSON.trip.legs[0].maneuvers);
     expect(route.maneuvers).toHaveLength(3);
-    expect(route.summary).toEqual(TRIP_JSON.trip.summary);
+    // summary.length is normalised to METRES regardless of the requested units,
+    // because every consumer (formatDistance, traffic, ETA) treats a length as
+    // metres. Previously a km response passed 0.42 straight through and the
+    // preview rendered "Distance 0 m".
+    expect(route.summary).toEqual({ ...TRIP_JSON.trip.summary, length: 0.42 * 1000 });
     expect(route.units).toBe('km');
     expect(route.engine).toBe('valhalla');
     expect(route.legs).toHaveLength(1);
@@ -268,7 +272,7 @@ describe('routeOnValhalla — response parsing', () => {
     delete json.trip.summary;
     respond(json);
     const route = await routeOnValhalla({ from: FROM, to: TO });
-    expect(route.summary).toEqual(LEG_SUMMARY);
+    expect(route.summary).toEqual({ ...LEG_SUMMARY, length: LEG_SUMMARY.length * 1000 });
   });
 
   it('falls back to the requested units when the server omits units', async () => {
@@ -294,6 +298,18 @@ describe('routeOnValhalla — response parsing', () => {
     respond(json);
     const route = await routeOnValhalla({ from: FROM, to: TO });
     expect(route.geometry).toHaveLength(decodePolyline(LEG_SHAPE, 6).length);
+  });
+
+  it('normalises summary.length to metres for both unit systems', async () => {
+    // A km response and a miles response must both land in metres, or the
+    // distance shown to the driver depends on which provider answered.
+    respond(TRIP_JSON);
+    const km = await routeOnValhalla({ from: FROM, to: TO, units: 'km' });
+    respond(TRIP_JSON);
+    const mi = await routeOnValhalla({ from: FROM, to: TO, units: 'miles' });
+    // the fixture's summary says 0.42; 0.42 km = 420 m, 0.42 mi = 675.9 m
+    expect(km.summary.length).toBeCloseTo(420, 6);
+    expect(mi.summary.length).toBeCloseTo(0.42 * 1609.344, 6);
   });
 
   it('concatenates every leg into route.geometry', async () => {
