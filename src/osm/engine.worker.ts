@@ -729,21 +729,19 @@ function stepCost(g: RoadGraph, e: number, backwards: boolean): number {
 }
 
 /**
- * Bidirectional A* (Ikeda et al.) over the road graph.
- *
- * Both fronts use `h / 2`. Using the full heuristic on each side makes the
- * frontiers over-energetic and can return a valid-but-suboptimal path; halving
-/**
  * A* over the road graph.
  *
- * Unidirectional on purpose. A bidirectional variant was tried and its path
- * reconstruction produced discontinuous geometry (meeting node stitched without
- * verifying the halves connect), which is far worse than being slower. On real
- * extracts the great-circle heuristic is strong enough that a single front is
- * fast, and this version is verified against a Dijkstra reference.
+ * Unidirectional on purpose. A bidirectional variant (Ikeda et al., with `h/2`
+ * on each front and a meeting-node termination test) was implemented and
+ * removed: its search found the correct optimum but its path reconstruction
+ * produced discontinuous geometry, because the two halves were stitched without
+ * verifying they actually connect. A valid-but-broken path is far worse than a
+ * slower correct one, and on road networks the great-circle heuristic is strong
+ * enough that a single front stays fast.
  *
  * Edge costs are travel time in seconds, so the heuristic is a straight-line
- * distance divided by an optimistic speed — that keeps it admissible.
+ * distance divided by an optimistic speed — that keeps it admissible, so the
+ * route returned is optimal for the cost model.
  */
 export function routeOnGraph(g: RoadGraph, from: LatLng, to: LatLng): RouteResult | null {
   const index = indexFor(g);

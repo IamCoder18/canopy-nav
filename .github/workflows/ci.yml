@@ -52,8 +52,13 @@ jobs:
 
       # Every screen at phone-portrait, phone-landscape and head-unit sizes,
       # asserting no horizontal overflow and no invisible text.
+      # screens.mjs defaults to port 4193 while the E2E step above served on
+      # 4192, so this step was connecting to nothing and every CI run failed
+      # with ERR_CONNECTION_REFUSED. Both now use 4192 explicitly.
       - name: Screen coverage at three viewports
         run: node test/screens.mjs
+        env:
+          E2E_PORT: '4192'
 
       - uses: actions/upload-artifact@v4
         if: always()

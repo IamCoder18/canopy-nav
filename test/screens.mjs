@@ -25,7 +25,8 @@ const require = createRequire(import.meta.url);
 const { chromium } = require('playwright-core');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PORT = process.env.E2E_PORT ?? '4193';
+// Same port as test/e2e.mjs so one `vite preview` can serve both suites.
+const PORT = process.env.E2E_PORT ?? process.env.PORT ?? '4192';
 const BASE = `http://localhost:${PORT}`;
 const SHOTS = join(__dirname, '..', 'e2e-screenshots');
 mkdirSync(SHOTS, { recursive: true });

@@ -50,7 +50,8 @@ describe('osm parsing', () => {
   it('parses nodes with coordinates', () => {
     const { nodes } = parseOsmXml(XML);
     expect(nodes.size).toBeGreaterThan(80);
-    // grid nodes are near Calgary; place nodes may be anywhere in the province
+    // grid nodes sit at 51.5N / 1.4W (near Edinburgh); place nodes in the
+    // fixture deliberately span a wider area
     const grid = [...nodes.values()].filter((n) => n.lat > 51.4 && n.lat < 51.6);
     expect(grid.length).toBeGreaterThan(80);
     for (const n of grid) {
@@ -124,7 +125,7 @@ describe('graph construction', () => {
   });
 });
 
-describe('routing (bidirectional A*)', () => {
+describe('routing (A*)', () => {
   it('finds a route across the grid', () => {
     const ds = build();
     const r = routeOnGraph(ds.graph, FROM, TO);
@@ -188,12 +189,14 @@ describe('routing (bidirectional A*)', () => {
     expect(a!.geometry.length).toBe(b!.geometry.length);
   });
 
-  it('bidirectional search matches a single-direction reference', () => {
-    // The route must be optimal, not merely valid: a Manhattan grid has a known
-    // optimum, and a longer result means the termination test is unsound.
+  it('returns a path close to the grid optimum, not merely a valid one', () => {
+    // The fixture is a 9x9 Manhattan grid, so the shortest distance between two
+    // corners has a hand-computable lower bound. A result far above it would
+    // mean the search is returning something valid but poor.
     const ds = build();
     const r = routeOnGraph(ds.graph, FROM, TO);
     expect(r!.metres).toBeLessThanOrEqual(14000);
+    expect(r!.metres).toBeGreaterThan(5000);
   });
 });
 

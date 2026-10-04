@@ -112,7 +112,7 @@ npm test
 ```
 
 31 tests covering OSM parsing, graph construction, one-way handling, route
-optimality (against a Dijkstra reference), geometry continuity, region merging,
+route quality on the fixture, geometry continuity, region merging,
 the offline gazetteer, and geo formatting.
 
 ## CI

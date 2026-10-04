@@ -34,7 +34,7 @@ type Maneuver =
 
 const STROKE = { fill: 'none', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const;
 
-export function ManeuverIcon({ kind, size = 24, color: c = '#fff', className }: P & { kind: Maneuver }) {
+export function ManeuverIcon({ kind, size = 24, color: c = 'currentColor', className }: P & { kind: Maneuver }) {
   const p = { ...s(size), className };
   const stroke = { stroke: c, ...STROKE };
 
@@ -210,6 +210,29 @@ export function ManeuverIcon({ kind, size = 24, color: c = '#fff', className }: 
           <path d="M12 9 V4" {...stroke} />
         </svg>
       );
+    // Arrival with a side of travel. These were declared in the union but had no
+    // case, so they fell through to `default` and silently rendered as a plain
+    // arrival pin -- Valhalla emits these types (5 and 6) for arrivals from the
+    // left or right.
+    case 'destination-left':
+    case 'destination-right': {
+      const fromLeft = kind === 'destination-left';
+      const armY = 12;
+      const tipX = fromLeft ? 19 : 5;
+      return (
+        <svg {...p}>
+          <path
+            d={`M${fromLeft ? 5 : 19} 4 V${armY} H9`}
+            {...stroke}
+          />
+          <path
+            d={`M9 ${armY - 5} L${tipX} ${armY} L9 ${armY + 5}`}
+            {...stroke}
+          />
+        </svg>
+      );
+    }
+
     case 'destination':
     case 'arrive':
     default:
@@ -221,6 +244,8 @@ export function ManeuverIcon({ kind, size = 24, color: c = '#fff', className }: 
       );
   }
 }
+
+export type ManeuverKindForTest = Maneuver;
 
 /* ------------------------------------------------------------------ */
 /* System icons                                                        */
