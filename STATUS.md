@@ -5,8 +5,9 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v0.11.1 — `main` is 2 commits ahead and **untagged**
-(engine selection + provenance). See §9.
+**Latest release:** v0.11.1 — `main` is ahead and **untagged**: engine selection
+and provenance, rerouting, streaming parse, offline LOD, structural tokens, the
+in-repo test server. See §9.
 
 ---
 
@@ -32,8 +33,8 @@ stands. **Bold** = fully working and verified.
 | # | Request | Status | Where |
 |---|---|---|---|
 | 1 | Android app using Expo **or** Capacitor — agent's choice | **Done.** Capacitor chosen (§5.1) | — |
-| 2 | Visually mimic an Android Auto screen as closely as possible | **Done.** AAOS design tokens taken from Google's published specs; "close enough" was later relaxed but the real spec values were kept | `src/theme.ts` |
-| 3 | Prefer TypeScript | **Done.** ~9,100 lines TS/TSX. Exactly one hand-written Java file on Android (`MainActivity.java`, immersive mode only) plus XML themes; everything else is TypeScript | `android/` |
+| 2 | Visually mimic an Android Auto screen as closely as possible | **Done.** AAOS design tokens taken from Google's published specs. App bar and grid cell are now real tokens rather than CSS literals (§3.14) | `src/theme.ts` |
+| 3 | Prefer TypeScript | **Done.** ~10,400 lines TS/TSX. Exactly one hand-written Java file on Android (`MainActivity.java`, immersive mode only) plus XML themes; everything else is TypeScript | `android/` |
 | 4 | Other libraries allowed (e.g. Ferrostar) | Considered and rejected — Ferrostar duplicates what the built-in engine does and adds no offline win here | §5.2 |
 | 5 | Support `.osm` files | **Done.** XML parser | `src/osm/engine.worker.ts` |
 | 6 | Use Valhalla for car navigation | **Done** as an optional provider; **not** the on-device default (§5.3) | `src/nav/valhalla.ts` |
@@ -47,10 +48,10 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 13 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 15 tags, 13 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 418 unit tests across 13 files, plus 2 browser suites | `test/` |
-| 18 | Every screen and function verified in real Chromium at mobile size | **Mostly done.** All 9 screens are visited at 3 viewports, 2 of them mobile-sized. Engine selection, per-engine readiness and the post-route provenance trace are covered in `e2e.mjs`. Still not covered: destructive/long-tail flows such as rerouting mid-turn, and the emulator is not a phone | `test/screens.mjs` |
-| 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what a 6-hour budget covered, including what it did not | — |
-| 20 | Host on 0.0.0.0 so it can be tested | **Done.** http://192.168.1.83:8080, APK at `/dl/canopy-nav.apk` | — |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 516 unit tests across 18 files, plus 2 browser suites | `test/` |
+| 18 | Every screen and function verified in real Chromium at mobile size | **Mostly done.** All 10 screens are visited at 3 viewports, 2 of them mobile-sized. Engine selection, per-engine readiness, the post-route provenance trace, a streamed import and **the full off-route reroute flow** are covered in `e2e.mjs` — the last of these being the gap this requirement named. Still not covered: reroute *failure* paths on device, and the emulator is not a phone | `test/screens.mjs` |
+| 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what two 6-hour budgets covered, including what they did not | — |
+| 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
 | 21 | Update STATUS.md continuously | **This document** | — |
 
 ---
@@ -60,11 +61,14 @@ stands. **Bold** = fully working and verified.
 | Gate | Command | Result |
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
-| Unit tests | `npm test` | **418 passing**, 13 files |
-| End-to-end | `npm run e2e` | **33 checks** against the built bundle |
+| Unit tests | `npm test` | **516 passing**, 18 files |
+| End-to-end | `npm run e2e` | **39 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **14 checks × 3 viewports = 42** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | APK | `npm run apk` | 7.8 MB debug APK, `com.canopy.nav`, minSdk 23, targetSdk 35 |
-| Device | Android 14 emulator, API 34, 2340×1080 | installs, runs, **no console errors**, real GPS confirmed |
+| Device | Android 14 emulator, API 34, 2340×1080 | installs, runs, no new console errors, real GPS confirmed |
+
+Every count in this table is measured by counting `PASS` lines from an actual
+run, not carried forward. Two earlier figures were wrong (§2 note below).
 
 **Note on the device gate.** The app logs three `Expected value to be of type
 number, but found null instead` warnings on launch. These are **pre-existing**,
@@ -78,7 +82,7 @@ previously recorded. Both were re-measured by counting `PASS`/`FAIL` lines from
 an actual run rather than carried forward. The 87 in particular could not be
 reproduced under any configuration tried, so it was not a real measurement. Some
 checks are conditional (a screen that fails to mount skips its follow-ups), which
-is likely how the figure drifted. This is the same failure mode as §3.11's red
+is likely how the figure drifted. This is the same failure mode as §3.16's red
 CI runs: a number nobody re-reads stops meaning anything.
 
 ### Test breakdown
@@ -98,6 +102,11 @@ CI runs: a number nobody re-reads stops meaning anything.
 | `navigation.spec.ts` | 17 | off-route detection, speed-scaled thresholds, traffic verdicts |
 | `pbf.spec.ts` | 11 | PBF vs XML parser equivalence on a hand-built file and the whole fixture |
 | `engines.spec.ts` | 38 | engine selection policy, plan ordering, per-engine readiness reasons, the attempt trace, strict mode |
+| `reroute.spec.ts` | 23 | off-route confirmation window, storm guards, backoff growth, tracker reset semantics, banner content |
+| `stream.spec.ts` | 30 | streaming XML parse ≡ whole-file parse across chunk sizes, incl. 1-char and seeded fuzz; progress; degenerate input |
+| `mapstyle.spec.ts` | 20 | offline style LOD: every line layer has a low-zoom floor, arterials branch on class, layer ordering, no duplicate ids |
+| `serve.spec.ts` | 14 | test-server path containment against plain, encoded and dot-segment traversal |
+| `theme.spec.ts` | 11 | `theme.ts` ↔ `styles.css` token-name agreement, fallbacks present, `:root` declarations |
 
 ---
 
@@ -143,7 +152,8 @@ no network.
 
 **How.** `src/osm/engine.worker.ts` runs in a Web Worker and does four things:
 
-1. **Parse.** Both formats. XML via a streaming regex scanner; PBF via
+1. **Parse.** Both formats, whole or streamed (§3.12). XML via a streaming regex
+   scanner; PBF via
    `src/osm/pbf.ts`, a protobuf reader handling BlobHeader/Blob framing, zlib
    inflation through `DecompressionStream`, and DenseNodes delta decoding.
    The format is sniffed from the first 16 bytes, not the extension, because both
@@ -321,11 +331,13 @@ more capable than the previous behaviour, which was local-only with no fallback.
 
 **How.** Three mechanisms:
 
-1. **Provider chain.** Online providers are tried when a network is believed to
+1. **Provider chain.** Online engines are tried when a network is believed to
    exist; the local engine is always the fallback, so a route never fails
-   outright.
+   outright. Which engine answered is recorded and displayed (§3.6.1), and the
+   driver chooses both the preference and whether substitution is allowed.
 2. **Snapshotted route.** Once fetched, geometry, maneuvers, ETA and steps are
-   all resolved client-side. Guidance continues with no network at all.
+   all resolved client-side. Guidance continues with no network at all. Rerouting
+   (§3.11) works from the snapshotted geometry too.
 3. **Honest degradation.** Traffic is labelled by its real confidence
    (`live` / `estimated` / `none`); verified traffic data is *kept* when signal
    drops, labelled "last known — no signal to refresh", because blanking true
@@ -388,7 +400,152 @@ There is no proxy in a browser, so browser testing could never have caught it.
 The WebView API returns a real Promise and is the same path the browser build
 already exercises, so device and desktop share one implementation.
 
-### 3.11 Release pipeline
+### 3.11 Rerouting
+
+**What.** The app notices you have left the route and gives you a new one,
+without ever taking the old one away first.
+
+**How.** `nav/offroute.ts` holds the *primitives* — a speed-scaled tolerance, a
+6-second confirmation hold, a reroute origin taken from the projected point
+rather than the raw fix. `nav/reroute.ts` holds the *policy* — when to act, how
+long to wait afterwards, what to tell the driver — as pure functions over a
+plain state, so the storm guards are testable without React, timers or a network.
+The navigation effect in `App.tsx` supplies the fix and does what the policy asks;
+it makes no decisions of its own.
+
+Three invariants, in priority order:
+
+1. **A reroute never removes guidance.** The existing route and its maneuvers stay
+   on screen for the whole request, so a driver who is lost is never also left
+   without directions. A failed attempt restores nothing because nothing was
+   removed.
+2. **One attempt at a time.** `busy` latches until the attempt finishes, so a
+   fix storm cannot queue requests that would race and overwrite each other.
+3. **Back off after failure**, doubling to a 120 s cap. Retrying a dead engine
+   every few seconds drains the battery and will not start working on its own.
+
+**Why.** This closes the last gap where an implemented feature was not reachable
+by the user. `offroute.ts` had six exports and the app called two, so the tracker
+and the reroute origin were unit-tested and never invoked — the app did not
+reroute on its own. Requirement #18 named "rerouting mid-turn" as the specific
+uncovered flow, and that is now driven end to end in `test/e2e.mjs`: the geolocation
+fix is walked 3.8 km off the line, held past the confirmation window, and the
+suite asserts the driver is told, that guidance survives, and that the notice
+clears on return.
+
+Four bugs surfaced while building it, all in the first implementation and all
+caught by the tests:
+
+- `finishReroute` reset the tracker on failure as well as success. After a
+  *failed* reroute the driver is still off the original route, so discarding the
+  tracker threw away the evidence that says so — and the app sat in "suspect" for
+  another 6 s window while its own backoff said otherwise.
+- The first-failure backoff was 15 s against a 30 s settle, so the first failure
+  *shortened* the wait. Retrying a dead engine faster than you would settle a
+  fresh route is backwards.
+- The rejoin distance was shown for a merely-*suspect* driver, i.e. "rejoining in
+  700 m" off a single outlier fix. Now only once the deviation is confirmed.
+- `CONFIRM_MS` was private, so the confirmation window was a magic number to any
+  caller reasoning about when a reroute is allowed. Exported as
+  `CONFIRM_WINDOW_MS`.
+
+### 3.12 Streaming the OSM parse
+
+**What.** Importing a 900 MB province no longer requires holding it in memory
+twice.
+
+**How.** `parseOsmXmlStream` consumes an async chunk stream and retains only the
+incomplete tail. Everything up to the last safe element boundary is scanned and
+dropped. Two details carry the weight:
+
+- `TextDecoder` runs with `{stream: true}`, so a multi-byte UTF-8 sequence split
+  across two reads is held in decoder state rather than becoming replacement
+  characters. Decoding each chunk independently corrupts every non-ASCII place
+  name, subtly, and only on large files.
+- The boundary rule is "after a complete `<node>`/`<way>`", expressed with the
+  same grammar the scanner consumes.
+
+`parseOsmXml` (whole string) and the streaming path share `scanSegment` and one
+boundary function. That is deliberate: two implementations of the same parser
+would eventually disagree about a malformed element, and the streaming one is
+the one that runs where a silent divergence is hardest to notice. Equivalence is
+then a testable property rather than an aspiration.
+
+**Why.** The download already streamed — only the parse did not, so peak memory
+was roughly twice the file size. The `ReadableStream` is passed in the *transfer*
+list, not cloned: Chrome rejects a cloned stream outright ("a ReadableStream could
+not be cloned because it was not transferred"), and transferring also moves the
+handle instead of copying it.
+
+PBF still collects to a contiguous buffer. Protobuf framing needs sequential
+access, so it cannot be chunked at an element boundary the way XML can. That is
+stated at the call site rather than left to be discovered.
+
+Two bugs, both mine, both caught by the tests:
+
+- The first cut rule was "after any `>` whose remainder looks like a tag start",
+  which split a tagged node across two segments: the opening `<node id=...>` ended
+  one, the `<tag>` children and `</node>` the next, and neither half matched. A
+  tagged placemark and its way were silently dropped. Only the
+  one-character-at-a-time chunking test catches this, because it is the only
+  chunking guaranteed to land inside an element.
+- I had commented that a `ReadableStream` is structured-cloneable rather than
+  transferable. That is false, and the browser corrected me immediately.
+
+### 3.13 Offline map level of detail
+
+**What.** The offline map is legible when zoomed out, which it was not.
+
+**How.** The geometry was never missing — `roadsToGeoJSON` already mirrors every
+road in the dataset into a MapLibre `GeoJSONSource`. The width ramp's first stop
+was zoom 10, and a province fits the viewport at about zoom 6, so every road drew
+at a single flat pixel. Arterials are now held near their high width down to zoom
+6, and the low-zoom value itself branches on class; minor roads moved to their own
+layer with a floor and lower opacity when far out; water is floored too.
+
+**Why.** This is a style problem that looked like a data problem, and I had it
+filed as a weeks-long MBTiles pipeline before checking. The tell is that one pixel
+of motorway is indistinguishable from one pixel of service road: a single
+`line-width` expression cannot make one class thick at zoom 6 and another almost
+invisible, which is why arterials and minor roads had to become separate layers.
+
+`offlineStyle` moved from `MapView.tsx` into `style.ts` as `offlineStyleSpec`,
+taking the overlay layers as an argument. It had to move for the test to be worth
+anything — `maplibre-gl` pulls in a DOM — and an earlier draft of the test rebuilt
+the layer list locally and asserted against that copy, which would have passed
+even if the shipped style had drifted.
+
+**What is not claimed.** These assertions are structural: every line layer has a
+floor below zoom 10, arterials branch on class at low zoom, minor roads recede.
+They are not pixel comparisons, because the only extract available offline is a
+19-way fixture and it cannot show what a province looks like at zoom 6. Asserting
+on those pixels would be a reassurance, not evidence.
+
+### 3.14 Structural tokens and the test server
+
+**What.** Two requirements that were marked "Done" now rest on things the repo
+owns, rather than on CSS literals and a script in `/tmp`.
+
+**How.** `STRUCTURE.APP_BAR` (96) and `STRUCTURE.GRID_CELL` (158) live in
+`theme.ts` and are published as CSS custom properties by `applyThemeTokens()`.
+CSS cannot import from TypeScript, so the duplication does not vanish — it moves
+from nine call sites to one seam. Every `var()` keeps a literal fallback, because
+a token that fails to resolve is `height: auto`: a silently collapsed app bar
+rather than an error. `test/theme.spec.ts` pins the contract the type system
+cannot see, that `theme.ts` and `styles.css` agree on the names.
+
+`tools/serve.mjs` replaces `/tmp/opencode/serve/serve.mjs` (requirement #20),
+with `npm run serve` and `npm run screens`.
+
+**Why.** Neither was a visual or functional bug; both were claims that stopped
+being reproducible the moment you looked for them. The server is the one piece of
+this project exposed to a network, so its path handling is tested: note the
+behaviour is *clamping*, not refusing — `/../../../etc/passwd` resolves to
+`<ROOT>/etc/passwd`, which does not exist and falls through to the SPA shell. The
+property that matters is that the result never leaves `ROOT`, and that is what the
+tests assert.
+
+### 3.16 Release pipeline
 
 **What.** Public repo; a tag produces a release with an APK.
 
@@ -527,6 +684,16 @@ reachable from browser testing.
   WebView reports no safe-area insets, so `env()` stayed 0. The activity is now
   immersive — which is what Android Auto does anyway.
 
+  *Found later, by reading the two files against each other:*
+  `capacitor.config.ts` also set `adjustMarginsForEdgeToEdge: 'force'`, which
+  contradicts the immersive activity. Forcing Capacitor to inset the WebView for
+  system bars that `applyImmersiveMode()` has just hidden means padding the app by
+  the height of chrome that is not on screen, and the config comment described the
+  margin handling as the solution — so it documented a mechanism the app does not
+  use. Now `'auto'`. This is the same shape as §3.6.1's status pill: two places
+  each believed they owned a decision, and the UI was the only thing that could
+  say which one was lying.
+
 ### 4.5 Build hygiene
 
 **`npx cap sync` never prunes removed files**, so stale JS chunks were packaged
@@ -593,14 +760,14 @@ does not have.
 
 ```
 src/
-  App.tsx                ~1800  screens, navigation state, keyboard shortcuts
+  App.tsx                2029  screens, navigation state, keyboard shortcuts
   theme.ts                 143  AAOS design tokens (colour, type, layout, shape)
   icons.tsx                345  29 maneuver kinds + system icons, hand-drawn SVG
   geo.ts                   173  polyline codec, haversine, formatting, snapping
   styles.css                     layout, insets, responsive rules
 
   osm/
-    engine.worker.ts       923  parse -> graph -> index -> gazetteer, + A*
+    engine.worker.ts      1088  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
     pbf.ts                 584  .osm.pbf protobuf reader
     merge.ts               318  union-find merge of adjacent extracts
     regions.ts             382  RegionLibrary, catalogue, bbox helpers
@@ -614,12 +781,13 @@ src/
     geocode.ts             178  Nominatim client, 1 req/s throttle
     traffic.ts             163  fastest-of-N-alternates traffic verdict
     location.ts            138  device/browser/simulated location
-    offroute.ts            107  deviation detection and reroute origin
+    offroute.ts            114  deviation detection primitives, reroute origin
+    reroute.ts             259  reroute policy: when to act, backoff, banner
     maneuver.ts             85  Valhalla maneuver codes -> icons
 
   map/
     MapView.tsx            272  MapLibre view, tile/offline style switch
-    style.ts               337  Google Maps cartography palette
+    style.ts               452  Google Maps palette + offline LOD style
 
   regions/
     RegionsScreen.tsx      531  manage, catalogue, cross-region route test
@@ -627,11 +795,12 @@ src/
     persist.ts             615  IndexedDB caching of parsed datasets
     download.ts           1270  streaming downloader
 
-test/            418 unit tests, 13 files
-test/e2e.mjs           33 browser checks, built bundle
+test/            516 unit tests, 18 files
+test/e2e.mjs           39 browser checks, built bundle
 test/screens.mjs        14 checks x 3 viewports (42 total)
 tools/osm2pbf.mjs        XML -> PBF encoder (builds the test fixtures;
                             extract slicing is done by osmium on a desktop)
+tools/serve.mjs         LAN static server for on-device manual testing
 ```
 
 ---
@@ -644,48 +813,43 @@ Ordered by how much they matter.
    Android 14 emulator. WebView behaviour, real GPS quality, SAF file import and
    on-phone memory pressure are unproven. This is the largest remaining risk, and
    the one gap no amount of further work here can close — it needs a phone.
-2. **Rerouting is implemented and tested in isolation** (`nav/offroute.ts`, speed-
-   scaled threshold, 6 s confirmation hold, reroute origin from the projected
-   point) but is **not yet wired into the navigation screen**, so the app does not
-   currently reroute on its own. Four of its six exports are dead code in the app:
-   only `offRouteThreshold` and `progressAlong` are called. See §9 for why this is
-   the highest-value remaining item.
-3. **Parse is not streaming.** The download streams; `OsmEngine` reads the whole
-   file, so peak memory during parse is roughly twice the file size — workable but
-   tight for a 900 MB province. Documented in the module header, not solved.
+2. **A real province has never been parsed on device.** Streaming (§3.12) is
+   verified for equivalence and against a 19-way fixture; peak memory on an
+   actual 100–900 MB extract is unmeasured. Streaming removes the ~2× file-size
+   spike but does not prove the parse fits a phone.
+3. **The offline LOD fix is unverified at province scale.** §3.13's assertions are
+   structural (every line layer has a floor below zoom 10, arterials branch on
+   class at low zoom). The only extract available offline is the tiny fixture,
+   which cannot show what a province looks like at zoom 6. See that section for
+   why the claims are worded the way they are.
 4. **SAF file import untested on device.** The picker UI was not automatable over
    adb; browser-tested only. Re-confirmed while building the engine screen: the
    file picker cannot be driven through `adb shell input`, so device runs start
    with no map loaded and the offline engine correctly reports
    "No offline map loaded".
-5. **No offline vector tiles — smaller than it looks.** Offline the map draws from
-   `.osm` geometry, so it is sparse when zoomed out. This is **not** a missing tile
-   pipeline: `map/MapView.tsx:174-176` already feeds `roadsToGeoJSON` /
-   `waterToGeoJSON` / `greenToGeoJSON` straight into MapLibre `GeoJSONSource`s,
-   so all the geometry is already present. "Sparse" is a style and
-   level-of-detail problem, not missing data — an afternoon, not a quarter.
-6. **Three untraced launch warnings.** `Expected value to be of type number, but
+4. **Three untraced launch warnings.** `Expected value to be of type number, but
    found null instead` × 3 on every cold start, including the v0.11.1 baseline.
-   Pre-existing, not a regression, and not yet traced to a source.
-7. **App bar and grid cell are CSS literals, not tokens.** `96px` appears 9 times
-   in `styles.css` and `158px` once; `theme.ts` has no `APP_BAR` or `GRID_CELL`
-   token. They are the correct AAOS spec values, so this is a consistency gap
-   against requirement #2 rather than a visual one. ~15 minutes' work.
-8. **The test server lives in `/tmp`.** Requirement #20's URL is served by
-   `/tmp/opencode/serve/serve.mjs`, which is unversioned and outside the repo;
-   nothing in `package.json` references port 8080. A `/tmp` wipe silently kills
-   the manual-testing setup. ~20 minutes to move to `tools/` + `npm run serve`.
-9. **Offline turn-by-turn infers turns** from bearing changes. Real instructions
+   Pre-existing, not a regression, and not yet traced to a source. Every device
+   check in this record compares against exactly these three.
+5. **Reroute is wired but its failure path is thin.** The app now reroutes on its
+   own (§3.11), and the browser suite drives the full off-route flow. Not yet
+   exercised: a reroute that fails *while offline* (the local engine cannot reach
+   the pair), or two consecutive failures driving the backoff to its cap on device.
+6. **Offline turn-by-turn infers turns** from bearing changes. Real instructions
    need Valhalla.
-10. **zstd PBF blobs are rejected by name.** Geofabrik still ships zlib, so this
-    is future-proofing only.
-11. **Emulator cutout band.** A black band remains where the emulator simulates a
-    display cutout. Believed cosmetic and device-specific; not confirmed.
-12. **Optional: NDK cross-compile Valhalla** to replace the local engine with real
-    turn-by-turn. Gaps 9 and 12 share one dependency, and §5.3's objection is
-    external rather than about effort: arm64 sysroot builds of boost, luajit,
-    prime_server, GEOS and zlib either exist or they do not. Worth a bounded
-    feasibility spike before committing anything.
+7. **zstd PBF blobs are rejected by name.** Geofabrik still ships zlib, so this
+   is future-proofing only.
+8. **Emulator cutout band.** A black band remains where the emulator simulates a
+   display cutout. Believed cosmetic and device-specific; not confirmed.
+9. **Optional: NDK cross-compile Valhalla** to replace the local engine with real
+   turn-by-turn. Gaps 6 and 9 share one dependency, and §5.3's objection is
+   external rather than about effort: arm64 sysroot builds of boost, luajit,
+   prime_server, GEOS and zlib either exist or they do not. Worth a bounded
+   feasibility spike before committing anything.
+
+Closed since the last release: app bar / grid cell are now tokens (§3.14), the
+test server is in the repo (§3.15), reroute is wired (§3.11), and the XML parse
+streams (§3.12).
 
 ---
 
@@ -694,8 +858,8 @@ Ordered by how much they matter.
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 418 unit tests
-npm run e2e          # 33 browser checks against the built bundle
+npm test             # 516 unit tests
+npm run e2e          # 39 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
 npm run sync         # build, clear android assets, cap sync
@@ -710,9 +874,12 @@ to JDK 21.
 ### Releasing
 
 ```bash
-npm test && npm run e2e
-git commit -am "..." && git tag -a v0.12.0 -m "..." && git push origin main --tags
+npm test && npm run e2e && npm run screens
+git commit -am "..." && git tag -a v0.11.2 -m "..." && git push origin main --tags
 ```
+
+**Then read the CI run.** Per §3.16, that is the only thing that makes "CI runs
+the full gate" true.
 
 The Release workflow runs typecheck, unit tests and the build, then attaches the
 APK; the browser suites run on CI for the same commit. 13 releases so far (15 tags; `v0.7.0` and `v0.10.0` have tags but their Release
@@ -750,10 +917,10 @@ map loaded.
 
 ## 9. The 6-hour plan, and what happened to it
 
-A 6-hour budget was proposed, then narrowed to the highest-value blocks. This
-section records it because **the record of the estimate is itself the useful
-part**: the first plan was padded by roughly 5×, and the correction changed which
-gaps looked expensive.
+A 6-hour budget was proposed, then narrowed to the highest-value blocks, then
+spent across two sessions. This section records it because **the record of the
+estimate is itself the useful part**: the first plan was padded by roughly 5×,
+and the correction changed which gaps looked expensive.
 
 ### The plan as revised
 
@@ -761,18 +928,22 @@ gaps looked expensive.
 |---|---|---|---|
 | 1 | Unblock the e2e gate (`playwright install chromium`) | — | **Done** |
 | 2 | Engine selection + provenance visibility | req #2, #18 | **Done** (§3.6.1) |
-| 3 | Wire rerouting into the navigation screen | gap 2, req #18 | **Not started** |
-| 4 | Streaming parse | gap 3 | **Not started** |
+| 3 | Wire rerouting into the navigation screen | gap 2, req #18 | **Done** (§3.11) |
+| 4 | Streaming parse | gap 3 | **Done** (§3.12) |
 | 5 | Emulator: exercise nav + reroute on device | gap 1 (partly) | **Partly done** |
-| 6 | Zoomed-out offline density as a style/LOD fix | gap 5 | **Not started** |
+| 6 | Zoomed-out offline density as a style/LOD fix | gap 5 | **Done** (§3.13) |
 | 7 | Tag, read the CI result, update STATUS | req #16, #21 | STATUS done; **untagged**, CI unread |
+
+Blocks 3, 4 and 6 were completed in a later session, along with the two small
+requirement items below and one unlisted fix (the duplicate system-bar handling,
+§4.4).
 
 ### Not in the plan, but owed
 
-Requirement #2's app-bar/grid-cell tokens (gap 7, ~15 min) and requirement #20's
-`serve.mjs` living in `/tmp` (gap 8, ~20 min) were identified but never
-scheduled. Both are small, both close a stated requirement, and both were
-dropped by stopping early rather than by a decision to skip them.
+Requirement #2's app-bar/grid-cell tokens (~15 min) and requirement #20's
+`serve.mjs` living in `/tmp` (~20 min) were identified but never scheduled. Both
+were dropped by stopping early rather than by a decision to skip them. **Both are
+now done** — see §3.14.
 
 ### Where the estimates were wrong
 
@@ -791,8 +962,8 @@ checking rather than assuming:
 
 ### What actually happened
 
-**38 minutes of wall clock**, covering blocks 1, 2, half of 5, and the STATUS
-half of 7. Then work stopped.
+**Session one: 38 minutes of wall clock**, covering blocks 1, 2, half of 5, and
+the STATUS half of 7. Then work stopped.
 
 The stop was my error and worth recording plainly: after finishing a coherent
 unit of work I ended the turn by *asking whether to continue*, when the plan had
@@ -810,24 +981,26 @@ was not faster:
   lie, since walking *between* hosted engines is exactly what that option means.
 - The device check produced a negative result worth having — the v0.11.1
   baseline APK was rebuilt and reinstalled to prove the three launch warnings
-  were pre-existing (gap 6) rather than introduced.
+  were pre-existing rather than introduced.
+
+**Session two** picked up block 3 and did not stop: rerouting, streaming parse,
+the LOD fix, the two owed requirement items, and the duplicate system-bar
+handling. Unit tests went 380 → 516, e2e checks 23 → 39.
+
+The failure mode repeated in a smaller form and is worth noting: a restarted
+server killed the emulator mid-session and a verification run was lost, which
+briefly looked like a regression in the streaming import. It was not — re-running
+the check against a fresh preview server cleared it. Worth remembering that a
+failed verification after an interruption is a hypothesis, not a finding.
 
 ### Carried forward
 
-`main` is two commits ahead of `v0.11.1` and **untagged**:
-
-```
-2f9c690  Choose and see routing engines; report who actually answered
-4622a2e  Update STATUS.md for engine selection, provenance, and the emulator findings
-```
-
-Both pass the full gate. Block 3 (rerouting) is the natural resume point: it is
-the only item where two ledgers point at the same code, it converts four dead
-exports into live ones, and it closes the gap requirement #18 names verbatim.
+`main` is **untagged**; the next release is v0.11.2 (requirement #16 wants one
+increment per release). All blocks except the tag and the CI read are done.
 
 Two loose ends a resumer should not assume are handled:
 
-- **The CI run for these two commits has not been read.** Per §3.11, "CI runs
+- **The CI run for these two commits has not been read.** Per §3.16, "CI runs
   the full gate" is only true if someone looks. Neither commit has been pushed.
 - **No tag exists.** `main` is ahead of `v0.11.1`; the next release is v0.11.2,
   and requirement #16 wants one increment per release.
@@ -835,10 +1008,17 @@ Two loose ends a resumer should not assume are handled:
 ### Serving for manual testing
 
 ```bash
-node /tmp/opencode/serve/serve.mjs     # 0.0.0.0:8080
+npm run build && npm run apk    # dist/ and the debug APK
+npm run serve                   # 0.0.0.0:8080, prints the LAN URL
 ```
 
-App at `http://192.168.1.83:8080`, APK at `/dl/canopy-nav.apk`.
+Serves `dist/` with the APK at `/dl/canopy-nav.apk`. It lives in the repo
+(`tools/serve.mjs`) rather than in `/tmp`, where a cleanup silently killed the
+manual-testing setup. The scripts this replaces:
+
+```bash
+npm run screens                  # screen coverage at 3 viewports
+```
 
 ---
 
