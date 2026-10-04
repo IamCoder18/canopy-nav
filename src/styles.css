@@ -378,31 +378,30 @@ code {
 .nav-panel {
   position: absolute;
   left: 12%;
-72f330af7a8892d456700a08d99f0ead384dbc02
+  bottom: 136px;
+  width: min(560px, calc(100% - 24% - 24px));
+  max-height: calc(100% - 424px);
+  overflow-y: auto;
+  /* .nav-root is click-through to the map; a popover is not. Without this the
+     panel inherits `pointer-events: none` and every row passes clicks to the
+     map underneath, which reads as a dead button. */
+  pointer-events: auto;
+  /* Above the bottom bar: the panel is rendered before it in the document. */
+  z-index: 2;
+  display: flex; flex-direction: column;
+  padding: 4px 16px;
   border-radius: 8px;
   background: rgba(14, 16, 19, 0.96);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  text-align: left;
+  color: inherit;
 }
 .panel-head {
   display: flex; align-items: center; gap: 8px;
   flex: 0 0 auto;
 }
 .panel-head > span:first-child { flex: 1; padding-left: 8px; }
-
-  bottom: 136px;
-  width: min(560px, calc(100% - 24% - 24px));
-  max-height: calc(100% - 424px);
-  overflow-y: auto;
-  /* .nav-root is click-through to the map; a popover is not. */
-  pointer-events: auto;
-  /* Above the bottom bar: the panel is rendered before it in the document. */
-  z-index: 2;
-  display: flex; flex-direction: column;
-  padding: 4px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-  text-align: left;
-  color: inherit;
-}
 .layer-row.on { background: rgba(96, 168, 240, 0.12); }
 .layer-row:disabled { cursor: default; opacity: 0.5; }
 .layer-row:not(:disabled):hover { background: rgba(255, 255, 255, 0.06); }
@@ -502,6 +501,11 @@ code {
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   text-align: left;
   color: inherit;
+  /* Rows carry a non-shrinking action cluster (a status chip plus a 76dp pill).
+     At 412dp that cluster alone is wider than the row, so let it drop to its
+     own line rather than push content off-screen. `align-items: center` keeps
+     the row tidy when there is room for a single line. */
+  flex-wrap: wrap;
 }
 .provider-row.selected { background: rgba(96, 168, 240, 0.08); }
 
@@ -557,8 +561,20 @@ code {
 
 /* ------------------------------- regions ------------------------------- */
 
-/* Trailing actions on a .result-row: 76dp pills, shrinking row never wraps. */
-.region-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+/* Trailing actions on a .result-row: 76dp pills, and they keep their width.
+   They are allowed to wrap onto a second line at narrow widths (the parent row
+   wraps) because a "Downloaded" chip plus a "Download Import" pill does not fit
+   beside the text on a 412dp phone. */
+.region-actions {
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  /* `flex-shrink: 0` means the cluster keeps its max-content width, which is
+     wider than a 412dp row on its own — so wrapping alone is not enough, the
+     cluster also has to be capped at the row's width. */
+  max-width: 100%;
+}
 
 .pill-btn {
   min-height: 76px;
@@ -570,7 +586,14 @@ code {
   display: flex; align-items: center; justify-content: center;
   gap: 8px;
   white-space: nowrap;
+  /* Never wider than its container. Two 36dp icons plus a label like
+     "Import any .osm file" is 385px, and a 412dp phone leaves only ~313px after
+     the 12% side margins, so the button used to run off the right edge. */
+  max-width: 100%;
 }
+/* The label wraps while the icons stay put. Short labels ("Remove", "Replace")
+   are unaffected, so catalogue rows keep their uniform height. */
+.pill-btn > span { min-width: 0; white-space: normal; }
 .pill-btn:hover { background: rgba(96, 168, 240, 0.26); }
 .pill-btn.ghost { background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.72); }
 .pill-btn.ghost:hover { background: rgba(255, 255, 255, 0.14); }
@@ -597,6 +620,21 @@ code {
   white-space: nowrap;
 }
 .chip.ok { background: rgba(24, 128, 56, 0.24); color: #81C995; }
+
+/* The app bar's status chip shares one fixed-height row with the Back button
+   and the title, so it has to be able to give way. "1 loaded · 13.0 KB" is
+   219px and a 412dp bar leaves about 313px once the side margins are taken,
+   so the chip used to hang off the right edge of the screen. Truncate instead:
+   the loaded count stays visible, which is the part that matters. */
+.top-app-bar .chip {
+  display: block;
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 44px;
+}
 
 /* Selectable endpoints for a cross-region route. */
 .choice-row { display: flex; flex-wrap: wrap; gap: 12px; }
@@ -631,19 +669,24 @@ code {
     justify-content: flex-end;
     max-height: none;
   }
-  bottom: 136px;
-  width: min(560px, calc(100% - 24% - 24px));
-  max-height: calc(100% - 424px);
-  overflow-y: auto;
-  /* .nav-root is click-through to the map; a popover is not. */
-  pointer-events: auto;
-  /* Above the bottom bar: the panel is rendered before it in the document. */
-  z-index: 2;
-  display: flex; flex-direction: column;
-  padding: 4px 16px;
+  /* The layers panel has to clear the 76dp bar and the control stack on a short
+     screen. The tall-layout values do not transfer: `bottom: 136px` was derived
+     from a 96dp bar, and `max-height: calc(100% - 424px)` goes negative at
+     412dp tall, collapsing the panel to nothing. Both are restated here for the
+     short case rather than inherited. */
+  .nav-panel {
+    bottom: 116px;
+    max-height: calc(100% - 116px - 88px);
+  }
 }
 
-/* Category chips — browse the offline gazetteer by what it actually contains */
+/* Category chips — browse the offline gazetteer by what it actually contains.
+   Scoped to `button.chip` on purpose: these are interactive and need the AAOS
+   76dp minimum touch target, whereas the `.chip` status labels in the Regions
+   screen are non-interactive and stay at 44dp. Declaring both as bare `.chip`
+   meant the later block silently resized the status labels too, and a 76dp
+   "Downloaded" chip beside a 76dp "Download Import" pill is what pushed the
+   catalogue rows past a 412dp viewport. */
 .chip-row {
   display: flex;
   flex-wrap: wrap;
@@ -651,7 +694,7 @@ code {
   margin-top: 16px;
 }
 
-.chip {
+button.chip {
   height: 76px;
   padding: 0 24px;
   display: flex;
@@ -663,9 +706,9 @@ code {
   font-weight: 500;
   transition: background 120ms ease;
 }
-.chip:hover { background: rgba(255, 255, 255, 0.14); }
-.chip:active { background: rgba(255, 255, 255, 0.2); }
-.chip.ok { background: rgba(96, 168, 240, 0.18); color: #60A8F0; }
+button.chip:hover { background: rgba(255, 255, 255, 0.14); }
+button.chip:active { background: rgba(255, 255, 255, 0.2); }
+button.chip.ok { background: rgba(96, 168, 240, 0.18); color: #60A8F0; }
 
 /* Startup notice while cached regions are rehydrated from IndexedDB. */
 .restoring-bar {

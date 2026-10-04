@@ -158,12 +158,23 @@ for (const vp of VIEWPORTS) {
 
   // engines -- the longest list of labelled rows in the app, so the most likely
   // to overflow at 412dp.
+  //
+  // Unwind with the app's own Back button, twice: engines -> settings -> home.
+  // Do NOT use page.goBack() here. This app navigates by React state, not by
+  // history entries, so goBack() leaves the app entirely -- to about:blank --
+  // and every subsequent `page.$` then fails. That is not a crash: each block
+  // below is guarded, so the run still printed "all checks passed" while
+  // silently visiting 4 screens instead of 11.
   const enginesLink = await page.$('.hint-card');
   if (enginesLink) {
     await enginesLink.click().catch(() => {});
     await visit('engines', 'engines');
-    await page.goBack().catch(() => {});
-    await page.waitForTimeout(400);
+    for (let i = 0; i < 2; i++) {
+      const back = await page.$('button[aria-label="Back"]');
+      if (!back) break;
+      await back.click().catch(() => {});
+      await page.waitForTimeout(500);
+    }
   }
 
   // regions
