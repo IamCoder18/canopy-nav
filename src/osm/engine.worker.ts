@@ -134,24 +134,30 @@ function decodeEntities(s: string): string {
     .replace(/&amp;/g, '&');
 }
 
+const NODE_RE = /<node\b([^>]*?)(?:\/>|>([\s\S]*?)<\/node>)/g;
+const WAY_RE = /<way\b([^>]*?)(?:\/>|>([\s\S]*?)<\/way>)/g;
+const TAG_RE = /<tag\b([^>]*?)\/>/g;
+const REF_RE = /<nd\b[^>]*?ref\s*=\s*"(-?\d+)"/g;
+
 /**
- * Single-pass streaming parse. Processes the file in chunks so a multi-GB
- * extract doesn't block, and reports progress.
+ * Scan one segment of OSM XML into the accumulators.
+ *
+ * Shared by the whole-string and streaming entry points on purpose. Two
+ * implementations of the same parser would eventually disagree about a
+ * malformed element, and the streaming path is the one that runs on a 900 MB
+ * province where a silent divergence is very hard to notice. One code path
+ * means equivalence is a testable property rather than an aspiration.
+ *
+ * The segment must end on an element boundary; see `elementBoundary`.
  */
-export function parseOsmXml(
-  text: string,
-  onProgress: (pct: number) => void = () => {},
-): { nodes: Map<number, RawNode>; ways: RawWay[] } {
-  const nodes = new Map<number, RawNode>();
-  const ways: RawWay[] = [];
-
-  const NODE_RE = /<node\b([^>]*?)(?:\/>|>([\s\S]*?)<\/node>)/g;
-  const WAY_RE = /<way\b([^>]*?)(?:\/>|>([\s\S]*?)<\/way>)/g;
-  const TAG_RE = /<tag\b([^>]*?)\/>/g;
-  const REF_RE = /<nd\b[^>]*?ref\s*=\s*"(-?\d+)"/g;
-
+function scanSegment(
+  segment: string,
+  nodes: Map<number, RawNode>,
+  ways: RawWay[],
+): void {
   let n: RegExpExecArray | null;
-  while ((n = NODE_RE.exec(text))) {
+  NODE_RE.lastIndex = 0;
+  while ((n = NODE_RE.exec(segment))) {
     const a = parseAttrs(n[1]);
     const id = +a.id;
     if (id === undefined || isNaN(id)) continue;
@@ -170,11 +176,11 @@ export function parseOsmXml(
     }
     nodes.set(id, { id, lat: +a.lat, lon: +a.lon });
     if (tags) (nodes.get(id) as RawNode & { tags?: Record<string, string> }).tags = tags;
-    if (n.index % 4_000_000 < 200_000) onProgress(Math.min(0.5, n.index / text.length));
   }
 
   let w: RegExpExecArray | null;
-  while ((w = WAY_RE.exec(text))) {
+  WAY_RE.lastIndex = 0;
+  while ((w = WAY_RE.exec(segment))) {
     const a = parseAttrs(w[1]);
     const body = w[2];
     if (!body) continue;
@@ -195,6 +201,102 @@ export function parseOsmXml(
 
     ways.push({ id: +a.id, refs, tags });
   }
+}
+
+/**
+ * A complete `<node>` or `<way>` element, in either XML form.
+ *
+ * This is the grammar the scanner actually consumes, so it is also the right
+ * unit for deciding where it is safe to cut a buffer. Using a looser rule --
+ * "after any `>`" -- splits a tagged node across two segments: the opening
+ * `<node id=...>` ends one, the `<tag>` children and `</node>` the next, and
+ * neither half matches, so the node and its way are silently dropped.
+ */
+const ELEMENT_RE = /<(node|way)\b[^>]*?(?:\/>|>[\s\S]*?<\/\1>)/g;
+
+/**
+ * Index just past the last complete top-level element in `buf`, or -1.
+ *
+ * Only a complete `<node>`/`<way>` counts, because those are the only
+ * constructs `scanSegment` matches on. Anything finer-grained would cut an
+ * element in half; anything coarser would stall on a long buffered tail.
+ */
+function elementBoundary(buf: string): number {
+  let end = -1;
+  ELEMENT_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = ELEMENT_RE.exec(buf))) end = m.index + m[0].length;
+  return end;
+}
+
+/** Single-pass parse of a complete XML document already in memory. */
+export function parseOsmXml(
+  text: string,
+  onProgress: (pct: number) => void = () => {},
+): { nodes: Map<number, RawNode>; ways: RawWay[] } {
+  const nodes = new Map<number, RawNode>();
+  const ways: RawWay[] = [];
+
+  // Same segment-at-a-time discipline as the streaming path, so the two cannot
+  // drift: a regex applied to one boundary-aligned segment behaves identically
+  // to a regex applied to the whole document.
+  let cut = elementBoundary(text);
+  let at = 0;
+  while (cut > at) {
+    scanSegment(text.slice(at, cut), nodes, ways);
+    at = cut;
+    onProgress(Math.min(0.5, at / text.length));
+    cut = elementBoundary(text.slice(at)) + at;
+  }
+  if (at < text.length) scanSegment(text.slice(at), nodes, ways);
+
+  return { nodes, ways };
+}
+
+/**
+ * Parse OSM XML from a stream of chunks, never holding the whole document.
+ *
+ * A province extract is 100-900 MB and `arrayBuffer()` on that OOMs a phone, so
+ * the buffer is kept to a working window: everything up to the last safe element
+ * boundary is scanned and dropped, and only the incomplete tail is carried.
+ *
+ * @param totalChars Optional size hint, used only to scale progress. Without it
+ *   progress is reported against the high-water mark rather than a total, which
+ *   is honest about not knowing the denominator.
+ */
+export async function parseOsmXmlStream(
+  chunks: AsyncIterable<string> | Iterable<string>,
+  onProgress: (pct: number) => void = () => {},
+  totalChars?: number,
+): Promise<{ nodes: Map<number, RawNode>; ways: RawWay[] }> {
+  const nodes = new Map<number, RawNode>();
+  const ways: RawWay[] = [];
+
+  let carry = '';
+  let seen = 0;
+  let high = 0;
+
+  const flush = (segment: string, done: boolean) => {
+    scanSegment(segment, nodes, ways);
+    if (totalChars) onProgress(Math.min(0.5, seen / totalChars));
+    else if (done) onProgress(0.5);
+  };
+
+  for await (const chunk of chunks as AsyncIterable<string>) {
+    carry += chunk;
+    seen += chunk.length;
+    let cut = elementBoundary(carry);
+    if (cut > 0) {
+      flush(carry.slice(0, cut), false);
+      carry = carry.slice(cut);
+      high = Math.max(high, seen - carry.length);
+    }
+  }
+
+  // Whatever never reached a boundary is still scanned: a truncated final
+  // element should not silently cost a node.
+  if (carry) flush(carry, true);
+  else onProgress(0.5);
 
   return { nodes, ways };
 }
@@ -889,6 +991,27 @@ import { isInterestingTag } from './tags';
  * message handler is worker-specific, so it is installed only when `self` is a
  * real WorkerGlobalScope.
  */
+/**
+ * Decode a byte stream to text chunks without materialising the whole thing.
+ *
+ * `TextDecoder` with `{stream: true}` is what makes this safe across chunk
+ * boundaries: a multi-byte UTF-8 sequence split between two reads is held in
+ * the decoder's internal state instead of becoming two replacement characters.
+ * Decoding each chunk independently would corrupt every non-ASCII place name at
+ * exactly the chunk boundaries -- i.e. subtly, and only on large files.
+ */
+async function* decodeStream(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder('utf-8');
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) yield decoder.decode(value, { stream: true });
+  }
+  const tail = decoder.decode();
+  if (tail) yield tail;
+}
+
 if (typeof self !== 'undefined' && typeof (self as any).postMessage === 'function' && typeof window === 'undefined') {
   self.onmessage = async (ev: MessageEvent) => {
     const { type, payload } = ev.data as { type: string; payload: any };
@@ -897,8 +1020,20 @@ if (typeof self !== 'undefined' && typeof (self as any).postMessage === 'functio
         // Accepts either .osm XML text or raw .osm.pbf bytes. PBF is the format
         // Geofabrik actually publishes, so this is the normal path; XML stays
         // supported because it is trivially inspectable and useful for tests.
-        const { text, bytes, format } = payload as
-          { text?: string; bytes?: ArrayBuffer; format?: 'xml' | 'pbf' };
+        //
+        // A `stream` handle is preferred when present: it lets a multi-hundred-MB
+        // extract be parsed in a bounded window instead of being held whole,
+        // which is the difference between parsing a province and being OOM-killed
+        // by one. The text/bytes form stays supported for callers that already
+        // hold the file -- tests, and small imports.
+        const { text, bytes, format, stream, totalChars } = payload as
+          {
+            text?: string;
+            bytes?: ArrayBuffer;
+            format?: 'xml' | 'pbf';
+            stream?: ReadableStream<Uint8Array>;
+            totalChars?: number;
+          };
         const post = (stage: string, pct: number) =>
           (self as any).postMessage({ type: 'progress', stage, pct });
 
@@ -906,9 +1041,41 @@ if (typeof self !== 'undefined' && typeof (self as any).postMessage === 'functio
         const label = isPbf ? 'Reading PBF' : 'Parsing XML';
         post(label, 0);
 
-        const { nodes, ways } = isPbf
-          ? await parseOsmPbf(new Uint8Array(bytes!), (p) => post(label, p * 0.5))
-          : parseOsmXml(text ?? '', (p) => post(label, p * 0.5));
+        let nodes: Map<number, RawNode>;
+        let ways: RawWay[];
+
+        if (isPbf) {
+          if (stream) {
+            // PBF is protobuf, so it cannot be chunked at an element boundary the
+            // way XML can; it is read through a stream but still assembled into a
+            // contiguous buffer by the reader, which needs the BlobHeader framing
+            // to be sequential. Collected here rather than inside the parser so
+            // the limitation is visible at the call site.
+            const parts: Uint8Array[] = [];
+            const reader = stream.getReader();
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (value) parts.push(value);
+            }
+            let total = 0;
+            for (const p of parts) total += p.length;
+            const joined = new Uint8Array(total);
+            let at = 0;
+            for (const p of parts) {
+              joined.set(p, at);
+              at += p.length;
+            }
+            ({ nodes, ways } = await parseOsmPbf(joined, (p) => post(label, p * 0.5)));
+          } else {
+            ({ nodes, ways } = await parseOsmPbf(new Uint8Array(bytes!), (p) => post(label, p * 0.5)));
+          }
+        } else if (stream) {
+          const decoded = decodeStream(stream);
+          ({ nodes, ways } = await parseOsmXmlStream(decoded, (p) => post(label, p * 0.5), totalChars));
+        } else {
+          ({ nodes, ways } = parseOsmXml(text ?? '', (p) => post(label, p * 0.5)));
+        }
 
         post('Building graph', 0.5);
         const ds = buildDataset(nodes, ways, (p) => post('Building graph', 0.5 + p * 0.5));

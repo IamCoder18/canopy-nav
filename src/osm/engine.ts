@@ -14,9 +14,19 @@ type Handler = (ev: MessageEvent) => void;
 /** The slice of `File` the engine needs, so tests can pass a stub. */
 export interface OsmFile {
   name?: string;
+  /** Total size in bytes, when known. Used only to scale progress. */
+  size?: number;
   slice(start: number, end?: number): { arrayBuffer(): Promise<ArrayBuffer> };
   arrayBuffer(): Promise<ArrayBuffer>;
   text(): Promise<string>;
+  /**
+   * Optional lazy reader.
+   *
+   * Present on a real `File`, absent on a stub — which is exactly why the
+   * engine feature-detects it rather than requiring it: the whole-file path
+   * stays available for tests and for callers holding a plain Blob.
+   */
+  stream?(): ReadableStream<Uint8Array>;
 }
 
 export interface BuildProgress {
@@ -90,9 +100,33 @@ export class OsmEngine {
       this.rejectBuild = reject;
       void (async () => {
         try {
+          // A `File` is already a lazy, disk-backed handle, so streaming it costs
+          // nothing extra and is the difference between parsing a 900 MB
+          // province in a bounded window and being OOM-killed by one. The
+          // whole-file forms are kept for callers that pass a plain Blob-shaped
+          // object without `stream`, and for the test fixtures.
+          const totalChars = typeof file.size === 'number' && file.size > 0 ? file.size : undefined;
           if (isXml) {
-            const text = await file.text();
-            this.worker.postMessage({ type: 'build', payload: { text, format: 'xml' } });
+            if (typeof file.stream === 'function') {
+              // `stream()` is called exactly once: each call returns a *new*
+              // stream, so listing a second call in the transfer list would hand
+              // the worker an untouched handle while transferring a different
+              // one.
+              //
+              // The stream goes in the *transfer* list. It is not
+              // structured-cloneable in Chrome: posting it without transferring
+              // throws "A ReadableStream could not be cloned because it was not
+              // transferred". Transferring also moves the handle rather than
+              // copying it, which is the point.
+              const stream = file.stream();
+              this.worker.postMessage(
+                { type: 'build', payload: { stream, format: 'xml', totalChars } },
+                [stream as unknown as Transferable],
+              );
+            } else {
+              const text = await file.text();
+              this.worker.postMessage({ type: 'build', payload: { text, format: 'xml' } });
+            }
           } else {
             // Transfer the buffer instead of copying a province-sized file.
             const bytes = await file.arrayBuffer();

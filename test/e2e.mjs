@@ -75,6 +75,9 @@ try {
   await page.waitForTimeout(1200);
   const afterImport = await page.evaluate(() => document.body.innerText);
   check(`map registered from ${FIXTURE}`, !/No map loaded/.test(afterImport), afterImport.match(/[\d,]+ routable ways/)?.[0] ?? '');
+  // Captured here so the streaming-import check later can compare against the
+  // whole-file parse of the same fixture.
+  const wholeFileWays = afterImport.match(/([\d,]+) routable ways/)?.[1] ?? '';
   await page.screenshot({ path: join(SHOTS, '1-imported.png') });
 
   /* ---------------- offline search ---------------- */
@@ -308,6 +311,48 @@ try {
   const restoredRows = await page.evaluate(() => document.querySelectorAll('.result-row').length);
   check('restored region is searchable', restoredRows > 0, `${restoredRows} rows`);
   await page.screenshot({ path: join(SHOTS, '7-restored.png') });
+
+  /* ---------------- streaming import ---------------- */
+  // The XML path now streams the File rather than reading it whole, so this
+  // exercises the code a real import takes: `File.stream()` -> transferred over
+  // postMessage -> chunked element-boundary parse inside the worker. The graph
+  // from the first import in this run is the control: the streamed import must
+  // produce the same routable-way count.
+  console.log('\nstreaming import');
+  {
+    // Reset to a known screen: the previous section leaves the regions screen
+    // mounted, where there is no Settings button to click.
+    await page.goto(BASE, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(2500);
+    // Re-import through the UI: the file arrives as a real `File`, which is the
+    // only thing that has `.stream()`.
+    await page.click('button[aria-label="Settings"]').catch(() => {});
+    await page.waitForTimeout(500);
+    const importLink = await page.$('button:has-text("Import .osm")');
+    if (importLink) await importLink.click().catch(() => {});
+    await page.waitForTimeout(600);
+
+    const input = await page.$('input[type=file]');
+    if (input) {
+      await input.setInputFiles(join(__dirname, FIXTURE)).catch(() => {});
+      await page.waitForFunction(
+        () => !document.body.innerText.includes('Parsing')
+             && !document.body.innerText.includes('Building graph'),
+        { timeout: 30000 },
+      ).catch(() => {});
+      await page.waitForTimeout(1500);
+    }
+    const after = await page.evaluate(() => ({
+      ways: document.body.innerText.match(/([\d,]+) routable ways/)?.[1] ?? '',
+      err: document.querySelector('.error-card')?.textContent ?? '',
+    }));
+    check('a streamed import builds the same graph as the whole-file one',
+      after.ways !== '' && after.ways === wholeFileWays,
+      `${wholeFileWays || '?'} -> ${after.ways || 'none'}`);
+    check('a streamed import raises no error',
+      !/error|failed|could not|cloned|transferred/i.test(after.err),
+      after.err.slice(0, 80));
+  }
 
   /* ---------------- download availability ---------------- */
   // The catalogue is probed on mount so dead URLs can be greyed out. With no
