@@ -787,6 +787,25 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   /**
    * Start progress over — for a new route, or when leaving navigation.
    *
+   * Declared with the ref, above every memo, for the same reason: a helper a memo
+   * closes over has to exist by the time render reaches it.
+   *
+   * The placement in metres has to be cleared *with* the fraction, not instead of
+   * it. Metres measured along the previous route would immediately clamp the new
+   * route's progress to wherever the old trip ended, and because the clamp is
+   * monotonic that is unrecoverable for the rest of the drive: the new ETA would
+   * open reading a distance belonging to a road the driver is not on, and would
+   * never come down. Resetting the fraction alone would have reintroduced exactly
+   * the bug this ref exists to remove.
+   */
+  const beginRouteProgress = (geometry: LatLng[]) => {
+    setProgressAlong(0);
+    routePos.current = startPosition(geometry);
+  };
+
+  /**
+   * Start progress over — for a new route, or when leaving navigation.
+   *
    * The placement in metres has to be cleared *with* the fraction, not instead of
    * it. Metres measured along the previous route would immediately clamp the new
    * route's progress to wherever the old trip ended, and because the clamp is
@@ -795,11 +814,6 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
    * never come down. Resetting the fraction alone would have reintroduced
    * exactly the bug this ref exists to remove.
    */
-  const beginRouteProgress = (geometry: LatLng[]) => {
-    setProgressAlong(0);
-    routePos.current = startPosition(geometry);
-  };
-
   const guidance = useMemo(() => {
     if (!route || route.engine === 'osm-local') return null;
     const geometry = route.geometry;
