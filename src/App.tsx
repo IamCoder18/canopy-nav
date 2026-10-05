@@ -429,10 +429,25 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
     if (previousScreen.current === screen) return;
     previousScreen.current = screen;
 
-    // On the first paint there is nothing to announce — the screen reader has
-    // only just started reading the launcher, and repeating "Home" over it is
-    // noise rather than news.
-    if (mounted.current) focusQuietly(headingRef.current);
+    /*
+     * Focus the heading only if nothing has legitimately claimed it.
+     *
+     * The first version of this moved focus to the heading unconditionally, which
+     * is right for Settings, Engines, Regions and the turn list — screens whose
+     * only focusable element is a Back button — and wrong for Search, whose whole
+     * purpose is the field: it has `autoFocus`, and the app's own `/` and
+     * letter-keyboard shortcuts focus it explicitly. Steering focus to a
+     * visually hidden heading meant that arriving at Search by tapping "Where
+     * to?" put the caret nowhere, and typing did nothing until the driver found
+     * the field with a pointer.
+     *
+     * So the rule is "the heading is the fallback", not "the heading wins". A
+     * screen that knows better takes focus during its own commit, and this does
+     * not take it away.
+     */
+    if (mounted.current && document.activeElement === document.body) {
+      focusQuietly(headingRef.current);
+    }
 
     // `document.title` is read by assistive technology as the window name and is
     // what a switch user or a screen-reader user gets from a task switcher. It
