@@ -35,6 +35,7 @@ import {
   readApiKey, writeApiKey, readEndpoint, writeEndpoint, validateEndpoint,
   readPlaces, writePlace, type PlaceSlot, type SavedPlace,
 } from './settings';
+import { describeError } from './errors';
 import { isVoiceAvailable, speak, cancelSpeech, voiceKey } from './nav/voice';
 import {
   importRegionFile, localRegionId, localRegionName, regionLib, useRegions,
@@ -105,6 +106,27 @@ const SCREEN_NAMES: Record<Screen, string> = {
   regions: 'Regions',
   engines: 'Routing engines',
 };
+
+/**
+ * Moves focus to an element without letting the browser scroll to it.
+ *
+ * `focus()` scrolls by default, which on a `position: fixed` layout means the
+ * whole viewport jumps — and on the navigation screen, whose entire UI is
+ * absolutely positioned over the map, a stray scroll is disorienting rather than
+ * helpful. `preventScroll` is not universally supported on older Android
+ * WebViews, so the position is restored afterwards rather than trusted.
+ */
+export function focusQuietly(el: HTMLElement | null | undefined) {
+  if (!el) return;
+  const x = window.scrollX;
+  const y = window.scrollY;
+  try {
+    el.focus({ preventScroll: true });
+  } catch {
+    el.focus();
+  }
+  window.scrollTo(x, y);
+}
 
 /* ---------------------------- engines ---------------------------- */
 
@@ -361,6 +383,64 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   const { fix, mode: locationMode, error: locationError, stale: fixStale } = useLocation(true);
   const location = fix.pos;
 
+  /* ----------------------- focus and announcement ---------------------- */
+
+  /**
+   * Where focus goes when the screen changes, and where it came back to.
+   *
+   * ## What was wrong
+   *
+   * There was exactly one `focus()` call in the whole app and it only ever
+   * targeted the search field. Everything else changed screens by swapping React
+   * state, which **unmounts the control that was just activated**. Focus then
+   * fell to `<body>` — so the next Tab restarted from the top of the document.
+   *
+   * On the Regions screen that means tabbing through roughly sixty catalogue rows
+   * to get back to where you were. And because a letter keypress while a button
+   * is focused opened search, pressing `s` after tapping "Settings" both lost your
+   * place *and* navigated away. On a head unit driven by a rotary controller or a
+   * switch, losing focus is losing the app.
+   *
+   * So a screen change now does two things: it announces where the user has
+   * arrived, and it puts focus on that screen's own heading so subsequent arrow
+   * and Tab keys continue from the new content rather than from the document.
+   */
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+  /**
+   * The element focused before the last screen change, so `Back` returns to it.
+   *
+   * Keyed by screen name rather than held as a single value: returning to the
+   * launcher from Settings should return to the card that was pressed, but
+   * returning to Search from the preview should return to the result list.
+   */
+  const returnFocus = useRef<{ screen: Screen; el: HTMLElement | null } | null>(null);
+
+  /** Navigates to a screen, remembering where focus came from. */
+  const go = useCallback((next: Screen) => {
+    returnFocus.current = {
+      screen: screenRef.current,
+      el: (document.activeElement as HTMLElement | null) ?? null,
+    };
+    setScreen(next);
+  }, []);
+
+  const previousScreen = useRef<Screen | null>(null);
+  useEffect(() => {
+    if (previousScreen.current === screen) return;
+    previousScreen.current = screen;
+
+    // On the first paint there is nothing to announce — the screen reader has
+    // only just started reading the launcher, and repeating "Home" over it is
+    // noise rather than news.
+    if (mounted.current) focusQuietly(headingRef.current);
+
+    // `document.title` is read by assistive technology as the window name and is
+    // what a switch user or a screen-reader user gets from a task switcher. It
+    // was the static string "Canopy Nav" for the life of the process, so nine
+    // screens were nine identical entries.
+    document.title = `${SCREEN_NAMES[screen]} · Canopy Nav`;
+  }, [screen]);
+
   /* ------------------------ layers and traffic ------------------------ */
 
   const [layer, setLayer] = useState<LayerId>('default');
@@ -379,6 +459,9 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   // keystroke for whatever is already focused there.
   const screenRef = useRef<Screen>('home');
   useEffect(() => { screenRef.current = screen; }, [screen]);
+  /** Whether the app has painted once, so first-paint is not announced. */
+  const mounted = useRef(false);
+  useEffect(() => { mounted.current = true; }, []);
   const [traffic, setTraffic] = useState<TrafficVerdict>(NO_TRAFFIC);
   // The pair a traffic query re-asks about: a route's ends, captured when the
   // route was computed, since the driver has moved since then.
@@ -577,6 +660,26 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
       const el = e.target as HTMLElement | null;
       const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
 
+      // A modified key is not ours.
+      //
+      // The bare-letter shortcuts below `preventDefault()` unconditionally, so
+      // `Ctrl+M` toggled *this app's* mute instead of the platform's, and
+      // `Ctrl+S` / `Cmd+S` discarded whatever the driver had typed and dumped
+      // them on the search screen seeded with "s". `Ctrl+F` did the same with an
+      // "f".
+      //
+      // This is also WCAG 2.1 SC 2.1.4 (Character Key Shortcuts), which requires
+      // a single-character shortcut to be disableable or remappable — and in
+      // practice it breaks switch users, whose assistive technology drives
+      // single letters and whose every modifier-less shortcut this handler
+      // intercepted.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      // Holding a key down must not repeat the action. Auto-repeat on a held `m`
+      // toggled mute several times a second, so the visible result depended on
+      // how long the key was held.
+      if (e.repeat) return;
+
       // Escape unwinds one level at a time. A sheet first (it is an overlay on
       // top of whatever opened it), then the screen stack, and home only when
       // there is nowhere further back to go.
@@ -590,13 +693,17 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         }
         setLayersOpen(false);
         if (layersOpenRef.current) return;
-        setScreen((s) => {
+        // The same `go`, so Escape gets the focus handling every other
+        // transition has, rather than being the one path that loses it.
+        const target = (() => {
+          const s = screenRef.current;
           // Ending a trip is a decision with consequences, not a dismissal, so
           // Escape deliberately does nothing here. There is an explicit Exit
           // control for it, and the exit path asks.
-          if (s === 'navigating') return s;
+          if (s === 'navigating') return null;
           return BACK_FROM[s] ?? 'home';
-        });
+        })();
+        if (target) go(target);
         return;
       }
 
@@ -626,7 +733,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         // and no seed character is set so "/" is not typed into the field.
         e.preventDefault();
         setPendingInitialQuery('');
-        setScreen('search');
+        go('search');
         requestAnimationFrame(() => {
           document.querySelector<HTMLInputElement>('.inline-search input')?.focus();
         });
@@ -637,7 +744,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         // field) and pressing `s` used to replace the whole query with `s`.
         if (screenRef.current === 'search') return;
         e.preventDefault();
-        setScreen('search');
+        go('search');
         setPendingInitialQuery(e.key);
         requestAnimationFrame(() => {
           document.querySelector<HTMLInputElement>('.inline-search input')?.focus();
@@ -646,7 +753,9 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+    // `go` has `[]` deps of its own, so it is referentially stable and listing it
+    // documents the dependency without re-registering the listener.
+  }, [go]);
 
   /* ------------------- restore cached regions on start ------------------- */
   // Parsing a province takes tens of seconds, so previously imported regions
@@ -712,8 +821,8 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
 
   const onFile = useCallback(async (file: File) => {
     const ds = await build(file, localRegionId(file), localRegionName(file), 'local');
-    if (ds) setScreen('home');
-  }, [build]);
+    if (ds) go('home');
+  }, [build, go]);
 
   /* ---------------------------- routing --------------------------- */
 
@@ -751,7 +860,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
       });
       beginRouteProgress(outcome.route.geometry);
       resetTraffic({ from, to: dest.pos });
-      setScreen('preview');
+      go('preview');
       setFitNonce((n) => n + 1);
     } catch (e) {
       // Single-dataset routing can't span extracts. With several regions
@@ -790,7 +899,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         });
         beginRouteProgress(next.geometry);
         resetTraffic({ from, to: dest.pos });
-        setScreen('preview');
+        go('preview');
         setFitNonce((n) => n + 1);
       } else {
         setRoute(null);
@@ -800,9 +909,17 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         // actionable, so it is the one the library records: telling a driver
         // "no route" when the truth is "this device cannot compute this route"
         // is how a reachable destination becomes an unreachable one.
-        setRouteError(regionLib.lastRefusal ?? (e instanceof NoRouteError ? e.message : (e as Error).message));
+        //
+        // `(e as Error).message` was here, and it throws *inside the catch block*
+        // when the rejection value is a string, a bare object, or null — which
+        // `fetch` does produce. The throw escapes the catch, so the `finally`
+        // never runs, `routing` stays `true` forever, the preview spins
+        // indefinitely, and the only trace is one unhandled rejection that the
+        // error boundary logs. `describeError` is the coercion already used in
+        // `regions/store.ts` for exactly this reason.
+        setRouteError(regionLib.lastRefusal ?? describeError(e));
         resetTraffic(null);
-        setScreen('preview');
+        go('preview');
         // Clear the trace: leaving the previous route's provenance on screen
         // would attribute a failure to whichever engine served the last success.
         setProvenance(null);
@@ -810,7 +927,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
     } finally {
       setRouting(false);
     }
-  }, [dataset, origin, location, enginePlan, selection.allowFallback, valhallaUnits, apiKey, endpoint, regions.length, resetTraffic]);
+  }, [dataset, origin, location, enginePlan, selection.allowFallback, valhallaUnits, apiKey, endpoint, regions.length, resetTraffic, go]);
 
   /* ------------------------- guidance model ----------------------- */
 
@@ -1089,7 +1206,10 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         resetTraffic({ from: origin, to: destination.pos });
         setFitNonce((n) => n + 1);
       } catch (e) {
-        reason = e instanceof NoRouteError ? e.message : (e as Error).message;
+        // `describeError`, not `(e as Error).message`: a rejection value that is
+        // not an `Error` makes that expression `undefined` — or a `TypeError`
+        // thrown from inside the catch block, which skips the cleanup below.
+        reason = e instanceof NoRouteError ? e.message : describeError(e);
       } finally {
         rerouteState.current = finishReroute(
           rerouteState.current, ok, Date.now(), reason, origin,
@@ -1209,6 +1329,35 @@ const banner = rerouteNotice ?? routeError ?? null;
       makes "jump to main" tell you where you are as well as getting you there.
     */
     <main className="app" aria-label={`Canopy Nav — ${SCREEN_NAMES[screen]}`}>
+      {/*
+        "You have arrived on <screen>", mounted once for the life of the app.
+
+        ## Why it lives here and not in each screen
+
+        A live region has to exist *before* the text inside it changes. NVDA,
+        JAWS and TalkBack all commonly discard content that is inserted into a
+        live region in the same commit that creates the region — which is exactly
+        what per-screen regions do, since each screen's component mounts together
+        with its first message. The navigation announcements in particular were
+        created *with* "In 240 m, turn right" already inside, so the first
+        instruction of the trip — the one the driver needed to hear to leave the
+        parking lot — was never announced at all. It only started working from the
+        second maneuver, when the text changed.
+
+        Mounted once, above every screen, only the text changes. That is the model
+        the specification describes, and it is the only arrangement that works.
+
+        `aria-atomic` so a screen name with a count in it is read whole.
+      */}
+      <div
+        className="visually-hidden"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {mounted.current ? `Now on ${SCREEN_NAMES[screen]}` : ''}
+      </div>
+
       <Suspense fallback={null}>
       <MapView
         dataset={dataset}
@@ -1227,6 +1376,7 @@ const banner = rerouteNotice ?? routeError ?? null;
 
       {screen === 'navigating' && route && (
         <NavOverlay
+          headingRef={headingRef}
           route={route}
           guidance={guidance}
           localGuidance={localGuidance}
@@ -1248,10 +1398,10 @@ const banner = rerouteNotice ?? routeError ?? null;
           trafficStale={trafficStale}
           trafficReason={trafficReason}
           onMute={() => setMuted((m) => !m)}
-          onExit={() => { setScreen('home'); beginRouteProgress(route.geometry); }}
+          onExit={() => { go('home'); beginRouteProgress(route.geometry); }}
           onOverview={() => setFitNonce((n) => n + 1)}
           onRecenter={() => setFocus({ center: location, zoom: 17 })}
-          onSteps={() => setScreen('steps')}
+          onSteps={() => go('steps')}
           onToggleTraffic={() =>
             setLayer((l) => (l === 'traffic' && trafficReady ? 'default' : 'traffic'))}
           onToggleLayers={() => setLayersOpen((o) => !o)}
@@ -1272,15 +1422,16 @@ const banner = rerouteNotice ?? routeError ?? null;
           routing={routing}
           error={banner}
           degraded={degraded[0] ?? null}
+          headingRef={headingRef}
           places={places}
           onSetPlace={(slot) => {
             if (!destination) return;
             savePlace(slot, { pos: destination.pos, label: destination.label });
             setImportWarn(`Saved "${destination.label}" as ${slot === 'home' ? 'Home' : 'Work'}.`);
           }}
-          onGo={() => setScreen('navigating')}
-          onBack={() => setScreen('home')}
-          onProvider={() => setScreen('settings')}
+          onGo={() => go('navigating')}
+          onBack={() => go('home')}
+          onProvider={() => go('settings')}
         />
       )}
 
@@ -1300,20 +1451,21 @@ const banner = rerouteNotice ?? routeError ?? null;
           onDismissError={() => setImportError(null)}
           onDismissWarn={() => setImportWarn(null)}
           route={route}
-          onImport={() => setScreen('import')}
+          onImport={() => go('import')}
           onImportFile={onFile}
-          onRegions={() => setScreen('regions')}
-          onSearch={() => setScreen('search')}
-          onContinue={() => route && setScreen('navigating')}
-          onSettings={() => setScreen('settings')}
+          onRegions={() => go('regions')}
+          onSearch={() => go('search')}
+          onContinue={() => route && go('navigating')}
+          onSettings={() => go('settings')}
           onRoute={(pos, label) => doRoute({ pos, label })}
           places={places}
+          headingRef={headingRef}
           onPickPlace={(slot) => {
             // Tapping an unset tile opens search with the slot named, so the
             // driver knows what picking a result is *for*.
             setPlacePending(slot);
             setPendingInitialQuery('');
-            setScreen('search');
+            go('search');
             requestAnimationFrame(() => {
               document.querySelector<HTMLInputElement>('.inline-search input')?.focus();
             });
@@ -1336,6 +1488,7 @@ const banner = rerouteNotice ?? routeError ?? null;
           online={online}
           location={location}
           initialQuery={pendingInitialQuery}
+          headingRef={headingRef}
           onInitialQueryConsumed={() => setPendingInitialQuery('')}
           pickHint={placePending ? `Saved as ${placePending === 'home' ? 'Home' : 'Work'} once you pick a destination` : null}
           onPick={(pos, label) => {
@@ -1344,20 +1497,21 @@ const banner = rerouteNotice ?? routeError ?? null;
             if (placePending) {
               savePlace(placePending, { pos, label });
               setImportWarn(`Saved "${label}" as ${placePending === 'home' ? 'Home' : 'Work'}.`);
-              setScreen('home');
+              go('home');
               return;
             }
-            setScreen('home');
+            go('home');
             doRoute({ pos, label });
           }}
-          onBack={() => { setPlacePending(null); setScreen('home'); }}
+          onBack={() => { setPlacePending(null); go('home'); }}
         />
       )}
 
       {screen === 'steps' && (
         <StepsScreen
           steps={guidance?.steps ?? localGuidance?.steps ?? []}
-          onBack={() => setScreen('navigating')}
+          headingRef={headingRef}
+          onBack={() => go('navigating')}
           inferred={!guidance && !!localGuidance}
           engineLabel={provenance ? describeProvenance(provenance.used, provenance.fellBack) : null}
           destination={destination}
@@ -1379,10 +1533,11 @@ const banner = rerouteNotice ?? routeError ?? null;
           setUnits={setUnits}
           provenance={provenance}
           storageNotice={settingsNotice}
-          onBack={() => setScreen('home')}
-          onImport={() => setScreen('import')}
-          onRegions={() => setScreen('regions')}
-          onEngines={() => setScreen('engines')}
+          headingRef={headingRef}
+          onBack={() => go('home')}
+          onImport={() => go('import')}
+          onRegions={() => go('regions')}
+          onEngines={() => go('engines')}
         />
       )}
 
@@ -1397,7 +1552,8 @@ const banner = rerouteNotice ?? routeError ?? null;
           endpoint={endpoint}
           setEndpoint={setEndpoint}
           provenance={provenance}
-          onBack={() => setScreen('settings')}
+          headingRef={headingRef}
+          onBack={() => go('settings')}
         />
       )}
 
@@ -1406,10 +1562,11 @@ const banner = rerouteNotice ?? routeError ?? null;
           progress={progress}
           error={importError}
           warn={importWarn}
+          headingRef={headingRef}
           onDismissError={() => setImportError(null)}
           onDismissWarn={() => setImportWarn(null)}
           onFile={onFile}
-          onBack={() => setScreen('home')}
+          onBack={() => go('home')}
         />
       )}
 
@@ -1418,7 +1575,7 @@ const banner = rerouteNotice ?? routeError ?? null;
         <RegionsScreen
           units={units}
           location={location}
-          onBack={() => setScreen('home')}
+          onBack={() => go('home')}
           onActivated={() => { setImportError(null); setProgress(null); }}
           onMapFocus={(center, zoom) => setFocus({ center, zoom })}
           onPreviewRoute={(result, to, label, via) => {
@@ -1429,7 +1586,7 @@ const banner = rerouteNotice ?? routeError ?? null;
             setDegraded([`Region library: ${via.map((id) => regionLib.get(id)?.name ?? id).join(' → ')}`]);
             beginRouteProgress(next.geometry);
             resetTraffic({ from: location, to });
-            setScreen('preview');
+            go('preview');
             setFitNonce((n) => n + 1);
           }}
         />
@@ -1481,6 +1638,8 @@ interface HomeProps {
    * to nowhere.
    */
   places: Partial<Record<PlaceSlot, SavedPlace>>;
+  /** This screen's heading, focused on arrival. */
+  headingRef?: React.Ref<HTMLHeadingElement>;
   onPickPlace: (slot: PlaceSlot) => void;
   onSetPlace: (slot: PlaceSlot) => void;
   error: string | null;
@@ -1548,7 +1707,7 @@ function HomeScreen(p: HomeProps) {
                 navigating by heading found nothing to move between. This is the
                 launcher's `<h1>`; the other screens use their own app-bar title.
                 `aria-level` is not needed — a real `<h1>` is the point. */}
-            <h1 className="brand-title" style={T.body3m}>
+            <h1 ref={p.headingRef} tabIndex={-1} className="brand-title" style={T.body3m}>
               {/*
                 "Canopy Nav" needs 151px at body3; at 412px the bar can spare
                 about 127 once the car glyph, the gaps, the status pill and the
@@ -1853,12 +2012,53 @@ function QuickTile({
   );
 }
 
+/**
+ * A long-running import, and what a driver hears while it runs.
+ *
+ * ## The two things this gets wrong if done naively
+ *
+ * **It would be a firehose.** The parser emits `onProgress` from every segment
+ * callback and the downloader reports on every stream chunk, so a provincial
+ * extract produces thousands of these — several per second. Inside
+ * `aria-live="polite"` that is an unbroken queue of "1%. 2%. 2%. 3%…" for the
+ * minutes the import takes, which is unusable *and* hides the stage changes,
+ * which are the only part worth hearing. So the percentage is exposed as a
+ * `progressbar`'s value (queryable, never announced) and the live region carries
+ * the **stage** alone, which changes a handful of times per import.
+ *
+ * **It would be created with its content.** This card mounts already containing
+ * "Parsing", so the first thing a screen reader is told about the import is
+ * silently dropped by most engines. `announceAfterMount` delays the first render
+ * by a frame so the region exists empty and is filled afterwards — the same
+ * trick the navigation announcements use, and for the same reason.
+ */
 function ProgressCard({ progress }: { progress: BuildProgress }) {
+  const pct = Math.round(progress.pct * 100);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setReady(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
   return (
-    <div className="progress-card" role="status" aria-live="polite">
-      <div style={T.body3m}>{progress.stage}</div>
-      <div className="bar"><div className="fill" style={{ width: `${Math.round(progress.pct * 100)}%` }} /></div>
-      <div style={{ ...T.sub3, color: ink.secondary }}>{Math.round(progress.pct * 100)}%</div>
+    <div className="progress-card">
+      <div className="progress-stage" role="status" aria-live="polite" aria-atomic="true">
+        {ready ? progress.stage : ''}
+      </div>
+      <div
+        className="bar"
+        role="progressbar"
+        aria-label="Importing map"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct}
+        aria-valuetext={`${pct} percent — ${progress.stage}`}
+      >
+        <div className="fill" style={{ width: `${pct}%` }} />
+      </div>
+      {/* Not in a live region: the number is the progressbar's value, and reading
+          it aloud is what made the region a firehose. */}
+      <div className="progress-pct" aria-hidden="true">{pct}%</div>
     </div>
   );
 }
@@ -1904,6 +2104,8 @@ function ImportMessage({
 /* ---------------------------- NavOverlay ---------------------------- */
 
 function NavOverlay(props: {
+  /** The screen's heading, focused on arrival so Tab continues from the banner. */
+  headingRef?: React.Ref<HTMLHeadingElement>;
   route: Route;
   guidance: GuidanceModel | null;
   localGuidance: LocalGuidanceModel | null;
@@ -2096,20 +2298,61 @@ function NavOverlay(props: {
   /**
    * What a screen reader is told about the trip.
    *
-   * Composed rather than emitted, so it changes only when the *meaning* changes.
-   * Putting the remaining distance in here would rewrite the region several
-   * times a second, which makes an assistive technology unusable — the classic
-   * way a live region does more harm than good. Distance is available on demand
-   * from the ETA bar's own accessible text.
+   * ## The distance is in here, and that is deliberate — but it is bucketed
+   *
+   * The comment this replaces claimed "putting the remaining distance in here
+   * would rewrite the region several times a second", which was false: the
+   * distance was in the template on the very next line. `formatDistance` snaps to
+   * 5 m under 20 m and 10 m under 1 km, so at 50 km/h this region was rewritten
+   * roughly every 0.7 s through the approach — with `aria-atomic="true"` on a
+   * polite region, which queues rather than replaces. A driver using assistive
+   * technology got "In 340 metres, turn right. In 330 metres, turn right. In 320
+   * metres…" without end, and because the queue is never drained the *next*
+   * maneuver was announced late or not at all.
+   *
+   * So the distance stays — a turn instruction without a distance is not an
+   * instruction — and is bucketed to the same 50 m / 0.2 mi step `voiceKey`
+   * already uses for speech. The banner's own text is not bucketed, because a
+   * sighted driver *does* want the count, and the two audiences are reading
+   * different channels.
    */
+  const announceDist =
+    units === 'metric' ? Math.round(laneDist / 50) * 50 : Math.round(laneDist / 322) * 322;
   const announcement = arriving
     ? 'You have arrived at your destination.'
     : instructionText
-      ? `In ${formatDistance(laneDist, units)}, ${instructionText.toLowerCase()}`
+      ? `In ${formatDistance(announceDist, units)}, ${instructionText.toLowerCase()}`
       : '';
+
+  /**
+   * Whether the live region has outlived its own mount.
+   *
+   * One frame of delay, for the reason in the JSX: a live region created together
+   * with its first content is not reliably announced, so the region exists empty
+   * and fills in afterwards. This is the smallest change that makes the first
+   * instruction of a trip audible — the one the driver needed to hear to leave
+   * the parking lot — without hoisting the region out of a component that only
+   * exists while navigating.
+   */
+  const [announcementReady, setAnnouncementReady] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setAnnouncementReady(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
 
   return (
     <div className="nav-root">
+      {/*
+        The screen's heading.
+
+        Visually hidden because the maneuver banner is 120px of icon and display3
+        type — a word above it would be noise. It exists so heading navigation
+        lands on this screen and so focus has somewhere to move when the driver
+        taps Start, which is the transition with the most at stake: without it
+        focus fell to `<body>` and the next Tab walked the whole navigation screen
+        from the top.
+      */}
+      <h1 ref={props.headingRef} tabIndex={-1} className="visually-hidden">Navigating</h1>
       {/*
         Announcements for the navigation screen.
 
@@ -2117,9 +2360,35 @@ function NavOverlay(props: {
         banner has its own `role="status"`, but arrival never did — measured as
         zero DOM mutations across 56 seconds of navigation, so the event a driver
         most needs to hear was silent to anyone not watching the screen.
+
+        ## The two defects this region has to get right
+
+        **It must exist before its text changes.** `NavOverlay` mounts only while
+        the screen is `navigating`, so this region was created *with* "In 240 m,
+        turn right" already inside it — and NVDA, JAWS and TalkBack all commonly
+        discard content inserted into a live region in the same commit that
+        creates the region. The first instruction of every trip, the one needed
+        to leave the parking lot, was therefore never announced. It only started
+        working from the second maneuver. The screen-name region in `App` is
+        mounted once for the life of the process and only its *text* changes;
+        this one cannot be, because `NavOverlay` is conditional. What it can do is
+        render empty on mount and fill in on the next commit, which is the
+        smallest change that makes the first announcement real.
+
+        **It must not rewrite on every distance bucket.** `voiceKey` buckets
+        speech to 50 m; this region had no bucket, so a driver using assistive
+        technology heard "In 340 metres, turn right. In 330 metres, turn right."
+        queued without end through the whole approach — and because the queue is
+        never cleared, the *next* maneuver was announced late or not at all. The
+        distance is bucketed below, using the same thresholds as speech.
       */}
-      <div className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
-        {announcement}
+      <div
+        className="visually-hidden"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {announcementReady ? announcement : ''}
       </div>
       {/* ETA bar — Android Auto's top strip */}
       <div className="eta-bar">
@@ -2156,8 +2425,13 @@ function NavOverlay(props: {
         */}
         <button
           className="icon-btn on-dark"
-          onClick={props.onMute}
-          disabled={!voiceAvailable}
+          onClick={() => { if (voiceAvailable) props.onMute(); }}
+          // `aria-disabled`, not `disabled`. The whole reason this control exists
+          // in its unavailable form is so it "explains itself" — but a `disabled`
+          // button is removed from the tab order, so the explanation in its
+          // accessible name could never be reached. It had to stay focusable to
+          // do the one job it was designed for.
+          aria-disabled={!voiceAvailable}
           aria-label={!voiceAvailable
             ? 'Voice guidance unavailable on this device'
             : muted ? 'Unmute voice guidance' : 'Mute voice guidance'}
@@ -2171,6 +2445,23 @@ function NavOverlay(props: {
         </button>
       </div>
 
+      {/*
+        The banner stack.
+
+        The maneuver card and the off-route notice were two independent absolutely
+        positioned boxes, the second placed at
+        `app-bar + inset-top + 24px + 168px` — 168 being a hand-copied
+        duplicate of the maneuver tile's height plus its padding. So the two cards
+        abutted with **zero** gap, which reads as a rendering mistake rather than
+        as two cards, and any future change to the tile's size silently pushed the
+        notice up underneath the card instead of moving it.
+
+        A flex column with a real spacing token makes the gap intrinsic: whatever
+        the maneuver card's height becomes, the notice stays one `P1` below it.
+        Order matters — the instruction is the more urgent of the two, so it comes
+        first in the column and the notice follows.
+      */}
+      <div className="banner-stack">
       {/* Maneuver banner — the big card Google Maps shows before each turn */}
       <div className="maneuver-banner">
         <div className={`maneuver-icon ${major || arriving ? 'major' : ''}`}>
@@ -2201,6 +2492,7 @@ function NavOverlay(props: {
           {props.rerouteNotice}
         </div>
       )}
+      </div>
 
       {/* Right-hand control stack */}
       <div className="nav-controls">
@@ -2214,8 +2506,12 @@ function NavOverlay(props: {
             visibly disabled — not merely inert — when no provider data backs it. */}
         <button
           className={`round-btn ${props.trafficOn ? 'on' : ''}`}
-          onClick={props.onToggleTraffic}
-          disabled={!props.trafficReady}
+          onClick={() => { if (props.trafficReady) props.onToggleTraffic(); }}
+          // `aria-disabled` so the reason stays reachable: `trafficLabel` carries
+          // the actual cause ("no traffic provider responded", "last known — no
+          // signal to refresh"), and a `disabled` control cannot be focused, so
+          // the one piece of information this row exists to give was unreachable.
+          aria-disabled={!props.trafficReady}
           aria-pressed={props.trafficOn}
           aria-label={trafficLabel}
           title={trafficLabel}
@@ -2323,8 +2619,27 @@ function NavPanel(props: {
   checking: boolean;
   canCheckTraffic: boolean;
 }) {
+  // Only on the mount that follows the sheet being opened, so a re-render does
+  // not yank focus back to the top of the list mid-interaction.
+  const sheetHadFocus = useRef(false);
   return (
-    <div className="nav-panel" role="dialog" aria-label="Map layers">
+    <div
+      className="nav-panel"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Map layers"
+      ref={(el) => {
+        // Focus enters the sheet so the arrow keys below have somewhere to start,
+        // and so Escape's dismissal is heard by the sheet rather than by whatever
+        // was focused behind it. Previously the trigger kept focus, which meant
+        // the sheet was never announced as a dialog and Tab walked out of it into
+        // the map canvas on the next stop.
+        if (el && !sheetHadFocus.current) {
+          sheetHadFocus.current = true;
+          focusQuietly(el);
+        }
+      }}
+    >
       <div className="panel-head">
         <h2 className="panel-title" style={T.body3m}>Map layers</h2>
         {/* Re-asking is a header action, not a row: it keeps the panel short
@@ -2344,14 +2659,32 @@ function NavPanel(props: {
         </button>
       </div>
 
-      <div className="layer-list">
+      <div className="layer-list" role="radiogroup" aria-label="Map layer">
         {props.options.map((o) => (
+          /*
+            A radio, not a toggle button.
+
+            The layer list is mutually exclusive — "Default" and "Traffic" are
+            alternatives, not switches — and it was exposed as five independent
+            `aria-pressed` toggles, which tells a screen-reader user that any
+            combination is available and that arrow keys do nothing. The Engines
+            screen already got this right with `role="radiogroup"`; this is the
+            same problem, on a different screen, in the same codebase.
+
+            `aria-disabled` rather than `disabled`. `disabled` removes a control
+            from the tab order and from the focus path, so the sentence explaining
+            *why* an option is unavailable — the thing the row was written to
+            communicate — is unreachable by keyboard and inaudible to assistive
+            technology. `aria-disabled` keeps it focusable and describable while
+            the click is refused, which is the behaviour the row's copy promises.
+          */
           <button
             key={o.id}
-            className={`layer-row ${o.id === props.layer ? 'on' : ''}`}
-            onClick={() => props.onPick(o.id)}
-            disabled={!o.available}
-            aria-pressed={o.id === props.layer}
+            role="radio"
+            aria-checked={o.id === props.layer}
+            className={`layer-row ${o.id === props.layer ? 'on' : ''} ${o.available ? '' : 'unavailable'}`}
+            onClick={() => { if (o.available) props.onPick(o.id); }}
+            aria-disabled={!o.available}
             aria-label={`${o.label} map layer. ${o.detail}`}
           >
             <span className="layer-text">
@@ -2360,7 +2693,7 @@ function NavPanel(props: {
                 {o.detail}
               </span>
             </span>
-            <span className={`radio ${o.id === props.layer ? 'on' : ''}`} />
+            <span aria-hidden="true" className={`radio ${o.id === props.layer ? 'on' : ''}`} />
           </button>
         ))}
       </div>
@@ -2391,13 +2724,34 @@ function PreviewCard(props: {
   /** Offers to save this destination as a Home/Work slot. */
   places?: Partial<Record<PlaceSlot, SavedPlace>>;
   onSetPlace?: (slot: PlaceSlot) => void;
+  headingRef?: React.Ref<HTMLHeadingElement>;
   onGo: () => void;
   onBack: () => void;
   onProvider: () => void;
 }) {
   const { route, units, routing, error, degraded } = props;
   return (
-    <div className="preview-root" role="dialog" aria-label="Route preview" aria-busy={routing}>
+    <div
+      className="preview-root"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Route preview"
+      aria-busy={routing}
+    >
+      {/*
+        `aria-modal` was missing. Without it a dialog is advisory: assistive
+        technology is free to treat the rest of the page as available, and it is —
+        the launcher underneath is still mounted and still in the tab order, so
+        Tab walked straight out of the preview and into the home screen's five
+        tiles behind it. `aria-modal` is what makes the *intent* explicit; the
+        inertness behind it is real because only one screen is rendered at a time.
+
+        The heading is visually hidden because the preview card already says what
+        the route is — this exists so heading navigation lands somewhere and so
+        focus has an element to move to, since the card's only other control is
+        the floating Back.
+      */}
+      <h1 ref={props.headingRef} tabIndex={-1} className="visually-hidden">Route preview</h1>
       <button className="floating-back" onClick={props.onBack} aria-label="Back">
         <IconBack size={ICON.primary} />
       </button>
@@ -2573,6 +2927,8 @@ function SearchScreen(props: {
    * driver who saves their home and is then surprised not to be routed there.
    */
   pickHint?: string | null;
+  /** This screen's heading, so a screen change can move focus onto it. */
+  headingRef?: React.Ref<HTMLHeadingElement>;
   onPick: (pos: LatLng, label: string) => void;
   onBack: () => void;
 }) {
@@ -2732,6 +3088,18 @@ function SearchScreen(props: {
       <div className="top-app-bar">
         <button className="icon-btn" onClick={props.onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
         {/*
+          * The screen's heading.
+
+          * The app bar here held a back button and the search field and nothing
+          * else, so navigating by heading skipped this screen entirely — and the
+          * field carries `autoFocus`, which meant focus arrived somewhere the
+          * user had not chosen. It is `visually-hidden` because a visible
+          * "Search" above a search box is noise; it is still the name of the
+          * screen, the first thing heading navigation lands on, and what focus
+          * moves to.
+        */}
+        <h1 ref={props.headingRef} tabIndex={-1} className="visually-hidden">Search</h1>
+        {/*
          * A real form, so Enter submits. It was a div, which made Enter a
          * complete no-op: typing a full street name and pressing the keyboard's
          * search key did nothing at all.
@@ -2860,7 +3228,7 @@ function SearchScreen(props: {
 /* ---------------------------- StepsScreen --------------------------- */
 
 function StepsScreen({
-  steps, onBack, inferred, engineLabel, destination,
+  steps, onBack, inferred, engineLabel, destination, headingRef,
 }: {
   steps: LegStep[];
   onBack: () => void;
@@ -2874,12 +3242,14 @@ function StepsScreen({
   engineLabel?: string | null;
   /** Names the final row, which is the one a driver scans for. */
   destination?: { label: string } | null;
+  /** This screen's heading, focused on arrival. */
+  headingRef?: React.Ref<HTMLHeadingElement>;
 }) {
   return (
     <div className="search-root">
       <div className="top-app-bar">
         <button className="icon-btn" onClick={onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
-        <h1 className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Route steps</h1>
+        <h1 ref={headingRef} tabIndex={-1} className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Route steps</h1>
       </div>
       <div className="search-results">
         {/*
@@ -2972,6 +3342,8 @@ function EnginesScreen(props: {
   apiKey: string; setApiKey: (v: string) => void;
   endpoint: string; setEndpoint: (v: string) => void;
   provenance: RouteProvenance | null;
+  /** This screen's heading, focused on arrival. */
+  headingRef?: React.Ref<HTMLHeadingElement>;
   onBack: () => void;
 }) {
   const statuses = engineStatuses(
@@ -3000,7 +3372,7 @@ function EnginesScreen(props: {
     <div className="search-root">
       <div className="top-app-bar">
         <button className="icon-btn" onClick={props.onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
-        <h1 className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Engines</h1>
+        <h1 ref={props.headingRef} tabIndex={-1} className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Engines</h1>
       </div>
 
       <div className="settings-body">
@@ -3018,9 +3390,15 @@ function EnginesScreen(props: {
             // An engine that cannot route must not be selectable. It was fully
             // live — `disabled=false`, `cursor:pointer`, full opacity — so a row
             // reading "Unavailable — no offline map loaded" could still be chosen
-            // and then fail every request. The row stays focusable and readable;
-            // only the activation is refused.
-            disabled={!s.ready}
+            // and then fail every request. The activation is refused.
+            //
+            // `aria-disabled`, not `disabled`. `disabled` would also solve that,
+            // and then throw away the row's whole purpose: it removes the control
+            // from the tab order, so the sentence explaining *why* the engine is
+            // unavailable — the only thing the row has to say — becomes
+            // unreachable by keyboard and inaudible to assistive technology. The
+            // screen read as "here are some engines, pick one", with the chosen
+            // one impossible to explore.
             aria-disabled={!s.ready}
             aria-checked={chosen === s.id}
             onClick={() => {
@@ -3195,6 +3573,8 @@ function SettingsScreen(props: {
   storageNotice?: string | null;
   onBack: () => void; onImport: () => void; onRegions: () => void;
   onEngines: () => void;
+  /** This screen's heading, focused on arrival. */
+  headingRef?: React.Ref<HTMLHeadingElement>;
 }) {
   const serving = props.provenance
     ? describeProvenance(props.provenance.used, props.provenance.fellBack)
@@ -3203,7 +3583,7 @@ function SettingsScreen(props: {
     <div className="search-root">
       <div className="top-app-bar">
         <button className="icon-btn" onClick={props.onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
-        <h1 className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Settings</h1>
+        <h1 ref={props.headingRef} tabIndex={-1} className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Settings</h1>
       </div>
 
       <div className="settings-body">
@@ -3271,6 +3651,8 @@ function ImportScreen(props: {
   onDismissWarn?: () => void;
   onFile: (f: File) => void;
   onBack: () => void;
+  /** This screen's heading, focused on arrival. */
+  headingRef?: React.Ref<HTMLHeadingElement>;
 }) {
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -3278,7 +3660,7 @@ function ImportScreen(props: {
     <div className="search-root">
       <div className="top-app-bar">
         <button className="icon-btn" onClick={props.onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
-        <h1 className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Import .osm</h1>
+        <h1 ref={props.headingRef} tabIndex={-1} className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Import .osm</h1>
       </div>
 
       <div className="settings-body">

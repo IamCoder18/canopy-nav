@@ -73,7 +73,29 @@ for (const vpName of vpNames) {
   if (!vp) { console.log(`unknown viewport ${vpName}`); continue; }
 
   const browser = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader'] });
-  const ctx = await browser.newContext({ viewport: vp, deviceScaleFactor: 1 });
+  const ctx = await browser.newContext({
+    viewport: vp,
+    deviceScaleFactor: 1,
+    /*
+     * A real position, inside the fixture's connected component near London.
+     *
+     * Without this the harness can never reach the navigation screen: with no fix
+     * the app's position is its no-fix placeholder, Calgary, and the only
+     * destination available is in the London fixture — so every route request is
+     * 7,000 km long, the offline engine has no Calgary data, and the preview
+     * stops at an error. The screens that matter most here — the maneuver banner,
+     * the ETA bar, the bottom bar — were therefore never screens this tool
+     * photographed.
+     *
+     * Placed ~1.5 km north-west of the fixture's road network, so a route to
+     * "Elbow" has real length and real turns. At the network's own edge the
+     * driver starts on top of the destination, the route is a single point, and
+     * the banner correctly — but unphotographably — reads "You have arrived".
+     */
+    permissions: ['geolocation'],
+    geolocation: { latitude: 51.5215, longitude: -1.4175 },
+    locale: 'en-GB',
+  });
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e.message)));

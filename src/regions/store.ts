@@ -18,6 +18,7 @@
 import { useSyncExternalStore } from 'react';
 import { OsmEngine, importPreflight, type BuildProgress } from '../osm/engine';
 import type { OsmDataset } from '../osm/engine.worker';
+import { describeError } from '../errors';
 import { RegionLibrary, type Region, type RegionMeta } from '../osm/regions';
 import { saveRegion, deleteRegion, loadAllRegions, probePersistence } from './persist';
 
@@ -172,14 +173,10 @@ export async function importRegionFile(req: ImportRequest): Promise<OsmDataset |
       else engines.delete(req.id);
     }
     onProgress?.(null);
-    // `(e as Error).message` is `undefined` for a thrown string, a rejected
-    // non-Error, or a `null` — which reaches the user as an empty card. Coerce,
-    // so every failure carries words.
-    const message = e instanceof Error ? e.message
-      : typeof e === 'string' ? e
-      : e == null ? 'The import failed for an unknown reason.'
-      : (() => { try { return JSON.stringify(e); } catch { return 'The import failed for an unknown reason.'; } })();
-    onError?.(message);
+    // `describeError` was written here first, and now lives in `src/errors.ts`
+    // so every `catch` in the app can reach it. See that module for why
+    // `(e as Error).message` is not a safe assertion.
+    onError?.(describeError(e));
     return null;
   }
 }

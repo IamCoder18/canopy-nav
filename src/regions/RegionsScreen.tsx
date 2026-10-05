@@ -134,7 +134,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
       });
       if (ds) {
         setError(null);
-        props.onActivated();
+        onActivated();
       }
       // Cleared here as well as in `onPicked`, because this path sets it too and
       // a download that *fails* must not leave "100%" on screen either.
@@ -266,6 +266,16 @@ export function RegionsScreen(props: RegionsScreenProps) {
     fileRef.current?.click();
   };
 
+  /**
+   * The prop that ends this screen, held once.
+   *
+   * `props` is a new object on every `App` render — and App re-renders at 1 Hz
+   * while navigating — so a `useCallback` that depends on `props` has a new
+   * identity every render and memoises nothing. Reading the one function off it
+   * makes the dependency list honest.
+   */
+  const onActivated = props.onActivated;
+
   const onPicked = useCallback(async (file: File | undefined) => {
     if (!file) return;
     const p = pending.current ?? { id: '', name: '', code: 'local' };
@@ -290,7 +300,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
       });
       if (ds) {
         setError(null);
-        props.onActivated();
+        onActivated();
       }
     } finally {
       // Clear the pinned card.
@@ -302,11 +312,11 @@ export function RegionsScreen(props: RegionsScreenProps) {
       // was. Cleared in `finally` so the failure path gets it too.
       setProgress(null);
     }
-    // Depends on `props`, which is a fresh object on every `App` render — and App
-    // re-renders at 1 Hz while navigating. So this `useCallback` had a new
-    // identity every render and memoised nothing, while costing a closure
-    // allocation each time. `props.onActivated` is the only prop actually used.
-  }, [props.onActivated]);
+    // Destructured rather than read off `props`: `props` is a fresh object on
+    // every `App` render — and App re-renders at 1 Hz while navigating — so
+    // depending on it makes this `useCallback` have a new identity every render
+    // and memoise nothing, while costing a closure allocation each time.
+  }, [onActivated]);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -486,7 +496,27 @@ export function RegionsScreen(props: RegionsScreenProps) {
 
           <div className="preview-actions">
             <button className="secondary-btn" onClick={() => { setOutcome(null); setError(null); }}>Clear</button>
-            <button className="primary-btn" onClick={preview} disabled={regions.length === 0}>
+            {/*
+              `aria-disabled` with the reason in the accessible name, rather than
+              `disabled` with nothing.
+
+              This button was disabled whenever nothing was downloaded, and said
+              nothing about why. A driver who has just opened this screen sees two
+              inert-looking controls with no explanation, and no way to find one:
+              a `disabled` control is not focusable, so neither the tooltip nor a
+              sibling hint could ever reach them. The reason is now part of the
+              name, which is the only text a screen-reader user gets.
+            */}
+            <button
+              className="primary-btn"
+              onClick={() => { if (regions.length) preview(); }}
+              aria-disabled={regions.length === 0}
+              aria-label={
+                regions.length === 0
+                  ? 'Preview route — unavailable, download a region first'
+                  : 'Preview route across the downloaded regions'
+              }
+            >
               Preview route
             </button>
           </div>
@@ -603,7 +633,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
                       : null}
                     <button
                       className="pill-btn"
-                      disabled={dl?.entry.id === e.id || availability[e.id] === false || probing}
+                      aria-disabled={dl?.entry.id === e.id || availability[e.id] === false || probing}
                       title={availability[e.id] === false
                         ? (unavailableReason[e.id] ?? 'This download URL could not be reached')
                         : `Download ${e.name} (${formatBytes(e.approxMb * 1024 * 1024)})`}
@@ -618,7 +648,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
                           : probing ? `Checking whether the ${e.name} download is reachable`
                             : have ? `Replace the ${e.name} map` : `Download the ${e.name} map`
                       }
-                      onClick={() => void startDownload(e)}
+                      onClick={() => { if (dl?.entry.id !== e.id && availability[e.id] !== false && !probing) void startDownload(e); }}
                     >
                       {dl?.entry.id === e.id
                         ? 'Downloading…'
@@ -645,17 +675,47 @@ export function RegionsScreen(props: RegionsScreenProps) {
         </button>
 
         {/* Download progress. An indeterminate total is shown as an explicit
-            "size unknown" rather than a fake 0%, which would read as stalled. */}
+            "size unknown" rather than a fake 0%, which would read as stalled.
+
+            A real `progressbar`, and the same split `ProgressCard` uses in
+            `App.tsx`: the *number* is the bar's value — queryable, never
+            announced — and the live region carries only the operation's name,
+            which changes a handful of times per download.
+
+            Both cards on this screen previously had no role at all, so the one
+            surface where a driver spends minutes watching a 380 MB transfer
+            reported nothing to anyone not looking at it. And putting the byte
+            count in a live region would be worse than silence, because the
+            downloader reports on every stream chunk: that is the firehose this
+            split exists to avoid.
+
+            An indeterminate total omits `aria-valuenow` altogether — the role
+            requires it to reflect a known value, and the "size unknown" line
+            already says so in words. */}
         {dl && (
           <div className="progress-card" style={{ marginTop: DP.P3 }}>
-            <div style={T.body3m}>Downloading {dl.entry.name}</div>
-            <div className="bar">
+            <div className="progress-stage" role="status" aria-live="polite" aria-atomic="true">
+              Downloading {dl.entry.name}
+            </div>
+            <div
+              className="bar"
+              role="progressbar"
+              aria-label={`Downloading ${dl.entry.name}`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={dl.progress.fraction === null ? undefined : Math.round(dl.progress.fraction * 100)}
+              aria-valuetext={
+                dl.progress.total !== null
+                  ? `${formatBytes(dl.progress.received)} of ${formatBytes(dl.progress.total)}`
+                  : `${formatBytes(dl.progress.received)} downloaded, total size unknown`
+              }
+            >
               <div
                 className={dl.progress.fraction === null ? 'fill anim' : 'fill'}
                 style={dl.progress.fraction === null ? undefined : { width: `${Math.round(dl.progress.fraction * 100)}%` }}
               />
             </div>
-            <div style={{ ...T.sub3, color: ink.secondary }}>
+            <div className="progress-pct">
               {formatBytes(dl.progress.received)}
               {dl.progress.total !== null ? ` of ${formatBytes(dl.progress.total)}` : ' (size unknown)'}
               {dl.progress.fraction !== null ? ` · ${Math.round(dl.progress.fraction * 100)}%` : ''}
@@ -666,21 +726,50 @@ export function RegionsScreen(props: RegionsScreenProps) {
 
         {progress && (
           <div className="progress-card" style={{ marginTop: DP.P3 }}>
-            <div style={T.body3m}>{progress.stage}</div>
-            <div className="bar"><div className="fill" style={{ width: `${Math.round(progress.pct * 100)}%` }} /></div>
-            <div style={{ ...T.sub3, color: ink.secondary }}>{Math.round(progress.pct * 100)}%</div>
+            <div className="progress-stage" role="status" aria-live="polite" aria-atomic="true">
+              {progress.stage}
+            </div>
+            <div
+              className="bar"
+              role="progressbar"
+              aria-label="Building the offline map"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(progress.pct * 100)}
+              aria-valuetext={`${Math.round(progress.pct * 100)} percent — ${progress.stage}`}
+            >
+              <div className="fill" style={{ width: `${Math.round(progress.pct * 100)}%` }} />
+            </div>
+            <div className="progress-pct" aria-hidden="true">{Math.round(progress.pct * 100)}%</div>
           </div>
         )}
 
+        {/*
+          Both of these were silent.
+
+          The file's own comment below, on `outcome.error`, explains why an error
+          card needs a `role` — and then these two, which are the messages a driver
+          actually waits on, were left without one. So a failed 380 MB download
+          produced no announcement and no visible error *role*, and the
+          quota-exhausted warning that `importRegionFile` goes out of its way to
+          build — "Imported, but it could not be saved for next time… It will be
+          gone when you close the app" — was inaudible on the one screen where a
+          region is imported.
+
+          `role="alert"` on the error (assertive: the thing they asked for did not
+          happen), `role="status"` on the warnings (polite: it did, with caveats).
+        */}
         {warnings.length > 0 && (
-          <div className="hint-card" style={{ marginTop: DP.P3 }}>
+          <div className="hint-card warn" role="status" style={{ marginTop: DP.P3 }}>
             {warnings.map((w, i) => (
-              <div key={i} style={{ ...T.sub3, color: ink.secondary }}>{w}</div>
+              <div key={i} style={{ ...T.sub3 }}>{w}</div>
             ))}
           </div>
         )}
 
-        {error && <div className="error-card" style={{ marginTop: DP.P3 }}>{error}</div>}
+        {error && (
+          <div className="error-card" role="alert" style={{ marginTop: DP.P3 }}>{error}</div>
+        )}
       </div>
     </div>
   );

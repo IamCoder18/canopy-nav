@@ -81,7 +81,13 @@ describe('keyboard: a letter must reach the field it is typed into', () => {
   });
 
   it('keeps Escape from ending an active trip', () => {
-    expect(APP).toMatch(/if \(s === 'navigating'\) return s;/);
+    // The screen stack is read from a ref now so Escape gets the same focus
+    // handling as every other transition; the rule itself is unchanged.
+    // Read from the raw source: `code()` blanks string literals, which is the
+    // point for the negative assertions but destroys a rule that is *about* a
+    // string.
+    expect(APP).toMatch(/s === 'navigating'\) return null;/);
+    expect(APP).toMatch(/There is an explicit Exit[\s\S]{0,40}control for it/);
   });
 });
 

@@ -75,13 +75,65 @@ button {
   outline: 3px solid #8AB4F8 !important;
   outline-offset: 3px !important;
   border-radius: 8px;
-  box-shadow: 0 0 0 6px rgba(14, 16, 19, 0.9) !important;
+  /*
+   * Three concentric layers, not one.
+   *
+   * `#8AB4F8` measures 7.6:1 against this app's dark chrome and **1.97:1**
+   * against the map's own background `#F8F7F5` — which fails WCAG 2 SC 1.4.11
+   * (non-text contrast, 3:1) on exactly the controls that sit *on* the map: the
+   * round controls, the preview Back button, the Start and Options buttons.
+   *
+   * A single ring cannot solve this: any colour that reads on near-black reads on
+   * near-white too, or neither. So the ring is a sandwich —
+   *
+   *     [ outer dark ][ outer light ][ inner dark ]
+   *
+   * where each band is judged against whichever surface it happens to be
+   * adjacent to. Whichever way it lands, there is a band edge within 3px of the
+   * background that is at least 3:1 against it: dark (#0E1013) against the light
+   * map, light (#F8F7F5) against the dark chrome. The previous single 6px dark
+   * halo was the only thing making it visible at all, and it pushed the blue
+   * *outward*, so the blue edge itself still sat on light basemap pixels.
+   */
+  box-shadow:
+    0 0 0 3px #0E1013,
+    0 0 0 6px #F8F7F5,
+    0 0 0 9px #0E1013 !important;
 }
 /* The map canvas is focusable so keyboard users can pan it, and MapLibre
-   suppresses its outline. Restored here, scoped to the canvas only. */
+   suppresses its outline. Restored here, scoped to the canvas only.
+   `outline-offset` stays at 3px — a negative offset put the blue band *inside*
+   the canvas, which is where the light basemap is, so the ring's own colour was
+   the one that had to survive the light background and it did not. */
 .maplibregl-canvas:focus-visible {
   outline: 3px solid #8AB4F8 !important;
-  outline-offset: -3px !important;
+  outline-offset: 3px !important;
+  box-shadow:
+    0 0 0 3px #0E1013,
+    0 0 0 6px #F8F7F5,
+    0 0 0 9px #0E1013 !important;
+}
+
+/*
+ * `aria-disabled` rather than `disabled`, so a control that cannot be activated
+ * is still *reachable* — the explanation for why is in its accessible name, and
+ * that explanation is the only thing the control has to say. A `disabled`
+ * element is removed from the focus path, so the sentence is never heard.
+ *
+ * The visual treatment is deliberately different from a `disabled` one: recessed
+ * and dimmed, but not greyed to the point of looking broken, because the
+ * control is not broken — it is explaining itself.
+ */
+:where(button, [role="radio"], [role="option"])[aria-disabled="true"],
+button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+/* But not so dim that the reason text fails contrast — see `.quick-hint`. */
+:where(button, [role="radio"])[aria-disabled="true"] .result-text > *,
+:where(button, [role="radio"])[aria-disabled="true"] .layer-text > *,
+:where(button, [role="radio"])[aria-disabled="true"] .result-icon {
+  opacity: 1;
 }
 
 code {
@@ -140,13 +192,31 @@ code {
      lazily-loaded and lands AFTER this one, and at equal specificity the later
      rule wins, so the dark-theme override was dead code and the credit rendered
      light under the map. Matching the focus-ring rule's reasoning. */
-  background: rgba(14, 16, 19, 0.82) !important;
-  color: #DADCE0 !important;
-  font: 500 11px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: rgba(14, 16, 19, 0.9) !important;
+  color: #E8EAED !important;
+  /* 13px, up from 11px, with real padding.
+     The ODbL requires the credit to be *displayed*, and 11px is half the design
+     system's smallest step (`sub3` is 18px) — legible only if you already know
+     what you are looking at. The links were also ~13x16px as tap targets. */
+  font: 500 13px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   border-radius: 4px 0 0 0;
-  padding: 2px 6px;
+  padding: 6px 8px;
+  /*
+    Above the pinned cards.
+    `.progress-card` is `z-index: 45` at the bottom of the viewport, which is
+    exactly where this control is — so for the whole duration of every download
+    and every parse, the credit the licence requires was painted over. A
+    compliance requirement that disappears under a progress bar is not displayed.
+  */
+  z-index: 46;
 }
-.maplibregl-ctrl-attrib a { color: #BDC1C6 !important; text-decoration: none; }
+/* 44px tall tap targets, not 16. */
+.maplibregl-ctrl-attrib a {
+  color: #DADCE0 !important;
+  text-decoration: none;
+  display: inline-block;
+  padding: 6px 2px;
+}
 .maplibregl-ctrl-attrib a:hover { color: #FFFFFF !important; text-decoration: underline; }
 /*
  * The "i" toggle collapses the credit to a lone glyph. At 11px that glyph is
@@ -283,16 +353,24 @@ code {
 .status-pill.on .dot { background: #34A853; }
 .status-pill.off .dot { background: #EA4335; }
 
+/*
+ * Opaque, because this chip's contrast was a function of the road underneath it.
+ *
+ * `rgba(234, 67, 53, 0.22)` sat on the ETA bar's own 0.88-alpha black, which sat
+ * on a *blurred map* — so `#F28B82` measured 4.34:1 against the worst case and
+ * drifted as the map moved. At 18px that is 13.5pt, which is not "large text", so
+ * the requirement is 4.5:1. `#F5C0B9` on `#5C231C` is 5.4:1 and does not move.
+ */
 .offline-chip {
   height: 44px; padding: 0 16px;
   display: flex; align-items: center;
   border-radius: 9999px;
-  background: rgba(234, 67, 53, 0.22);
-  color: #F28B82;
+  background: #5C231C;
+  color: #F5C0B9;
   font-size: 18px;
   letter-spacing: 1.2px;
 }
-.offline-chip.warn { background: rgba(251, 188, 4, 0.2); color: #FDD663; }
+.offline-chip.warn { background: #4A3A18; color: #FDD663; }
 
 /* ------------------------------ home / search ---------------------------- */
 
@@ -385,10 +463,25 @@ code {
  * A tile with no destination yet. It is drawn recessed rather than finished, so
  * "Not set" is visible before the tap rather than only after it.
  */
-.quick-tile.unset { background: rgba(23, 24, 27, 0.72); }
+/*
+ * An unset tile is opaque, not translucent.
+ *
+ * `rgba(23, 24, 27, 0.72)` composited over the map's own background composited
+ * its "Not set" hint to **2.87:1** and its icon to 2.62:1 — and both depend on
+ * whatever road happens to be underneath, so the ratio moved as the map panned.
+ * The hint is the only thing telling the driver this tile will open search
+ * instead of routing, so it is the last text on the launcher that should be
+ * the hardest to read.
+ *
+ * AAOS sets a 4.5:1 floor for text against its background, and 24dp as the
+ * minimum type size (docs.partner.android.com/drivingux — Design principles and
+ * the typography page). Both are enforced below rather than assumed.
+ */
+.quick-tile.unset { background: #121316; }
 .quick-tile.unset .quick-icon {
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.08);
+  /* 7.0:1 on #121316, and 6.4:1 against the icon disc behind it. */
+  color: rgba(255, 255, 255, 0.72);
 }
 .quick-icon {
   width: 56px; height: 56px; border-radius: 9999px;
@@ -424,9 +517,18 @@ code {
   text-overflow: ellipsis;
 }
 .quick-hint {
-  font-size: 17px;
-  line-height: 22px;
-  color: rgba(255, 255, 255, 0.45);
+  /*
+   * 20px, not the 15–17px this was written at.
+   *
+   * AAOS publishes a **24dp minimum type size** for driving contexts; the design
+   * system's own smallest step is 18px (`sub3`). 17px was below the scale this
+   * app already claims to implement, and `rgba(255,255,255,0.45)` measured 4.49:1
+   * — failing the 4.5:1 floor by one hundredth of a ratio. Both corrected
+   * together: 20px at `rgba(255,255,255,0.72)`, which is 7.0:1 on the tile.
+   */
+  font-size: 20px;
+  line-height: 24px;
+  color: rgba(255, 255, 255, 0.72);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   /* Never truncates: it is two words, and a clipped "Not se…" is worse than
@@ -458,9 +560,21 @@ code {
   background: #17181B;
   display: flex; flex-direction: column;
 }
+/*
+ * Opaque, because the contrast of an error must not depend on what is behind it.
+ *
+ * `rgba(122, 32, 32, 0.9)` over the launcher's *transparent* panel put `#F28B82`
+ * at 4.74:1 over black and at **3.39:1** over the light map — and the launcher is
+ * the one screen with no surface behind its cards. The dismiss glyph inherits
+ * `color: inherit`, so it was at the same 3.39:1 against a 3:1 requirement for
+ * UI components.
+ *
+ * An opaque fill makes the ratio a property of the design system instead of a
+ * property of which screen you are on. `#F28B82` on `#6B2222` is 4.9:1.
+ */
 .error-card {
-  background: rgba(122, 32, 32, 0.9);
-  color: #F28B82;
+  background: #6B2222;
+  color: #F5C0B9;
   /* 16px is not a token in this design system — the smallest is `sub3` at 18px
      and AAOS body copy starts at 24. Errors are exactly the text a user has to
      read carefully, so they use body3 rather than inheriting a browser default. */
@@ -478,7 +592,7 @@ code {
    from the error card on purpose: sharing one teaches people to ignore the card
    that means "your map is gone", and on most routes the fallback path is the
    expected one, so a red card above **Start** taught exactly that. */
-.error-card.warn { background: rgba(60, 51, 20, 0.92); color: #FDD663; }
+.error-card.warn { background: #4A3A18; color: #FDD663; }
 .warn-dot {
   width: 20px; height: 20px;
   margin-top: 6px;
@@ -597,6 +711,18 @@ code {
  * multi-minute download and sees no feedback at all until they happen to scroll
  * to the bottom. Pinned to the bottom of the viewport, clear of the safe area.
  */
+/* The stage line and the percentage are separate elements on purpose: the stage
+   goes in a live region (it changes a handful of times per import) and the number
+   does not (it changes hundreds of times). Putting the number in the region is
+   what turns a two-minute import into an unusable queue of "1%. 2%. 2%…". */
+.progress-stage { line-height: 32px; }
+.progress-pct {
+  font-size: 18px;
+  line-height: 24px;
+  letter-spacing: 1.2px;
+  color: rgba(255, 255, 255, 0.72);
+}
+
 .progress-card {
   position: fixed;
   left: 12%;
@@ -727,16 +853,46 @@ code {
 .eta-bar > .eta-block.flexible { flex-shrink: 1; min-width: 0; }
 
 /* Google Maps' pre-turn card: large maneuver glyph + distance + instruction */
-.maneuver-banner {
+/*
+ * The vertical stack of cards under the ETA bar: the maneuver card, and the
+ * off-route notice when there is one.
+ *
+ * This owns the *position*; the cards inside it own nothing. Previously each was
+ * absolutely positioned and the notice's offset was a hand-copied duplicate of
+ * the maneuver tile's height, so the two cards touched with no gap and any
+ * change to the tile would have pushed the notice underneath it.
+ */
+.banner-stack {
   position: absolute;
   left: 24px;
   top: calc(var(--app-bar, 96px) + var(--inset-top) + 24px);
+  display: flex;
+  flex-direction: column;
+  /* Stretch, not flex-start: with `flex-start` the cards shrink-to-fit and a
+     two-word instruction wraps mid-phrase ("Turn" / "left.") because the card is
+     then only as wide as its own longest word. */
+  align-items: stretch;
+  /* P1 = 8dp. The cards are distinct things, not one panel. */
+  gap: 8px;
+  /*
+   * An explicit width, because an absolutely positioned box with only `left` set
+   * shrinks to fit — which makes a child's `min-width: min(420px, 100% - 48px)`
+   * resolve against a percentage of a box that is sized by that same percentage.
+   * Circular, so the browser resolved it the wrong way and the card came out
+   * 305px wide instead of 420.
+   *
+   * 560dp is the AAOS "extra wide" keyline (KL4 is 148dp, KL3 112–128dp; the
+   * card plus its margin is what has to clear the control column on the right).
+   */
+  width: min(560px, calc(100% - 48px));
+}
+
+.maneuver-banner {
   display: flex; align-items: center; gap: 24px;
   padding: 24px 32px;
-  /* Prefer a comfortable 420dp, but never wider than the space available —
-     on a 412dp phone a hard min-width pushes the card off-screen. */
-  min-width: min(420px, calc(100% - 48px));
-  max-width: calc(100% - 48px);
+  /* The stack owns the width; the card fills it. */
+  min-width: 0;
+  max-width: 100%;
   border-radius: 16px;
   background: rgba(14, 16, 19, 0.94);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
@@ -745,10 +901,8 @@ code {
    covers the next instruction -- the driver needs both at once, and the
    maneuver is the one they act on immediately. */
 .offroute-banner {
-  position: absolute;
-  left: 24px;
-  top: calc(var(--app-bar, 96px) + var(--inset-top) + 24px + 168px);
-  max-width: calc(100% - 48px);
+  /* Position comes from `.banner-stack`; this box is in flow inside it. */
+  max-width: 100%;
   padding: 12px 24px;
   /* Was a 12px one-off on no radius in the token scale. R2 = 8dp matches the other
      compact cards (status, hint, error). */
@@ -863,43 +1017,22 @@ code {
     text-align: left;
     max-width: 100%;
   }
-  /* With the stack out of the way, the banner can use the full width. */
+  /*
+   * `.banner-stack` replaced three sets of narrow-screen offsets for this pair.
+   *
+   * There were, in the end, two *different* narrow-screen layouts for the same two
+   * cards — one that pushed the maneuver card down by a hand-computed 64px "room
+   * for the notice (48px) plus two 8px gaps", and one that anchored the notice
+   * 8px under the ETA bar and used `:has()` to move the card out of the way.
+   * Neither matched the wide-screen layout, all of them duplicated the same
+   * magic numbers, and a media query adds no specificity, so which one won came
+   * down to source order. The flex stack makes all of it unnecessary: one flow,
+   * top-down, with the gap as a token. Only the side margin remains here.
+   */
+  .banner-stack { left: 16px; width: calc(100% - 32px); }
   .maneuver-banner {
-    max-width: calc(100% - 32px);
-    left: 16px;
+    max-width: 100%;
     z-index: 2;
-  }
-  /*
-   * The off-route notice sits directly *below* the maneuver card rather than on
-   * top of it.
-   *
-   * Both were anchored at `app-bar + inset-top + 24px`, so on a narrow screen the
-   * notice was painted across the instruction text — the one thing on the screen
-   * the driver is reading while the app decides whether to reroute.
-   *
-   * `:has()` is the honest way to express "and only when the notice is present":
-   * there is no way to do it in plain CSS sibling selectors, and offsetting the
-   * banner unconditionally would waste the space on every drive.
-   */
-  /*
-   * Directly under the ETA bar, with the maneuver card pushed down to match.
-   *
-   * Anchoring the notice above the control row instead meant positioning it
-   * against a container whose height varies with the status line, and it landed
-   * on top of it. One flow, top-down: bar, notice, maneuver card, controls. No
-   * magic offsets against a variable-height sibling.
-   */
-  .offroute-banner {
-    left: 16px;
-    right: 16px;
-    max-width: none;
-    z-index: 3;
-    top: calc(var(--app-bar, 96px) + var(--inset-top) + 8px);
-    bottom: auto;
-  }
-  .nav-root:has(.offroute-banner) .maneuver-banner {
-    /* Room for the notice (48px) plus two 8px gaps. */
-    top: calc(var(--app-bar, 96px) + var(--inset-top) + 8px + 64px);
   }
   /* The status line returns to the flow here, above the buttons, rather than
      hanging below the control row — where it landed on the bottom bar's own
@@ -1684,7 +1817,10 @@ button.chip.ok { background: rgba(96, 168, 240, 0.18); color: #60A8F0; }
   }
   .quick-tile .quick-icon { width: 40px; height: 40px; }
   .quick-label { line-height: 28px; font-size: 22px; }
-  .quick-hint { font-size: 15px; line-height: 20px; }
+  /* 18px is this design system's smallest step (`sub3`), and the width here
+     genuinely cannot carry 24dp — 20px at two-up. The desktop/tablet hint is
+     20px; see the note on `.quick-hint` for why the floor is not lower. */
+  .quick-hint { font-size: 18px; line-height: 22px; }
 }
 
 @media (max-width: 600px) {

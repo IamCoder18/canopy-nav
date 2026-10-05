@@ -91,7 +91,9 @@ describe('App renders without throwing', () => {
     // navigating by heading found nothing to move between. The brand line is the
     // launcher's heading; the other screens use their app-bar title.
     const html = await renderApp();
-    expect(html).toMatch(/<h1 class="brand-title"[^>]*>Canopy Nav<\/h1>/);
+    // The wordmark, with its short form as a nested span so narrow screens can drop
+    // " Nav" without duplicating the accessible name.
+    expect(html).toMatch(/<h1[^>]*class="brand-title"[^>]*>Canopy<span class="brand-tail"> Nav<\/span><\/h1>/);
   });
 
   it('names the current screen in the landmark, not just the app', async () => {
