@@ -117,9 +117,21 @@ code {
   z-index: 30;
 }
 
-.brand { display: flex; align-items: center; gap: 16px; min-width: 0; }
-.brand-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 16px; min-width: 0; flex: 1 1 auto; }
+.brand-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
 .brand-text > * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/*
+ * The car glyph must never be the only thing left. At 412dp the status pill and
+ * the settings button together are wider than the bar, so the brand — the only
+ * thing on screen that says what the app is and what state it is in — was
+ * absorbing the entire deficit and rendering both of its text lines at 0px wide.
+ *
+ * Capping the pill is what actually buys the brand room. Shrinking both to
+ * nothing equally is no better than the original: the pill's label is a
+ * duplicate of state already shown on the home screen's own cards, whereas the
+ * brand's second line is the map summary and has nowhere else to appear.
+ */
+.brand > svg { flex: 0 0 auto; }
 
 .icon-btn {
   width: 76px; height: 76px;
@@ -127,6 +139,8 @@ code {
   border-radius: 9999px;
   color: rgba(255, 255, 255, 0.88);
   transition: background 120ms ease;
+  /* A fixed-size control that shrinks is a 44px target, not a 76dp one. */
+  flex: 0 0 auto;
 }
 .icon-btn:hover { background: rgba(255, 255, 255, 0.1); }
 .icon-btn:active { background: rgba(255, 255, 255, 0.18); }
@@ -136,8 +150,25 @@ code {
   height: 44px; padding: 0 16px;
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.1);
+  /* The pill yields before the brand does, and its label ellipsises. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  /* Hard ceiling so the brand always has room for its two lines at 412dp. */
+  max-width: 45%;
 }
-.status-pill .dot { width: 10px; height: 10px; border-radius: 50%; }
+.status-pill .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+.status-pill .pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-pill .pill-gps { white-space: nowrap; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+/* A location failure is the pill's most actionable line, so it gets the
+   project's warning colour rather than the muted one. */
+.status-pill .pill-gps.bad { color: #F28B82; }
+/* Below 600dp there is not room for engine, connectivity and GPS mode at once.
+   The error line is the one that survives, because it is the one that changes
+   what the driver should do; the mode is still in the `title`. */
+@media (max-width: 599px) {
+  .status-pill .pill-gps:not(.bad) { display: none; }
+}
 .status-pill.on .dot { background: #34A853; }
 .status-pill.off .dot { background: #EA4335; }
 
@@ -177,6 +208,13 @@ code {
   background: #1b1c1f;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   text-align: left;
+  /*
+   * `.home-search` is a column flex container with a definite height, so this was
+   * the only shrinkable child and it was shrinking: 96px -> 44px at both phone
+   * viewports, i.e. the screen's primary action at 58% of the 76dp touch target.
+   * The container scrolls for overflow; individual rows are not elastic.
+   */
+  flex-shrink: 0;
 }
 
 .quick-grid {
@@ -537,12 +575,65 @@ code {
 
 .inline-search {
   flex: 1;
+  /* A flex item's default `min-width` is `auto`, i.e. its min-content width —
+     which for a form includes the input's intrinsic size. As a `div` it never
+     had to shrink; as a `form` (so Enter submits) it refused to, and overflowed
+     the app bar at 412dp. Zero lets it shrink again. */
+  min-width: 0;
   display: flex; align-items: center; gap: 12px;
-  height: 68px; margin-right: 16px;
+  /* Was 68px, which is below the project's own 76dp touch minimum and was why
+     the clear button measured 41x76 and overflowed its own container by 4px top
+     and bottom. */
+  min-height: 76px; margin-right: 16px;
   padding: 0 16px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.08);
 }
+/*
+ * The field is the flexible part of the row and must be allowed to shrink, but
+ * it also must not be squeezed to a few characters by its siblings: at 412dp it
+ * was measured collapsing from 176px to 122.9px, showing roughly four
+ * characters of a street name it was supposed to be searching for.
+ */
+.inline-search input { flex: 1 1 auto; min-width: 0; }
+/* Sized on the touch minimum rather than inheriting the 76px icon button, which
+   is why it used to overflow the 68px pill it sat in. */
+.inline-search .search-clear {
+  flex: 0 0 auto;
+  width: 76px; height: 76px;
+  display: grid; place-items: center;
+  border-radius: 9999px;
+  color: rgba(255, 255, 255, 0.6);
+  transition: background 120ms ease;
+}
+.inline-search .search-clear:hover { background: rgba(255, 255, 255, 0.1); }
+.inline-search .search-clear:active { background: rgba(255, 255, 255, 0.18); }
+
+/* "No matches" state. Previously absent entirely, so a zero-result query
+   rendered a blank black panel that looked like a hang. */
+.empty-state {
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/*
+ * Provenance per row. An online hit has been round-tripped through a
+ * third-party geocoder; a local one has not. Both used to render identically.
+ */
+.source-tag {
+  flex: 0 0 auto;
+  padding: 0 8px;
+  height: 24px;
+  display: inline-grid; place-items: center;
+  border-radius: 4px;
+  font-size: 18px;
+  letter-spacing: 1.2px;
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.08);
+}
+.source-tag.online { color: #FDD663; background: rgba(251, 188, 4, 0.16); }
 
 /* The app bar is absolutely positioned, so it overlays the top of these
    scroll containers — pad past it or the first heading is hidden. */
@@ -769,13 +860,28 @@ button.chip.ok { background: rgba(96, 168, 240, 0.18); color: #60A8F0; }
    border so the layout does not shift under the pointer mid-drag. */
 .home-root { position: relative; height: 100%; }
 .home-root.dropping { box-shadow: inset 0 0 0 4px #60A8F0; }
+/*
+ * Must sit above every layer it is meant to dim: the app bar (z 30) and the
+ * launcher panel (z 20). At z-index 5 it was underneath both, so the scrim only
+ * darkened the map in the margins and the instruction text was painted over by
+ * the quick tiles — `elementsFromPoint` at the centre of the hint returned the
+ * tile, not the hint. While a drag is in progress the drop target is the whole
+ * screen, so nothing should be above it.
+ */
 .drop-hint {
   position: absolute; inset: 0;
   display: grid; place-items: center;
   background: rgba(11, 12, 16, 0.82);
   color: #F1F3F4;
   pointer-events: none;
-  z-index: 5;
+  z-index: 40;
+}
+/* Clear the app bar and keep the instruction inside the safe area, so the words
+   land on the dimmed launcher rather than under the chrome. */
+.drop-hint > div {
+  margin-top: var(--app-bar, 96px);
+  max-width: min(560px, 76vw);
+  text-align: center;
 }
 
 /* Startup notice while cached regions are rehydrated from IndexedDB. */

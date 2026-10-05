@@ -112,10 +112,32 @@ export function useLocation(enabled = true): LocationState {
   });
   const onFix = useRef<(f: Fix) => void>(() => {});
   const onError = useRef<(e: string) => void>(() => {});
+  /**
+   * Whether this is the native shell, captured so `onFix` can label a fix
+   * without re-reading the environment on every position.
+   */
+  const nativeRef = useRef(false);
 
-  // A fresh fix clears the error and the staleness together: the position is
-  // current again, so neither condition applies.
-  onFix.current = (f) => setState((s) => ({ ...s, fix: f, stale: false }));
+  /**
+   * A fresh fix clears the error and the staleness together: the position is
+   * current again, so neither condition applies.
+   *
+   * It also *restores the mode*. This was the defect: the 6 s safety net below
+   * downgrades the mode to `simulated`, and nothing ever put it back, so a
+   * first fix arriving after six seconds — a cold GNSS lock in a garage, the
+   * common case, not a corner case — left the UI permanently claiming
+   * "Simulated GPS" while streaming real positions. A fix delivered by the
+   * watcher is by definition real, so the mode follows the fix.
+   */
+  onFix.current = (f) =>
+    setState((s) => ({
+      ...s,
+      fix: f,
+      stale: false,
+      mode: nativeRef.current ? 'device' : 'browser',
+      // The "no fix yet" message stops being true the moment one arrives.
+      error: s.error === 'No location fix yet' ? null : s.error,
+    }));
   onError.current = (e) => setState((s) => ({ ...s, error: e }));
 
   useEffect(() => {
@@ -137,9 +159,12 @@ export function useLocation(enabled = true): LocationState {
       if (cancelled) stop();
       else cleanup = stop;
 
+      nativeRef.current = isNative;
       setState((s) => ({ ...s, mode: isNative ? 'device' : 'browser' }));
 
-      // Safety net: if nothing arrives in 6s, keep simulating.
+      // Safety net: if nothing arrives in 6s, keep simulating. This is a
+      // one-way downgrade on purpose — a later real fix restores the mode in
+      // `onFix`, so a slow lock recovers instead of being mislabelled forever.
       const timer = setTimeout(() => {
         setState((s) => (s.fix.ts === 0 || Date.now() - s.fix.ts > 6000
           ? { ...s, mode: 'simulated', error: s.error ?? 'No location fix yet' }

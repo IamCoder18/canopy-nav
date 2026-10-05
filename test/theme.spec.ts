@@ -19,7 +19,17 @@ import { fileURLToPath } from 'node:url';
 import { STRUCTURE, applyThemeTokens, DP, TOUCH_TARGET } from '../src/theme';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(join(__dirname, '..', 'src', 'styles.css'), 'utf8');
+const cssRaw = readFileSync(join(__dirname, '..', 'src', 'styles.css'), 'utf8');
+
+/**
+ * The stylesheet with comments removed.
+ *
+ * Every assertion below is about what the browser will *apply*, and comments are
+ * not applied. Matching against the raw text meant that writing down the reason
+ * for a rule — "it was shrinking: 96px -> 44px" — counted as using a bare 96px
+ * literal and failed the very gate that exists to keep values on their tokens.
+ */
+const css = cssRaw.replace(/\/\*[\s\S]*?\*\//g, '');
 
 describe('STRUCTURE', () => {
   it('holds the AAOS spec values', () => {

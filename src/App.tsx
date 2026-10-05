@@ -2,6 +2,7 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import type { TrafficOverlay } from './map/MapView';
 import type { BuildProgress } from './osm/engine';
 import type { OsmDataset } from './osm/engine.worker';
+import { searchGazetteer } from './osm/engine.worker';
 import { searchPlaces, type Place } from './nav/geocode';
 import {
   resolveRoute, isOnline, watchConnectivity, PROVIDERS, localToRoute,
@@ -1290,16 +1291,30 @@ function StatusPill({
     : online
       ? 'No route yet — engine unproven'
       : 'No route yet — no network';
-  const title = [engineTitle, locationError ? `${gps} - ${locationError}` : gps].join('\n');
+
+  /**
+   * The dot is connectivity and nothing else, so it says so out loud.
+   *
+   * It used to sit, unexplained, immediately left of the engine name — so after
+   * an offline-engine route the user saw a green "connected" dot beside the
+   * word "Offline" and no way to tell which the colour referred to.
+   */
+  const dotLabel = online ? 'Connected' : 'No network';
+
+  /**
+   * A location failure replaces the GPS mode rather than hiding in `title`.
+   *
+   * The reason the position is wrong is the most actionable thing this pill can
+   * say, and a head unit has no hover, so a `title` is a message nobody reads.
+   */
+  const gpsText = locationError ?? gps;
   return (
-    <div
-      className={`status-pill ${online ? 'on' : 'off'}`}
-      title={title}
-      style={{ gap: 16 }}
-    >
-      <span className="dot" />
-      <span style={T.sub3}>{label}</span>
-      <span style={{ ...T.sub3, color: 'rgba(255,255,255,0.5)' }}>{gps}</span>
+    <div className={`status-pill ${online ? 'on' : 'off'}`} title={`${engineTitle}\n${dotLabel} · ${gpsText}`}>
+      <span className="dot" role="img" aria-label={dotLabel} />
+      <span className="pill-label" style={T.sub3}>{label}</span>
+      <span className={`pill-gps ${locationError ? 'bad' : ''}`} style={{ ...T.sub3, color: 'rgba(255,255,255,0.5)' }}>
+        {gpsText}
+      </span>
     </div>
   );
 }
@@ -1709,6 +1724,57 @@ function categoriesFor(regions: ReturnType<typeof useRegions>, dataset: OsmDatas
     .map(([cat, n]) => ({ key: cat, label: label[cat] ?? cat, count: n }));
 }
 
+/* ---------------------------- search hits --------------------------- */
+
+/**
+ * One search result, and where it came from.
+ *
+ * `source` is shown on the row. Offline hits are built from the imported OSM
+ * data and cost nothing and no privacy; an online hit has been round-tripped
+ * through a third-party server. Rendering both identically made that invisible,
+ * which matters most to a user who believed they were offline.
+ */
+interface SearchHit {
+  label: string;
+  sub: string;
+  pos: LatLng;
+  source: 'offline' | 'online';
+}
+
+/** Metres from `a` to `b`, good enough for ordering a result list. */
+function distanceFrom(a: LatLng, b: LatLng): number {
+  const dLat = (a[1] - b[1]) * 111320;
+  const dLon = (a[0] - b[0]) * 111320 * Math.cos((b[1] * Math.PI) / 180);
+  return Math.hypot(dLat, dLon);
+}
+
+/**
+ * Collapse duplicates within a result list, keeping the best-ranked row per name.
+ *
+ * Two separate duplications were happening. The gazetteer indexes one entry per
+ * OSM *element*, so a street split into several ways produced "Memorial Dr" three
+ * times; and Nominatim indexes the same data, so a place could arrive from both
+ * offline and online.
+ *
+ * Keyed on the name, not the position. Keying on position leaves the multi-way
+ * street case intact — the three segments are genuinely different coordinates —
+ * and the user still sees "Memorial Dr, Memorial Dr, Memorial Dr", which is not
+ * a list of three places. For a destination picker the first, best-ranked match
+ * for a name is the one someone means; the rest are noise. Position still breaks
+ * ties, because the ranking above already folds in distance.
+ */
+function dedupeHits(hits: SearchHit[]): SearchHit[] {
+  const seen = new Set<string>();
+  const out: SearchHit[] = [];
+  for (const h of hits) {
+    const key = h.label.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(h);
+  }
+  return out;
+}
+
 function SearchScreen(props: {
   dataset: OsmDataset | null;
   regions: ReturnType<typeof useRegions>;
@@ -1735,9 +1801,23 @@ function SearchScreen(props: {
   // A category chip filters the gazetteer by tag category. It is deliberately
   // not a text query: searching the literal word "city" matches no place names.
   const [cat, setCat] = useState<string | null>(null);
-  const [results, setResults] = useState<{ label: string; sub: string; pos: LatLng }[]>([]);
+  const [results, setResults] = useState<SearchHit[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  /**
+   * The term that was actually searched for, as opposed to what is in the box.
+   *
+   * The empty state needs the difference: with only `q` to go on, typing a
+   * single character would claim "no matches for 'c'" before a search had run
+   * at all.
+   */
+  const [searchedTerm, setSearchedTerm] = useState('');
+
+  /** Enter picks the top result, which is what every other map app does. */
+  const onSubmitFirstResult = () => {
+    const top = results[0];
+    if (top) props.onPick(top.pos, top.label);
+  };
 
   useEffect(() => {
     // Category browse: every entry with that tag, nearest first.
@@ -1752,36 +1832,41 @@ function SearchScreen(props: {
           label: g.name,
           sub: g.cat,
           pos: [g.lon, g.lat] as LatLng,
-          d: Math.hypot((g.lat - near[1]) * 111320, (g.lon - near[0]) * 111320 * Math.cos(near[1] * Math.PI / 180)),
+          source: 'offline' as const,
         }))
-        .sort((a, b) => a.d - b.d)
+        .sort((a, b) => distanceFrom(a.pos, near) - distanceFrom(b.pos, near))
         .slice(0, 20);
-      setResults(hits);
+      setResults(dedupeHits(hits).slice(0, 20));
       setBusy(false);
       return;
     }
     const term = q.trim();
-    if (term.length < 2) { setResults([]); return; }
+    // Every early return below has to clear `busy`. It used to return without
+    // doing so, so backing out of a query mid-flight — "Ca" then "C" — left the
+    // screen saying "Searching…" with no results and no way out but typing a new
+    // two-character query.
+    if (term.length < 2) { setResults([]); setBusy(false); setErr(null); setSearchedTerm(''); return; }
     let cancelled = false;
     const t = setTimeout(async () => {
       setBusy(true); setErr(null);
+      setSearchedTerm(term);
 
       // Offline gazetteer first — instant, no network.
       // With more than one region loaded, search every gazetteer and label the
       // result with its region, otherwise a hit in the "other" province looks
       // identical to one underfoot.
       const multi = props.regions.length > 1;
-      const localHits = multi
+      const localHits: SearchHit[] = multi
         ? searchAll(regionLib, term, props.location, 20).map((h) => ({
             label: h.entry.name,
             sub: h.regionName === 'Local map' ? h.entry.cat : `${h.entry.cat} · ${h.regionName}`,
             pos: [h.entry.lon, h.entry.lat] as LatLng,
+            source: 'offline' as const,
           }))
-        : (props.dataset?.gaz ?? [])
-            .filter((g) => g.name.toLowerCase().includes(term.toLowerCase()))
-            .slice(0, 8)
-            .map((g) => ({ label: g.name, sub: g.cat, pos: [g.lon, g.lat] as LatLng }));
-      if (!cancelled) setResults(localHits);
+        : searchGazetteer(props.dataset?.gaz ?? [], term, props.location, 12).map((g) => ({
+            label: g.name, sub: g.cat, pos: [g.lon, g.lat] as LatLng, source: 'offline' as const,
+          }));
+      if (!cancelled) setResults(dedupeHits(localHits));
 
       // Enrich with Nominatim when there's a network.
       if (props.online) {
@@ -1789,11 +1874,17 @@ function SearchScreen(props: {
           const places = await searchPlaces(term, { near: props.location, limit: 8 });
           if (!cancelled) {
             setResults((prev) => {
-              const seen = new Set(prev.map((p) => p.label));
               const extra = places.map((p: Place) => ({
-                label: p.name, sub: p.displayName.split(',').slice(1, 3).join(',').trim(), pos: [p.lon, p.lat] as LatLng,
-              })).filter((p) => !seen.has(p.label));
-              return [...prev, ...extra].slice(0, 14);
+                label: p.name,
+                sub: p.displayName.split(',').slice(1, 3).join(',').trim(),
+                pos: [p.lon, p.lat] as LatLng,
+                source: 'online' as const,
+              }));
+              // Deduped on position as well as label: the gazetteer and
+              // Nominatim both index the same OSM data, so "Memorial Dr"
+              // arrived three times from offline alone and "Bow River" eight
+              // times from online.
+              return dedupeHits([...prev, ...extra]).slice(0, 14);
             });
           }
         } catch (e) {
@@ -1809,21 +1900,44 @@ function SearchScreen(props: {
     <div className="search-root">
       <div className="top-app-bar">
         <button className="icon-btn" onClick={props.onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
-        <div className="inline-search">
+        {/*
+         * A real form, so Enter submits. It was a div, which made Enter a
+         * complete no-op: typing a full street name and pressing the keyboard's
+         * search key did nothing at all.
+         */}
+        <form
+          className="inline-search"
+          role="search"
+          onSubmit={(e) => { e.preventDefault(); onSubmitFirstResult(); }}
+        >
           <IconSearch size={ICON.secondary} color={ink.secondary} />
           <input
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search places, streets, addresses"
-            style={{ ...T.body1, background: 'transparent', border: 'none', outline: 'none', color: ink.primary, width: '100%' }}
+            aria-label="Search places, streets and addresses"
+            enterKeyHint="search"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            style={{ ...T.body1, background: 'transparent', border: 'none', outline: 'none', color: ink.primary }}
           />
-          {q && <button className="icon-btn" onClick={() => setQ('')}><IconClose size={ICON.secondary} /></button>}
-        </div>
+          {q && (
+            <button
+              type="button"
+              className="search-clear"
+              onClick={() => { setQ(''); setResults([]); setBusy(false); }}
+              aria-label="Clear search"
+            >
+              <IconClose size={ICON.secondary} />
+            </button>
+          )}
+        </form>
       </div>
 
       <div className="search-results">
-        {err && <div className="hint-card">{err}</div>}
+        {err && <div className="hint-card" role="status">{err}</div>}
         {!props.regions.length && (
           <div className="hint-card">No offline map loaded — import an .osm file for offline search.</div>
         )}
@@ -1841,14 +1955,41 @@ function SearchScreen(props: {
             <button className="chip" onClick={() => setCat(null)}>Clear</button>
           </div>
         )}
-        {busy && !results.length && !cat && <div style={{ ...T.body3, color: ink.secondary }}>Searching…</div>}
+        {/*
+         * The three states have to be told apart, or the screen is lying:
+         * still searching, searched and found nothing, and not searching at all.
+         * Previously only the first rendered, so ten of twenty-four query shapes
+         * — a typo, a house number, a category word — produced a completely blank
+         * black screen indistinguishable from a hang.
+         */}
+        <div aria-live="polite" aria-busy={busy}>
+          {busy && !results.length && !cat && (
+            <div style={{ ...T.body3, color: ink.secondary }} role="status">Searching…</div>
+          )}
+          {!busy && !results.length && !cat && searchedTerm && (
+            <div className="empty-state" role="status">
+              <div style={T.body3m}>No matches for “{searchedTerm}”</div>
+              <div style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1 }}>
+                {props.regions.length || props.dataset
+                  ? 'Try fewer words, a street name without the house number, or a nearby category.'
+                  : 'Search needs an imported .osm map. Import one to search offline.'}
+              </div>
+            </div>
+          )}
+        </div>
         {results.map((r, i) => (
-          <button key={i} className="result-row" onClick={() => props.onPick(r.pos, r.label)}>
+          <button key={`${r.source}-${r.label}-${i}`} className="result-row" onClick={() => props.onPick(r.pos, r.label)}>
             <span className="result-icon"><IconGoto size={ICON.secondary} /></span>
             <span className="result-text">
               <span style={T.body3m}>{r.label}</span>
               <span style={{ ...T.sub3, color: ink.secondary }}>{r.sub}</span>
             </span>
+            {/*
+             * Where the row came from. An online hit has been sent to a
+             * third-party geocoder, which is not true of a local one, and the
+             * two used to be indistinguishable.
+             */}
+            <span className={`source-tag ${r.source}`}>{r.source === 'online' ? 'Online' : 'Offline'}</span>
             <IconChevronRight size={ICON.secondary} color={ink.tertiary} />
           </button>
         ))}

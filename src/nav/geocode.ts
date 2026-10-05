@@ -8,7 +8,18 @@ import type { LatLng } from '../geo';
  * usage at 1 request/second. We serialise calls through `lastRequest`.
  */
 
-export const NOMINATIM_ENDPOINT = 'https://nominatim.openstreetmap.de';
+/**
+ * Canonical Nominatim host.
+ *
+ * This was `nominatim.openstreetmap.de`, which does not resolve at all — DNS
+ * NXDOMAIN, `ERR_NAME_NOT_RESOLVED` on every request — so the entire online
+ * search fallback had been dead, silently, for as long as it had been pointed
+ * there. `.org` is the host the project publishes and it answers.
+ *
+ * Note that this is *not* the same mistake as the Valhalla endpoint, which
+ * genuinely is `.de` and does resolve. Only the geocoder host moved.
+ */
+export const NOMINATIM_ENDPOINT = 'https://nominatim.openstreetmap.org';
 
 export interface Place {
   id: string;
