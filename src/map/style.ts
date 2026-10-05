@@ -484,21 +484,37 @@ export function offlineStyleSpec(overlayLayerDefs: any[]): StyleSpecification {
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 
+/**
+ * Required credit for the data these layers draw.
+ *
+ * Every geometry here is derived from OpenStreetMap -- the road graph, the
+ * gazetteer, and the simplified render lines -- whether it arrived over the
+ * network as tiles or as a local `.osm` import. The ODbL requires that credit be
+ * *displayed*, in both cases, so it is attached to the sources here and
+ * rendered by MapLibre's attribution control rather than hidden in a comment.
+ *
+ * `buildStyle` also merges these sources into the online tile style, which is
+ * what makes the credit appear next to the tile provider's own rather than only
+ * when the offline style is active.
+ */
+export const OSM_ATTRIBUTION =
+  '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>';
+
 /** Empty GeoJSON sources for every layer the overlays reference. */
 export function overlaySources(): Record<string, any> {
   return {
-    'canopy-route': { type: 'geojson', data: EMPTY },
-    'canopy-route-travelled': { type: 'geojson', data: EMPTY },
+    'canopy-route': { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
+    'canopy-route-travelled': { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
     // The tint is its own source so a stretch of road can carry a `level`
     // without every other feature having to pretend to be a road.
-    [TRAFFIC_SOURCE]: { type: 'geojson', data: EMPTY },
-    'canopy-maneuvers': { type: 'geojson', data: EMPTY },
-    'canopy-origin': { type: 'geojson', data: EMPTY },
-    'canopy-destination': { type: 'geojson', data: EMPTY },
+    [TRAFFIC_SOURCE]: { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
+    'canopy-maneuvers': { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
+    'canopy-origin': { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
+    'canopy-destination': { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
     'canopy-location': { type: 'geojson', data: EMPTY },
     'canopy-avoid': { type: 'geojson', data: EMPTY },
-    'canopy-osm': { type: 'geojson', data: EMPTY },
-    'canopy-osm-water': { type: 'geojson', data: EMPTY },
-    'canopy-osm-green': { type: 'geojson', data: EMPTY },
+    'canopy-osm': { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
+    'canopy-osm-water': { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
+    'canopy-osm-green': { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
   };
 }

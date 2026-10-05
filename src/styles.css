@@ -61,7 +61,41 @@ code {
 /* AAOS elevation ramp, night mode */
 .map { position: absolute; inset: 0; background: #F8F7F5; }
 
-.maplibregl-ctrl-attrib { display: none; }
+/*
+ * Map attribution.
+ *
+ * This rule used to be `display: none`, which meant the app displayed no
+ * attribution at all -- a breach of the ODbL, since every road, label and POI it
+ * draws is OpenStreetMap data whether it came from OpenFreeMap tiles or from a
+ * `.osm` the user imported. The credit is now declared on the map sources (see
+ * `OSM_ATTRIBUTION` in `map/style.ts`) and shown here, restyled to survive the
+ * AAOS dark chrome and stay legible over both the light offline canvas and the
+ * dark overlays that sit on top of it.
+ *
+ * Deliberately kept small and out of the way: it is legal text, not chrome.
+ */
+.maplibregl-ctrl-attrib {
+  background: rgba(14, 16, 19, 0.82);
+  color: #DADCE0;
+  font: 500 11px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  border-radius: 4px 0 0 0;
+  padding: 2px 6px;
+}
+.maplibregl-ctrl-attrib a { color: #BDC1C6; text-decoration: none; }
+.maplibregl-ctrl-attrib a:hover { color: #FFFFFF; text-decoration: underline; }
+/*
+ * The "i" toggle collapses the credit to a lone glyph. At 11px that glyph is
+ * too small a target for a car user, so it is given the project's own 44dp
+ * icon floor.
+ */
+.maplibregl-ctrl-attrib-button {
+  background: rgba(14, 16, 19, 0.82);
+  color: #DADCE0;
+  border-radius: 4px 0 0 0;
+}
+.maplibregl-ctrl-attrib-button span { width: 44px; height: 44px; line-height: 44px; font-size: 14px; }
+.maplibregl-ctrl-attrib.maplibregl-compact-show { border-radius: 4px 0 0 4px; }
+
 .maplibregl-canvas { outline: none; }
 
 .spacer { flex: 1; }

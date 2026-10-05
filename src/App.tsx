@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MapView, type TrafficOverlay } from './map/MapView';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { TrafficOverlay } from './map/MapView';
 import type { BuildProgress } from './osm/engine';
 import type { OsmDataset } from './osm/engine.worker';
 import { searchPlaces, type Place } from './nav/geocode';
@@ -28,7 +28,6 @@ import {
 } from './geo';
 import { ink, accentNight, applyThemeTokens, type as T, DP, ICON } from './theme';
 import { useLocation, type LocationMode } from './nav/location';
-import RegionsScreen from './regions/RegionsScreen';
 import {
   importRegionFile, localRegionId, localRegionName, regionLib, useRegions,
   restoreRegions,
@@ -39,6 +38,23 @@ import {
   IconLayers, IconTraffic, IconSettings, IconHome, IconGoto, IconChevronRight,
   IconFile, IconLocate, IconCar, IconRefresh,
 } from './icons';
+
+/* --------------------------- deferred views --------------------------- */
+
+/**
+ * MapLibre and the region manager are the two heaviest things the app can load,
+ * and neither is needed to render the first frame. MapLibre alone was most of
+ * the 1.4 MB entry chunk; the region manager drags in the streaming downloader,
+ * the IndexedDB cache and the download catalogue.
+ *
+ * Both are `lazy` so they are fetched on first use instead of at startup. The
+ * map is behind a `Suspense` boundary that paints the same background colour the
+ * canvas would, so the swap is invisible rather than a flash of grey.
+ *
+ * The default exports already exist on both modules, so no interop shim.
+ */
+const MapView = lazy(() => import('./map/MapView'));
+const RegionsScreen = lazy(() => import('./regions/RegionsScreen'));
 
 type Screen = 'home' | 'search' | 'preview' | 'navigating' | 'steps' | 'settings' | 'import' | 'regions' | 'engines';
 
@@ -889,6 +905,7 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
 
   return (
     <div className="app">
+      <Suspense fallback={<div className="map" aria-hidden="true" />}>
       <MapView
         dataset={dataset}
         useTiles={online}
@@ -906,6 +923,7 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
         focus={focus}
         fitNonce={fitNonce}
       />
+      </Suspense>
 
       {screen === 'navigating' && route && (
         <NavOverlay
@@ -1048,6 +1066,7 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
       )}
 
       {screen === 'regions' && (
+        <Suspense fallback={null}>
         <RegionsScreen
           units={units}
           location={location}
@@ -1065,6 +1084,7 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
             setFitNonce((n) => n + 1);
           }}
         />
+        </Suspense>
       )}
     </div>
   );

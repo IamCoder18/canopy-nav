@@ -90,7 +90,11 @@ export function MapView(props: MapViewProps) {
       style: { version: 8, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#F8F7F5' } }] } as StyleSpecification,
       center: [-0.1276, 51.5072],
       zoom: 12,
-      attributionControl: false,
+      // Attribution is not optional: the ODbL requires OSM credit to be
+      // displayed, and the data here is OSM's in both the tile and the imported
+      // case. The control collects the credit declared on every source, so the
+      // tile provider's and ours end up in one legible place.
+      attributionControl: { compact: false },
       dragRotate: false,
       pitchWithRotate: false,
       touchZoomRotate: false,

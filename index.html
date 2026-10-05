@@ -4,10 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no, maximum-scale=1.0" />
     <meta name="color-scheme" content="dark" />
+    <!-- Matches the AAOS +1 elevation surface the app chrome sits on, so the
+         status bar and the WebView's own background do not flash a different
+         shade between the native shell painting and React mounting. -->
+    <meta name="theme-color" content="#0E1013" />
+    <meta name="description" content="Offline car navigation from OpenStreetMap data, with an Android Auto interface." />
     <title>Canopy Nav</title>
+    <style>
+      /* Painted before the stylesheet resolves, so a cold start in a WebView is
+         the app's own surface rather than white. */
+      html, body { margin: 0; height: 100%; background: #0E1013; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <!-- Without JS there is no app, and saying so beats a blank page. -->
+      <p style="color:#DADCE0;font:16px system-ui,sans-serif;padding:24px">
+        Canopy Nav needs JavaScript to run.
+      </p>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
