@@ -17,13 +17,27 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseOsmPbf } from '../src/osm/pbf';
 import { parseOsmXml, buildDataset, type OsmDataset } from '../src/osm/engine.worker';
 
 /** The spec's unit, in degrees. */
 const NANO = 1e-7;
+/**
+ * Resolve a fixture against this file's own directory.
+ *
+ * The rest of the suite opens fixtures with relative paths, which works because
+ * vitest runs from the repo root. This spec also shells out to a child process,
+ * and CI does not guarantee that working directory -- it failed there with
+ * ENOENT on a path that plainly exists. Anchoring to `import.meta.url` makes it
+ * independent of where the runner started.
+ */
+const fixture = (name: string): string =>
+  resolve(dirname(fileURLToPath(import.meta.url)), name);
 
 /**
  * Re-encode the fixture's first node through the real encoder, so the nanodegree
@@ -34,21 +48,33 @@ const NANO = 1e-7;
  * parser. Going through `tools/osm2pbf.mjs` means the constant under test is the
  * spec's, applied by the code a developer actually runs.
  */
-async function parseViaEncoder(xmlPath: string): Promise<OsmDataset> {
-  const xml = parseOsmXml(readFileSync(xmlPath, 'utf8'));
-  const pbf = execFileSync('node', [
-    'tools/osm2pbf.mjs', xmlPath, '/tmp/opencode/pbfgeo-fixture.osm.pbf',
-  ]);
-  expect(pbf.toString()).toMatch(/nodes/);
-  const { nodes, ways } = await parseOsmPbf(
-    new Uint8Array(readFileSync('/tmp/opencode/pbfgeo-fixture.osm.pbf')),
+async function parseViaEncoder(xmlName: string): Promise<OsmDataset> {
+  const xmlFile = fixture(xmlName);
+  const xml = parseOsmXml(readFileSync(xmlFile, 'utf8'));
+  // A unique path per run so parallel workers cannot collide, and inside the OS
+  // temp dir rather than a hardcoded one -- `/tmp/opencode/...` exists only on
+  // the machine that wrote it, which is why CI failed with ENOENT.
+  const out = join(
+    tmpdir(),
+    `pbfgeo-${process.pid}-${Date.now()}.osm.pbf`,
   );
-  return buildDataset(nodes, ways, () => {});
+  try {
+    // cwd and absolute paths: the encoder is run as a child process, so it
+    // inherits the runner's working directory, which is not guaranteed to be the
+    // repo root.
+    const encoder = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'osm2pbf.mjs');
+    const pbf = execFileSync('node', [encoder, xmlFile, out], { cwd: process.cwd() });
+    expect(pbf.toString()).toMatch(/nodes/);
+    const { nodes, ways } = await parseOsmPbf(new Uint8Array(readFileSync(out)));
+    return buildDataset(nodes, ways, () => {});
+  } finally {
+    rmSync(out, { force: true });
+  }
 }
 
 describe('a spec-conformant nanodegree is decoded as degrees', () => {
   it('round-trips the fixture through the real encoder to the right place', async () => {
-    const ds = await parseViaEncoder('test/fixture.osm');
+    const ds = await parseViaEncoder('fixture.osm');
     const [west, south, east, north] = ds.bbox;
     // The fixture sits near Edinburgh: ~-1.4 lon, ~51.5 lat.
     expect(south).toBeGreaterThan(51.4);
@@ -58,16 +84,16 @@ describe('a spec-conformant nanodegree is decoded as degrees', () => {
   });
 
   it('does not decode it a hundred times too small', async () => {
-    const ds = await parseViaEncoder('test/fixture.osm');
+    const ds = await parseViaEncoder('fixture.osm');
     // The bug in one assertion: dividing by 1e9 put 51.5 at ~0.515.
     expect(ds.bbox[1]).not.toBeLessThan(1);
     expect(ds.bbox[1]).toBeGreaterThan(51);
   });
 
   it('keeps the two parsers in agreement on every node', async () => {
-    const xml = parseOsmXml(readFileSync('test/fixture.osm', 'utf8'));
+    const xml = parseOsmXml(readFileSync(fixture('fixture.osm'), 'utf8'));
     const pbf = await parseOsmPbf(
-      new Uint8Array(readFileSync('test/fixture.osm.pbf')),
+      new Uint8Array(readFileSync(fixture('fixture.osm.pbf'))),
     );
     for (const [id, x] of xml.nodes) {
       const y = pbf.nodes.get(id);
@@ -80,9 +106,9 @@ describe('a spec-conformant nanodegree is decoded as degrees', () => {
 
 describe('the on-disk PBF fixture is in the right place', () => {
   it('decodes to the same coordinates as the XML it was generated from', async () => {
-    const pbf = await parseOsmPbf(new Uint8Array(readFileSync('test/fixture.osm.pbf')));
+    const pbf = await parseOsmPbf(new Uint8Array(readFileSync(fixture('fixture.osm.pbf'))));
     const { nodes, ways } = pbf;
-    const xml = parseOsmXml(readFileSync('test/fixture.osm', 'utf8'));
+    const xml = parseOsmXml(readFileSync(fixture('fixture.osm'), 'utf8'));
     const pbfDs = buildDataset(nodes, ways, () => {});
     const xmlDs = buildDataset(xml.nodes, xml.ways, () => {});
 
@@ -103,8 +129,8 @@ describe('the on-disk PBF fixture is in the right place', () => {
 
   it('puts the fixture in the northern hemisphere at a plausible latitude', async () => {
     const ds = buildDataset(
-      parseOsmXml(readFileSync('test/fixture.osm', 'utf8')).nodes,
-      parseOsmXml(readFileSync('test/fixture.osm', 'utf8')).ways,
+      parseOsmXml(readFileSync(fixture('fixture.osm'), 'utf8')).nodes,
+      parseOsmXml(readFileSync(fixture('fixture.osm'), 'utf8')).ways,
       () => {},
     );
     const [, south, , north] = ds.bbox;
@@ -115,7 +141,7 @@ describe('the on-disk PBF fixture is in the right place', () => {
 
   it('produces a bounding box the app can actually fit to', async () => {
     const { nodes, ways } = await parseOsmPbf(
-      new Uint8Array(readFileSync('test/fixture.osm.pbf')),
+      new Uint8Array(readFileSync(fixture('fixture.osm.pbf'))),
     );
     // bbox is [west, south, east, north].
     const [west, south, east, north] = buildDataset(nodes, ways, () => {}).bbox;
