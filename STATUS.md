@@ -5,7 +5,7 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v0.11.3 (APK attached); main is ahead with §3.11.1 and §4.6–4.8. Requirement
+**Latest release:** v0.11.3 (APK attached); main is ahead with §3.11.1, §4.1, §4.6–4.8. Requirement
 #10 is corrected from "Done" to "Not done" in this revision — see §3.5.2.
 
 ---
@@ -48,7 +48,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 527 unit tests across 19 files, plus 2 browser suites | `test/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 599 unit tests across 25 files, plus 2 browser suites | `test/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what two 6-hour budgets covered, including what they did not | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -61,7 +61,7 @@ stands. **Bold** = fully working and verified.
 | Gate | Command | Result |
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
-| Unit tests | `npm test` | **527 passing**, 19 files |
+| Unit tests | `npm test` | **599 passing**, 25 files |
 | End-to-end | `npm run e2e` | **39 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **50 checks × 3 viewports = 150** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Release | v0.11.3 tag | **CI green, Release green**, APK attached |
@@ -132,6 +132,7 @@ That was the last known console output in the project.
 | `icons.spec.ts` | 4 | every maneuver kind renders distinct geometry |
 | `navigation.spec.ts` | 17 | off-route detection, speed-scaled thresholds, traffic verdicts |
 | `pbf.spec.ts` | 11 | PBF vs XML parser equivalence on a hand-built file and the whole fixture |
+| `pbfgeo.spec.ts` | 6 | absolute coordinates against the PBF spec, via the real encoder — the nanodegree regression |
 | `engines.spec.ts` | 38 | engine selection policy, plan ordering, per-engine readiness reasons, the attempt trace, strict mode |
 | `reroute.spec.ts` | 23 | off-route confirmation window, storm guards, backoff growth, tracker reset semantics, banner content |
 | `stream.spec.ts` | 30 | streaming XML parse ≡ whole-file parse across chunk sizes, incl. 1-char and seeded fuzz; progress; degenerate input |
@@ -743,6 +744,28 @@ found only by the tests written to check them.
 
 ### 4.1 Catastrophic
 
+**Real `.osm.pbf` extracts decoded 100× too small.** The OSM PBF spec stores
+coordinates as integers in units of **1e-7 degrees** — nanodegrees. The parser
+divided by 1e-9, and so did `tools/osm2pbf.mjs`, which builds the test fixtures.
+The round trip therefore agreed with itself and **every test passed**.
+
+Any real Geofabrik extract, written to the spec, was read 100× too small. Andorra's
+42.42 N arrived as 0.4242 — the country in the Gulf of Guinea. Every distance,
+every route, every bounding box and every cross-region comparison was wrong, and
+nothing on screen said so: the map drew, search returned results, the app looked
+like it was working. **This was the most consequential bug in the project's
+history.**
+
+It was invisible for the same reason the `.nav-panel` corruption (§4.7) was: a
+self-consistent round trip cannot detect a mistake both halves share. Only the
+*specification* can, and nothing in the suite was written against it. Fixed in all
+three places (both parser paths, the encoder, the test helpers) with the fixture
+regenerated, and `test/pbfgeo.spec.ts` now asserts absolute facts — Edinburgh is at
+~51.5 N, not ~0.515 — going through the real encoder rather than a helper.
+
+It also means the cross-region gap (§7 gap 1) was partly theoretical until this
+fix: there was no correctly-parsed province on the device to stitch between.
+
 **Inverted one-way direction flags** — no edge was ever created.
 Flags mean "direction *permitted*", but the builder tested
 `!(flags & FLAG_ONEWAY_B)`. For a normal two-way road (flags = 3) that is
@@ -1039,7 +1062,7 @@ src/
     persist.ts             615  IndexedDB caching of parsed datasets
     download.ts           1270  streaming downloader
 
-test/            527 unit tests, 19 files
+test/            599 unit tests, 25 files
 test/e2e.mjs           39 browser checks, built bundle
 test/screens.mjs        50 checks x 3 viewports (150 total)
 tools/osm2pbf.mjs        XML -> PBF encoder (builds the test fixtures;
@@ -1113,7 +1136,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 527 unit tests
+npm test             # 599 unit tests
 npm run e2e          # 39 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -1261,8 +1284,26 @@ not destructive or ambiguous, continuing is not a decision that needs sign-off.
 the LOD fix, the two owed requirement items, and the duplicate system-bar
 handling. Unit tests went 380 → 516, e2e checks 23 → 39.
 
-**Session three** did the audit work described above: unit tests 516 → 525,
-screen checks 42 → 105, and the two document corrections above.
+**Session three** did the audit work described above, and a fourth pass followed
+it: unit tests 527 → 599, screen checks 42 → 150, and the two document
+corrections above.
+
+What the fourth pass found is the most important result in this record. A subagent
+asked to quantify cross-region routing reported, alongside its measurements, that
+`src/osm/pbf.ts` divides coordinates by 1e-9 where the spec says 1e-7 — so every
+real `.osm.pbf` extract was being read 100× too small, putting Andorra at 0.42 N.
+The parser and the fixture encoder shared the wrong constant, so the round trip
+agreed with itself and the whole suite was green. I verified it before acting, and
+it is worse than it looks: it also means most of gap 1 was theoretical until the
+fix, because there was no correctly-parsed province on the device to stitch
+between. Fixed in §4.1.
+
+The generalisable lesson, and the reason it is written down at length: **a
+self-consistent round trip cannot detect a mistake both halves share.** Two
+audits in a row found bugs that every passing test was structurally unable to
+see — this one and the `.nav-panel` corruption — and both were found by asking
+"what is *specification* here, and is it written down anywhere?" rather than by
+running the suite again.
 
 Two process notes, because both cost real time:
 
