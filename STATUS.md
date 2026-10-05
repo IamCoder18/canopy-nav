@@ -5,8 +5,11 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v0.11.3 (APK attached); main is ahead with §3.11.1, §4.1, §4.6–4.8. Requirement
-#10 is corrected from "Done" to "Not done" in this revision — see §3.5.2.
+**Latest release:** v0.11.3 (APK attached); main is ahead with §3.11.1, §4.1, §4.6–4.8, and
+§3.17–3.18. **Requirement #10 is now implemented** — cross-region routing merges the extracts
+rather than stitching them at a bounding-box midpoint (§3.18), and §3.5.2's correction is
+superseded. §3.17 closes the ETA gap that this document called the most dangerous readout in
+the app.
 
 ---
 
@@ -43,7 +46,7 @@ stands. **Bold** = fully working and verified.
 | 7 | Use Nominatim for geocoding start/destination | **Done** as an optional online provider | `src/nav/geocode.ts` |
 | 8 | 100% local, no WiFi | **Done.** Offline engine, offline gazetteer, offline map rendering, offline persistence | §3.2–3.4 |
 | 9 | Multi-region: download by city/province (Alberta, BC…), route between them | **Partly done.** Download, streaming, catalogue and cross-region *search* all work. **Cross-region routing does not route correctly** — it stitches at a bounding-box midpoint rather than merging; see row 10 and §7 gap 1 | §3.5 |
-| 10 | Merging the two regions rather than stitching | **NOT DONE.** The merge algorithm exists, is well built and is tested (~800 lines of tests) — and **the app never calls it.** Cross-region routing stitches two separately-routed legs at a point derived from *bounding-box arithmetic*, which produces a materially wrong route. Corrected in this revision; see §3.5.2 and gap 2 | `src/osm/merge.ts` (unwired) |
+| 10 | Merging the two regions rather than stitching | **Done.** `merge.ts` is now called. Cross-region routing is one A\* over a merged graph, cached per region set, behind a memory guard that refuses with a reason rather than returning a wrong line. Requirement was previously recorded as **NOT DONE**; §3.18 is the implementation and §3.5.2 is superseded | `src/osm/regions.ts`, `src/osm/mergeguard.ts` |
 | 11 | Is self-hosting Valhalla on Android unreasonable? | Answered: not unreasonable, but not achievable in the time available (§5.3) | — |
 | 12 | Keep hosted Valhalla as an option | **Done.** Three hosted presets plus a custom endpoint — FOSSGIS, Simplerouting.io, and your own `valhalla_service` — each individually selectable and probeable, alongside the offline engine | §3.6, §3.6.1 |
 | 13 | Handle losing connectivity mid-trip | **Done.** Provider chain + snapshotted route + honest degradation | §3.7 |
@@ -64,10 +67,10 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **702 passing**, 30 files |
+| Unit tests | `npm test` | **755 passing**, 34 files |
 | End-to-end | `npm run e2e` | **44 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **51 checks × 3 viewports = 153** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
-| Bundle budget | `npm run bundle` | entry 105.8 kB / 130, initial 110.3 / 150, largest 281.6 / 300, total JS 410.4 / 460 (gzip) |
+| Bundle budget | `npm run bundle` | entry 105.8 kB / 130, initial 110.3 / 150, largest 281.6 / 300, total JS 412.3 / 460 (gzip) |
 | Offline cold start | verified in-browser | reload with the network off renders the app: 5 tiles, map sized, 0 console errors |
 | Release | v0.11.3 tag | **CI green, Release green**, APK attached |
 | APK | `npm run apk` | debug APK, `com.canopy.nav`, minSdk 23, targetSdk 35 |
@@ -151,6 +154,19 @@ That was the last known console output in the project.
 | `serve.spec.ts` | 16 | test-server path containment (plain, encoded, dot-segment traversal) and no side effects on import |
 | `theme.spec.ts` | 11 | `theme.ts` ↔ `styles.css` token-name agreement, fallbacks present, `:root` declarations |
 | `styletiles.spec.ts` | 9 | tile-style order-comparison guard: the actual shield filter, short-circuit shape, recursion, idempotency |
+| `progress.spec.ts` | 29 | the three ETA properties as properties: monotone, never zero before arrival, last-good-kept when the fix is unusable — plus `snapAlong` in metres and `formatDistance` not rounding to zero (§3.17) |
+| `mergeguard.spec.ts` | 13 | merge memory guard: three outcomes, the boundary at ratio 1, scaling with region *count*, and that the source graphs count because they stay resident (§3.18) |
+| `tdz.spec.ts` | 5 | no `useMemo` in `App` closes over a binding declared later in the component body (§3.19) |
+| `app-render.spec.ts` | 3 | `App` renders at all; the root landmark is labelled and names the current screen (§3.19) |
+
+**Three counts in this document have now been wrong at least once, and each was wrong the
+same way.** The e2e count (§2). The screen figure, recorded as both "29 × 3 = 87" and "50 × 3
+= 150" in different sections of *this* file while the true value was 51 × 3 = 153 — §2 was
+right and §6 and §9.2 were stale, which is the more awkward direction, because the correct
+number was sitting in the document the whole time. And the unit-test total, which sat at 702
+through three commits that added 53 tests. A number that is written once and never
+re-derived is a claim, not a measurement, and every one of these was found by re-running the
+gate rather than by reading harder.
 
 ---
 
@@ -303,22 +319,16 @@ absent, and offers Cancel.
 HTML is the difference between "couldn't reach it" and a parser crash. An absent
 content length shows as unknown rather than a fake 0% that reads as stalled.
 
-#### 3.5.2 Merging — built, tested, and **not wired in**
+#### 3.5.2 Merging — how cross-region routing actually works
 
-**This subsection previously described merging as the shipped behaviour of
-cross-region routing. It is not. What follows is the correction.**
+**Superseded.** This subsection used to be a correction: the merge existed, was
+correct, was thoroughly tested, and the app never called it. It is now wired in.
+The implementation is §3.18; what follows is kept because the *shape* of the old
+bug is the most useful thing in this section, and because the test fixture that
+could not detect it is still the most instructive artefact in the repo.
 
-**What exists.** A correct implementation of graph merging in `src/osm/merge.ts`
-(318 lines). Union-find over **original OSM node IDs**. Geofabrik extracts are cut
-from the same database, so a border road carries the same node IDs on both sides.
-`mergeRegions` collapses duplicate nodes, remaps edges into a fresh CSR layout, and
-unions conflicting direction permissions so a road is never left impassable. It is
-covered by roughly 800 lines of tests across `merge.spec.ts`, `engine.spec.ts` and
-`persist.spec.ts`, including the overflow regressions in §4.2 and the `> 2^21`
-node case.
-
-**What the app actually does.** `src/osm/merge.ts` is imported by three test
-files and by **nothing in `src/`**. Cross-region routing goes:
+**What used to happen.** `src/osm/merge.ts` was imported by three spec files and by
+nothing in `src/`. Cross-region routing went:
 
 ```
 RegionLibrary.route()  ->  plan()  ->  boundaryPoint(a, b)
@@ -328,43 +338,54 @@ RegionLibrary.route()  ->  plan()  ->  boundaryPoint(a, b)
                      concatenate geometries, sum metres and time
 ```
 
-`RegionLibrary.route()` returns `{ ..., stitched: true }` for this path — the code
-names what it is doing.
+`RegionLibrary.route()` returned `{ ..., stitched: true }` for this path — the code
+named what it was doing.
 
-**Why that is wrong, not merely imperfect.** `boundaryPoint` returns the midpoint
-of the closest points between the two regions' **bounding boxes**
-(`src/osm/regions.ts:157`), after rejecting pairs further apart than
-`ADJACENCY_GAP_M`. That point comes from box arithmetic and has no relationship to
-the road network. Each leg then snaps it to the nearest node *within its own
-region*. So the driver is routed via whichever node happens to be nearest a
-box-derived midpoint — for Calgary to Vancouver, somewhere in the Rockies at the
-closest point between two rectangles, rather than the actual highway crossing.
+**Why that was wrong, not merely imperfect.** `boundaryPoint` returned the midpoint
+of the closest points between the two regions' **bounding boxes**, after rejecting
+pairs further apart than `ADJACENCY_GAP_M`. That point came from box arithmetic
+and had no relationship to the road network. Each leg then snapped it to the
+nearest node *within its own region*. For Calgary to Vancouver the driver was
+routed via whichever node happened to be nearest a box-derived midpoint — in the
+Rockies, at the closest point between two rectangles, rather than the actual
+highway crossing.
 
-The original reasoning behind merging was correct and still is: stitching forces a
-junction that need not be a road at all. The failure mode is not a visible seam —
-the two legs share a point, so the line is continuous — it is a **wrong route**,
-which is worse, because it looks right.
+The failure mode was not a visible seam. The two legs shared a point, so the line
+was continuous. It was a **wrong route**, which is worse, because it looks right.
 
-**Why it was never noticed.** Single-region routing is unaffected and is the common
-case. The cross-region path only runs when two regions are downloaded and the
-origin and destination fall in different ones, and its output is a plausible
-continuous line rather than an error. Requirement #10 asked for merging
-specifically *because* stitching was understood to be the problem, so the gap sat
-under a row marked "Done" for a long time.
+**Why it was never noticed, and why the tests could not have caught it.** This is
+the part worth keeping. Single-region routing is unaffected and is the common case;
+the cross-region path only runs when two regions are downloaded and the two ends
+fall in different ones.
 
-**Decision.** Keep `merge.ts`. It is the only correct implementation of the stated
-requirement and it is already tested; deleting it would discard the work and leave
-the requirement unimplemented for good. But it must not be described as a shipped
-feature. Wiring it is bounded by memory, not by effort: merging two provincial
-graphs means holding both plus the merged result at once, and §7 already records
-that parsing a single extract peaks at roughly twice its file size. That makes
-provincial merging questionable on a phone independently of the implementation, so
-the honest next step is a decision about *when* to merge — not a claim that it
-works.
+But there is a second, sharper reason, and it is the generalisable one. **The
+existing cross-region test fixture cannot distinguish stitching from merging, and
+never could.** Its two bboxes touch along a shared edge, so `boundaryPoint`
+returns the centre of their overlap — which, for a straight road at lat 0, *is*
+the shared OSM node. The stitched route and the merged route are byte-identical.
+`test/merge.spec.ts` has the same blind spot from the other direction: its
+`makeRegion` helper defaults every bbox to `[0, 0, 1, 1]`, so the boxes are
+identical and the stitch point lands on the shared span's centre.
 
-`RoadGraph.regionOf` is documented as existing only for merged graphs, yet
-`regions/persist.ts` serialises and deserialises it for every region, so each
-cached region carries bytes for a graph shape the app can currently never build.
+So requirement #10 sat under a row marked "Done", then under a row marked "Not
+done", with roughly 800 lines of tests passing throughout, because every test that
+touched this code was structurally incapable of distinguishing the two
+implementations. It is the same failure as §4.1 (parser and fixture sharing a wrong
+constant, so the round trip agreed with itself) and §4.6 (a suite visiting four
+screens instead of eleven and reporting success). Three instances of one pattern:
+**a test that cannot fail is worse than no test, because it is counted.**
+
+The replacement fixture is in `test/regions.spec.ts` and is built to defeat exactly
+this: the real through-road is 1–2–3, the bboxes overlap in a rectangle centred
+11 km off that road, and each extract carries a `Loop` way reaching the centre.
+Stitching hands the driver from one `Loop` to the other, a **fourfold** detour
+through a junction that exists only as box arithmetic; merging takes 1–2–3. All
+four new assertions were verified to fail against the old stitching code.
+
+`RoadGraph.regionOf` is still serialised for every region by `regions/persist.ts`
+even though it is only meaningful for merged graphs. It is now at least reachable
+— a merged graph is one the app can build — but the persisted bytes are still
+wasted for single-region entries.
 
 ### 3.6 Online providers
 
@@ -750,6 +771,177 @@ did not notice, because I was verifying locally rather than reading the CI
 status. Both now use 4192 explicitly. The lesson: "CI runs the full gate" is only
 true if someone reads the run results.
 
+### 3.17 The ETA readout
+
+**What.** The number on the navigation screen that a driver acts on without
+checking.
+
+**What was wrong.** It was recomputed from scratch on every fix, from whichever
+part of the route line happened to be nearest, and it had no memory of where the
+car already was. Two failures, both measured in the running app:
+
+1. **It could increase while the car drove forwards.** A route that runs beside
+   itself — a divided highway, an overpass, a loop back past the way you came —
+   has two near-equal candidates, and the nearer one can be *behind* the driver.
+   Remaining distance then grew. Observed flipping between `0 m` and `670 m` on a
+   36 m move.
+2. **It read `0 m` to destination while the driver was 900 m off course.** Past
+   the off-route threshold, "closest point on the route" stops being a fact about
+   the car and becomes an arbitrary point on a line. If that point was near the
+   end, the bar said *arrived*.
+
+The two halves of the app disagreed. `progressAlong` was already monotonic and
+already refused untrustworthy fixes; the ETA path did neither, and re-projected
+each fix from scratch. So the drawn "already driven" line and the distance beside
+it could not both be right.
+
+**How.** Three properties, in priority order, as pure policy in
+`src/nav/progress.ts`:
+
+- **Never zero before the last vertex.** Zero remaining means arrived. It is not
+  reachable by a car short of the end, structurally rather than by convention.
+- **Never increasing as the car drives forward.** You cannot un-drive a road. This
+  also rejects GPS jitter, stale fixes and doubling-back routes, none of which
+  un-drive it.
+- **When the fix is unusable, keep the last trustworthy number.** Blanking true
+  information is worse than showing it with a caveat — the same reasoning that
+  keeps verified traffic when signal drops (§3.7). But it is never *invented*
+  from a fix too far off the line to place the car.
+
+Underneath, `geo.ts` gained `snapAlong`, which measures a position in **metres from
+the start** rather than as a segment index. The index could not express three
+things: arrival (a multi-vertex line's last segment is never "the destination"),
+distance (it counts vertices, so the same road is a different number of steps
+depending on tessellation density), and position within a segment (it names the
+segment's *start*, reporting a car mid-segment as a whole segment behind).
+`vertexAt` is its inverse for the readouts that are inherently per-vertex.
+
+And `formatDistance` no longer rounds a nonzero distance to `0 m`. Snapping 4 m to
+the nearest 5 m gives 0, and "0 m to destination" is a statement about the world,
+not a rounding artefact — a driver still on the road reads it as *you have
+arrived* and stops looking. It rounds **up** to one step, which over-estimates
+the distance remaining rather than under-estimating it. A genuine zero still
+prints `0`.
+
+**Why the tests are property tests.** `test/progress.spec.ts` drives a whole route
+with the geometry that caused the failure, rather than asserting single
+hand-picked cases that would only prove those cases. The fixtures that matter are
+a route whose three sections run 11 m apart with ±2 m of GPS noise, and a
+mid-junction fix reported *between* two levels of road. The first attempt at the
+noise fixture passed with the monotonic clamp deleted, because ±2 m cannot flip an
+11 m gap — the test was decorative. It was replaced with one that discriminates,
+and the clamp, the off-route guard and the zero-floor were each verified to fail
+when removed.
+
+### 3.18 Cross-region routing, by merging
+
+**What.** A route whose ends fall in different downloaded extracts.
+
+**How.** `RegionLibrary.route()` merges the participating regions and runs one A\*
+over the merged graph. `merge.ts` is unchanged: it was already correct, and the
+whole of the previous gap was that nothing called it.
+
+Four things had to be decided, and none of them was the merge itself.
+
+**Where the merged graph lives.** On the library, as a private cache keyed by the
+sorted region ids, invalidated in `add()` and `remove()`. Not as a synthetic
+`Region`: `add()` fires `emit()`, so a phantom entry would appear in the region
+list with a Remove button that deletes nothing, and would be counted in the
+"N loaded · X MB" chip and iterated by the gazetteer aggregation. A merge is also
+invalid the moment a region is re-imported, which is why the cache is cleared
+rather than merely keyed.
+
+**Whether to attempt it at all.** `mergeRegions` holds every source graph, a boxed
+JavaScript `Map`/`Array` copy of the nodes and edges, *and* the typed-array result
+at once, so peak is 2–3× one graph rather than one. For two provinces that is not a
+question of speed. `src/osm/mergeguard.ts` decides from static size **before** any
+of it runs, from the graph's own declared shape (≈96 B/node, ≈24 B/edge, both
+derived from the actual typed arrays plus the per-query A\* scratch and the spatial
+index, not guessed), and has three outcomes:
+
+- **proceed**;
+- **proceed, and say the headroom is thin** — below 75% of budget it warns rather
+  than hoping;
+- **refuse**, with the shortfall and the budget both named in MB.
+
+The middle outcome is the point. A yes/no guard either gets the WebView killed
+mid-merge — which on Android is a silent tab kill, not an error — or refuses
+hardware that would have coped. `navigator.deviceMemory` is a coarse Chromium-only
+bucket and `performance.memory` is non-standard, so when neither answers the guard
+*assumes* 512 MB and says it assumed; reading a missing value as unlimited would
+be the worst of the three options.
+
+**What to do when it refuses.** Nothing, which is the correct answer. A
+cross-region route that cannot be afforded has no honest approximation, because
+the line it would replace is the wrong one, and wrong-but-continuous is the worst
+thing to hand a driver. `route()` is nullable for three unrelated reasons — no
+region covers the pair, no path exists, the merge did not fit — and the caller
+cannot tell them apart from the null, so the actionable one is recorded on
+`lastRefusal` and surfaced. Telling a driver "no route" when the truth is "this
+device cannot compute this route" is how a reachable destination becomes an
+unreachable one.
+
+**What stays the same.** `plan()` is untouched. It decides *which* regions a query
+needs, and that part was never the bug. `stitched` is now always `false` for a
+route the app actually serves, and the flag survives on the return type so no
+caller's signature changed — `App.tsx` and `RegionsScreen.tsx` compile unmodified.
+`merge.ts` has zero runtime imports (both are `import type`), so importing it into
+`osm/regions.ts` creates no cycle.
+
+**Why the memory limit is still the open part.** The guard decides from *declared*
+graph size, on a device that will not reliably report its heap. That is a static
+estimate against a dynamic constraint, and it is the honest limit of what has been
+built: correct for small extracts, and *refusing* rather than guessing for large
+ones. Merging two real provinces on a real phone is still unverified (§7).
+
+### 3.19 Two gates for render-time failures
+
+**The problem.** This project tests pure logic under node, with no DOM. That is a
+good trade — it is why 755 tests run in four seconds — and it has a blind spot with
+a demonstrated cost.
+
+A `useMemo` callback runs *during render*, so anything it closes over must already
+be initialised. The ETA fix added a `routePos` ref **below** the two guidance
+memos that read it. That is a temporal dead zone, and reading it throws
+`ReferenceError: Cannot access 'routePos' before initialization`. All 747 unit
+tests passed. The app rendered nothing but the error boundary's recovery card —
+and because the boundary exists and works as designed, it failed *quietly*, which
+is the worst way for this to fail. Only `test/e2e.mjs` caught it, because only the
+browser suite renders `App`.
+
+**What was added.**
+
+- **`test/tdz.spec.ts`** finds `App()`'s body by brace matching, collects its 81
+  component-scope bindings — including array-destructured `useState`, which is most
+  of them — and asserts that no `useMemo` callback reads one declared later.
+  Scoped to `useMemo` deliberately: an effect runs after the commit and a
+  `useCallback` is only *created*, so a click handler reading a later-declared
+  helper is fine, and asserting on those would mean asserting on most of the file.
+  The wider scan is kept as a printed inventory rather than a failure, because it
+  cannot tell the two cases apart. Verified to fail, with a line-referenced
+  message, when the ref is moved back down.
+- **`test/app-render.spec.ts`** renders `App` through the server renderer with the
+  map chunk mocked, so a first-render throw is a unit-test failure. It does **not**
+  close the original gap and does not pretend to: on a first render both guidance
+  memos return early, because there is no route and no dataset yet, so the bug
+  needs a route to exist. What it does buy is that the root landmark and the crash
+  card are asserted somewhere cheaper than a browser suite.
+
+**The finding that came out of writing the first one.** The scan immediately
+reported `beginRouteProgress` read 100 lines above its declaration — inside a
+`useCallback`, therefore harmless, because it only runs on a click. It was moved
+anyway, and the ordering rule is now uniform: everything a memo needs is declared
+with the memos. The alternative was a permanent, documented, load-bearing exception
+to a rule, which is how the original bug happened.
+
+**Why this is in the document at length.** Because the shape is the lesson, and it
+is the fifth time in this project's history that a gate reported success while
+unable to see the thing it existed to see: §3.16's seven red pushes, §4.6's
+screen-coverage regression, §4.1's shared wrong constant, §3.5.2's fixture that
+could not distinguish two implementations, and now this. The general form is that
+**a green result nobody re-derives is not a green result**, and the corollary that
+matters more: a suite that has never been seen to fail has not been tested.
+
 ---
 
 ## 4. Bugs found and fixed
@@ -1040,50 +1232,66 @@ does not have.
 
 ## 6. Project layout
 
+Every line count below is `wc -l`, re-measured for this revision. An earlier version of
+this section carried thirteen stale ones; §9.3 records a previous audit finding three, and
+the same class of error keeps recurring because a line count is cheap to write and never
+checked. Treat this table as a snapshot with a date, not a fact.
+
 ```
 src/
-  App.tsx                2029  screens, navigation state, keyboard shortcuts
-  theme.ts                 177  AAOS design tokens (colour, type, layout, shape)
-  icons.tsx                345  29 maneuver kinds + system icons, hand-drawn SVG
-  geo.ts                   173  polyline codec, haversine, formatting, snapping
-  styles.css                     layout, insets, responsive rules
+  App.tsx                2873  screens, navigation state, keyboard shortcuts
+  theme.ts                177  AAOS design tokens (colour, type, layout, shape)
+  icons.tsx               345  29 maneuver kinds + system icons, hand-drawn SVG
+  geo.ts                  272  polyline codec, haversine, formatting, snapping,
+                               + snapAlong (metres along a line) and vertexAt
+  styles.css             1362  layout, insets, responsive rules
 
   osm/
-    engine.worker.ts      1088  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
-    pbf.ts                 584  .osm.pbf protobuf reader
-    merge.ts               318  union-find merge of adjacent extracts
-    regions.ts             382  RegionLibrary, catalogue, bbox helpers
-    engine.ts              220  worker client, format sniff, GeoJSON mirroring
-    tags.ts                 36  shared node-tag filter
+    engine.worker.ts     1140  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
+    pbf.ts                606  .osm.pbf protobuf reader
+    merge.ts              318  union-find merge of adjacent extracts
+    mergeguard.ts         170  can a merge be afforded here? three outcomes
+    regions.ts            444  RegionLibrary, catalogue, bbox helpers, merge cache
+    engine.ts             335  worker client, format sniff, GeoJSON mirroring
+    tags.ts                36  shared node-tag filter
 
   nav/
-    valhalla.ts            249  Valhalla /route client
-    providers.ts           ~350 provider chain, attempt trace, connectivity
-    engines.ts             ~230 engine selection, readiness, provenance
-    geocode.ts             178  Nominatim client, 1 req/s throttle
-    traffic.ts             163  fastest-of-N-alternates traffic verdict
-    location.ts            138  device/browser/simulated location
-    offroute.ts            114  deviation detection primitives, reroute origin
-    reroute.ts             259  reroute policy: when to act, backoff, banner
-    maneuver.ts             85  Valhalla maneuver codes -> icons
+    valhalla.ts           314  Valhalla /route client
+    providers.ts          345  provider chain, attempt trace, connectivity
+    engines.ts            239  engine selection, readiness, provenance
+    geocode.ts            231  Nominatim client, 1 req/s throttle
+    traffic.ts            163  fastest-of-N-alternates traffic verdict
+    location.ts           212  device/browser/simulated location
+    offroute.ts           114  deviation detection primitives, reroute origin
+    reroute.ts            346  reroute policy: when to act, backoff, banner
+    progress.ts           126  ETA policy: monotone, never zero, keep last good
+    maneuver.ts            85  Valhalla maneuver codes -> icons
 
   map/
-    MapView.tsx            252  MapLibre view, tile/offline style switch
-    style.ts               504  Google palette, tile remap, offline LOD style
+    MapView.tsx           330  MapLibre view, tile/offline style switch
+    style.ts              520  Google palette, tile remap, offline LOD style
 
   regions/
-    RegionsScreen.tsx      531  manage, catalogue, cross-region route test
-    store.ts               185  RegionLibrary singleton, per-region workers
-    persist.ts             615  IndexedDB caching of parsed datasets
-    download.ts           1270  streaming downloader
+    RegionsScreen.tsx     548  manage, catalogue, cross-region route test
+    store.ts              265  RegionLibrary singleton, per-region workers
+    persist.ts            615  IndexedDB caching of parsed datasets
+    download.ts          1317  streaming downloader
 
-test/            702 unit tests, 30 files
-test/e2e.mjs           39 browser checks, built bundle
-test/screens.mjs        50 checks x 3 viewports (150 total)
+test/            755 unit tests, 34 files
+test/e2e.mjs           44 browser checks, built bundle
+test/screens.mjs        51 checks x 3 viewports (153 total)
 tools/osm2pbf.mjs        XML -> PBF encoder (builds the test fixtures;
                             extract slicing is done by osmium on a desktop)
 tools/serve.mjs         LAN static server for on-device manual testing
+tools/diag-route.mjs    throwaway used to read a failing e2e check (§3.19)
 ```
+
+`App.tsx` at 2873 lines is the largest file in the project and is now the main obstacle to
+working on it: the guidance model, the routing orchestration, the reroute effect and every
+screen live in one component, so a change to any of them risks all of them, and the failure
+mode is a render-time throw that only a browser suite can see (§3.19). Splitting the
+screens and the guidance model out is the obvious next structural step, and it is listed
+now precisely so that it is not rediscovered as if it were new.
 
 ---
 
@@ -1091,72 +1299,67 @@ tools/serve.mjs         LAN static server for on-device manual testing
 
 Ordered by how much they matter.
 
-1. **Cross-region routing produces a wrong route.** This is the most serious
-   open gap, and it was previously recorded as *done*. The merge implementation
-   is real, correct and thoroughly tested, and the app never calls it;
-   cross-region routing stitches at a point derived from bounding-box arithmetic
-   and snaps that to whatever road node is nearest. The output is a continuous
-   line, so nothing looks broken — it just is not the route a driver would take.
-   Full analysis in §3.5.2. Affects only the multi-region case.
-2. **Never run on physical hardware.** Everything is browser-verified plus one
+1. **Never run on physical hardware.** Everything is browser-verified plus one
    Android 14 emulator. WebView behaviour, real GPS quality, SAF file import and
    on-phone memory pressure are unproven. The one gap no amount of further work
-   here can close — it needs a phone.
-3. **A real province has never been parsed on device.** Streaming (§3.12) is
+   here can close — it needs a phone. *(Was gap 2; renumbered, and the old gap 1
+   is closed — see below.)*
+2. **A real province has never been parsed on device.** Streaming (§3.12) is
    verified for equivalence and against a 19-way fixture; peak memory on an
    actual 100–900 MB extract is unmeasured. Streaming removes the ~2× file-size
-   spike but does not prove the parse fits a phone. The same constraint bounds
-   gap 1: merging two provincial graphs means holding both plus the result.
-4. **The offline LOD fix is unverified at province scale.** §3.13's assertions are
+   spike but does not prove the parse fits a phone. This also bounds the merge:
+   the guard in §3.18 estimates from declared graph size and refuses rather than
+   guessing, but a refusal on a real province has never been seen.
+3. **The offline LOD fix is unverified at province scale.** §3.13's assertions are
    structural (every line layer has a floor below zoom 10, arterials branch on
    class at low zoom). The only extract available offline is the tiny fixture,
    which cannot show what a province looks like at zoom 6. See that section for
    why the claims are worded the way they are.
-5. **SAF file import untested on device.** The picker UI was not automatable over
+4. **SAF file import untested on device.** The picker UI was not automatable over
    adb; browser-tested only. Re-confirmed while building the engine screen: the
    file picker cannot be driven through `adb shell input`, so device runs start
    with no map loaded and the offline engine correctly reports
    "No offline map loaded".
-6. **Reroute is wired but its failure path is thin.** The app now reroutes on its
+5. **Reroute is wired but its failure path is thin.** The app now reroutes on its
    own (§3.11), and the browser suite drives the full off-route flow. Not yet
    exercised: a reroute that fails *while offline* (the local engine cannot reach
    the pair), or two consecutive failures driving the backoff to its cap on device.
-7. **`merge.ts` is 318 lines of dead code**, plus roughly 800 lines of tests, all
-   unreachable from the app. Kept deliberately (see §3.5.2) because it is the only
-   correct implementation of requirement #10 — but it should not be mistaken for a
-   feature. Related: `RoadGraph.regionOf` is persisted for every region despite
-   only being meaningful for merged graphs.
-8. **Offline turn-by-turn infers turns** from bearing changes. Real instructions
+6. **Offline turn-by-turn infers turns** from bearing changes. Real instructions
    need Valhalla. Measured against Valhalla on one 4 km stretch it missed three of
    seven real maneuvers, invented one and reversed one direction — so the app now
    *labels* inferred guidance as inferred (§10.5). The inference itself is still
    wrong often enough that it should not be relied on for navigation.
-9. **zstd PBF blobs are rejected by name.** Geofabrik still ships zlib, so this
+7. **zstd PBF blobs are rejected by name.** Geofabrik still ships zlib, so this
    is future-proofing only.
-10. **Emulator cutout band.** A black band remains where the emulator simulates a
-    display cutout. Believed cosmetic and device-specific; not confirmed.
-11. **Optional: NDK cross-compile Valhalla** to replace the local engine with real
-    turn-by-turn. Gaps 8 and 11 share one dependency, and §5.3's objection is
-    external rather than about effort: arm64 sysroot builds of boost, luajit,
-    prime_server, GEOS and zlib either exist or they do not. Worth a bounded
-    feasibility spike before committing anything.
-
-12. **The ETA can read `0 m` while route remains.** Measured flipping between
-    `0 m` and `670 m` on a 36 m move, and showing `0 m to destination` while the
-    driver was 900 m off course. The snapping logic has no monotonicity
-    property. This is the most dangerous *readout* in the app and it is unfixed;
-    it needs a unit test asserting that remaining distance never increases as the
-    snapped index advances, and never reads zero before the last vertex.
-13. **Chrome still covers ~98% of the viewport** at phone portrait, and ~142% of
+8. **Emulator cutout band.** A black band remains where the emulator simulates a
+   display cutout. Believed cosmetic and device-specific; not confirmed.
+9. **Optional: NDK cross-compile Valhalla** to replace the local engine with real
+   turn-by-turn. Gaps 6 and 9 share one dependency, and §5.3's objection is
+   external rather than about effort: arm64 sysroot builds of boost, luajit,
+   prime_server, GEOS and zlib either exist or they do not. Worth a bounded
+   feasibility spike before committing anything.
+10. **Chrome still covers ~98% of the viewport** at phone portrait, and ~142% of
     its height in landscape. Every element is 76dp or larger because the design
     says so, and none of them is in the wrong place — but a driver looking at this
     sees very little map. The first thing a designer would cut, and the one change
     that should not be made without one.
-14. **A tile-host failure substitutes the map style silently.** If the remote style
+11. **A tile-host failure substitutes the map style silently.** If the remote style
     cannot be fetched the offline style is used instead, which is the correct
     degradation, but nothing on screen says the basemap changed source. MapLibre
     also logs its own validation exceptions for the offline style. Harmless to the
     user, noisy in a logcat.
+12. **`RoadGraph.regionOf` is persisted for every region** despite only being
+    meaningful for merged graphs (§3.5.2). Reachable now that the app can build a
+    merged graph, but the bytes are still wasted on single-region entries.
+
+### Closed in the §3.17–3.19 pass
+
+| Was gap | Now |
+|---|---|
+| Cross-region routing stitched at a bounding-box midpoint and produced a wrong route (§7 gap 1, the "most serious open gap") | One A\* over a merged graph, cached, behind a memory guard that refuses with a reason. §3.18, §3.5.2 |
+| `merge.ts` was 318 lines of dead code plus ~800 lines of unreachable tests | Called by `RegionLibrary.route()`; requirement #10 implemented |
+| The ETA could read `0 m` while route remained, and increase while driving forwards (§7 gap 12, "the most dangerous readout in the app") | Three properties as pure policy, asserted as properties. §3.17 |
+| A `useMemo` closing over a later-declared ref broke the whole app with all 747 unit tests green | `test/tdz.spec.ts` and `test/app-render.spec.ts`. §3.19 |
 
 ### Closed by the audit pass (§10)
 
@@ -1165,8 +1368,7 @@ so the list above is not read as the whole story:
 
 | Was | Now |
 |---|---|
-| Offline did not survive a reload — the browser served its own disconnected page | Service worker precaches the shell; verified by reloading with the network off |
-| Mute controlled no audio at all | Real spoken guidance via the Web Speech API; disabled-with-a-reason where no engine exists |
+| Offline did not survive a reload — the browser served its own disconnected page | Service worker precaches the shell; verified by reloading with the network off || Mute controlled no audio at all | Real spoken guidance via the Web Speech API; disabled-with-a-reason where no engine exists |
 | No map attribution was displayed — an ODbL breach | Credit declared on the map sources and rendered; regression-guarded in `test/attribution.spec.ts` |
 | The parser accepted `lat="-200"` and invented 74,756 addresses | Coordinates bounded in both readers; bounding box no longer reports its sentinel |
 | A corrupt/empty/road-free `.osm` silently replaced a working map | Refused with a specific message; the map is left untouched |
@@ -1267,13 +1469,16 @@ than by planning, and those found more than the plan did.
 | 1 | Unblock the e2e gate (`playwright install chromium`) | — | **Done** |
 | 2 | Engine selection + provenance visibility | req #2, #18 | **Done** (§3.6.1) |
 | 3 | Wire rerouting into the navigation screen | req #18 | **Done** (§3.11) |
-| 4 | Streaming parse | §7 gap 3 | **Done** (§3.12) |
-| 5 | Emulator: exercise nav + reroute on device | §7 gap 2 | **Partly done** |
-| 6 | Zoomed-out offline density as a style/LOD fix | §7 gap 4 | **Done** (§3.13) |
+| 4 | Streaming parse | §7 gap 2 | **Done** (§3.12) |
+| 5 | Emulator: exercise nav + reroute on device | §7 gap 1 | **Partly done** |
+| 6 | Zoomed-out offline density as a style/LOD fix | §7 gap 3 | **Done** (§3.13) |
 | 7 | Tag, read the CI result, update STATUS | req #16, #21 | **Done** — v0.11.2 and v0.11.3 released, both workflows green |
 | 8 | *Added by audit:* dead-code + STATUS reviews | — | §9.3 below |
 | 9 | *Added by audit:* reroute failure paths, frozen-position loop | — | §3.11.1 |
 | 10 | *Added by audit:* PBF coordinate correctness | req #5 | §4.1 |
+| 11 | ETA readout: monotone, and `0 m` means arrived | req #19, §7 gap 12 | **Done** (§3.17) |
+| 12 | Wire cross-region merging, behind a memory guard | req #10, §7 gap 1 | **Done** (§3.18) |
+| 13 | *Added by the crash of block 11:* gates for render-time failures | — | **Done** (§3.19) |
 
 Blocks 8–10 were not planned. They came from asking what was still broken rather
 than what was still missing, and they found the single most consequential bug in
@@ -1409,6 +1614,66 @@ now done** — see §3.14.
 
 ### 9.7 Carried forward
 
+**Session four** closed the two gaps this document had called most serious, in the
+order the gaps were ranked rather than the order they were convenient.
+
+**The ETA readout (§3.17) first**, because it was the most dangerous *readout* in
+the app and it was bounded. The root cause turned out to be that the ETA re-projected
+every fix from scratch while `progressAlong` was already monotonic — the two halves
+disagreed, and only one of them had been thought about. Fixing it needed a new
+primitive (`snapAlong`, in metres) before it needed any new policy, because a segment
+index cannot express arrival at all.
+
+**Cross-region merging (§3.18) second**, and it was the larger of the two by some
+distance. The merge itself needed nothing: `merge.ts` was already correct and already
+tested, and the entire gap was that nothing called it. All the work was in the four
+surrounding decisions — where the merged graph lives, whether to attempt it, what to do
+when it cannot be afforded, and what to tell the driver when it is refused. The last of
+those is the one worth keeping: `route()` returns `null` for three unrelated reasons and
+the caller cannot tell them apart, so "this device cannot compute this route" was
+indistinguishable from "no route exists", which is how a reachable destination becomes an
+unreachable one.
+
+**Then a mistake, and the gates that came out of it.** The ETA fix declared `routePos`
+below the two memos that read it. A `useMemo` callback runs during render, so that is a
+temporal dead zone, and it threw on every screen. All 747 unit tests passed. The app
+rendered the error boundary's recovery card and nothing reported a crash — the boundary
+working correctly is what made it quiet. Only `test/e2e.mjs` caught it.
+
+The process note is the same one as §9.2's and §4.6's, and it is now the fifth
+occurrence: **a green result nobody re-derived is not a green result.** What is new is the
+corollary, which cost the most to learn: *a suite that has never been seen to fail has not
+been tested.* The e2e suite had a real bug in it for a whole session and the fix was to
+read the failing check's actual page text rather than reason about the code, which is why
+`tools/diag-route.mjs` exists. The first attempt to close the gap — a render smoke test —
+turned out **not** to catch it, because both guidance memos return early on a first render
+and the bug needs a route to exist. Shipping it as if it closed the gap would have been
+the same mistake in a new place, so it is documented as buying something smaller, and the
+static ordering check that does catch it is in `test/tdz.spec.ts`.
+
+Two things that came out of writing those tests are worth more than the tests. The
+ordering scan immediately reported a *second* instance of the same hazard —
+`beginRouteProgress` read a hundred lines above its declaration, harmless only because it
+runs on a click — and it was moved anyway, because a permanent documented exception to a
+rule is how the original bug happened. And the first draft of the noise fixture in
+`test/progress.spec.ts` passed with the monotonic clamp deleted: ±2 m of GPS noise cannot
+flip an 11 m gap, so the test was decorative. Both are recorded because the temptation to
+ship a green test that proves nothing is the strongest one in this project, and it has now
+been resisted four separate times.
+
+**Counts, re-derived rather than remembered:** 702 → 755 unit tests across 30 → 34 files;
+e2e 44; screens 51 × 3 = 153; total JS 410.4 → 412.3 kB gzip. Thirteen line counts in §6
+were stale and are now `wc -l` output. Note the direction of that last one: §2 carried the
+correct screen figure (153) while §6 and §9.2 carried 150, so the error was not always a
+number that was too large — which is the least useful thing to know about a class of
+error, and the reason "just re-run it" is the only reliable instruction.
+
+**Cross-region routing is no longer the most serious open item.** §7 has been
+renumbered, and the old gap 1 is closed. What remains at the top is gap 1: never run on
+physical hardware, which needs a phone and no amount of further work here.
+
+### 9.8 Carried forward
+
 **v0.11.2 is released**: 15 commits, CI green, Release green, APK attached. The
 first Release run failed — 511 tests passed and then vitest died with
 `process.exit unexpectedly called with "1"`, because `tools/serve.mjs` ran a
@@ -1417,12 +1682,7 @@ build. Fixed, with a regression test that reproduces the CI condition; the
 original version of that test passed with the guard deliberately removed, because
 `dist/` exists locally. Verified by breaking the guard again.
 
-Cross-region routing remains the most serious open item (§7 gap 1, §3.5.2). It is
-not a regression — it has always been this way — but it is the thing most likely
-to matter to a driver with two provinces loaded, and it is now documented rather
-than claimed.
-
-### 9.8 Serving for manual testing
+### 9.9 Serving for manual testing
 
 ```bash
 npm run build && npm run apk    # dist/ and the debug APK
@@ -1617,14 +1877,17 @@ role; the steps screen told a user who had imported a map to import a map.
    one 4 km stretch it missed three of seven real maneuvers, invented one,
    reversed one, and the step *count* varied with polyline tessellation density
    rather than with the road. The steps screen labels inferred guidance as
-   inferred; the inference itself is unchanged. Needs real maneuver data — gap 8.
-2. **The ETA can read `0 m` while route remains** (§7 gap 11). The most dangerous
-   readout in the app, unfixed. Written up, not implemented.
-3. **Cross-region routing is still wrong** (§7 gap 1). Untouched.
-4. **A tile-host failure substitutes the style silently** (§7 gap 14).
-5. **Chrome covers ~98% of the viewport** at phone portrait (§7 gap 13).
-6. **Nothing has run on physical hardware** (§7 gap 2). No further work here
+   inferred; the inference itself is unchanged. Needs real maneuver data — §7 gap 6.
+2. **A tile-host failure substitutes the style silently** (§7 gap 11).
+3. **Chrome covers ~98% of the viewport** at phone portrait (§7 gap 10).
+4. **Nothing has run on physical hardware** (§7 gap 1). No further work here
    closes it.
+
+**Closed since this section was written.** The two entries this list used to carry at
+the top — the ETA reading `0 m` while route remained, and cross-region routing being
+wrong — are both fixed, in §3.17 and §3.18. They were left in place in the list above
+only long enough to be renumbered against the new §7; the substance is in §7's
+"Closed in the §3.17–3.19 pass" table.
 
 #### Two things a second opinion would help with
 
