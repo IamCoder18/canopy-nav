@@ -2,7 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no, maximum-scale=1.0" />
+    <!--
+      Pinch-zoom is deliberately left enabled.
+      It was `user-scalable=no, maximum-scale=1.0`, which fails WCAG 1.4.4
+      (Resize Text) and 1.4.10 (Reflow): at 200% zoom "Exit navigation" measured
+      180px off-screen and `overflow: hidden` clipped three of the four round
+      buttons. A user who needs magnification is not a case to design around.
+      A car windscreen is fixed, so the app also sets its own pan/zoom limits in
+      MapView rather than relying on the browser to forbid the gesture.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
     <!-- Matches the AAOS +1 elevation surface the app chrome sits on, so the
          status bar and the WebView's own background do not flash a different

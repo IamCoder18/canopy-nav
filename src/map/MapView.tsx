@@ -212,7 +212,27 @@ export function MapView(props: MapViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.fitNonce]);
 
-  return <div ref={container} className={props.className ?? 'map'} />;
+  /**
+   * The map lives inside a wrapper the library never touches.
+   *
+   * MapLibre adds `.maplibregl-map { position: relative }` to whatever element
+   * it is constructed with, and its stylesheet is a *separate lazily-loaded*
+   * chunk. `.map { position: absolute; inset: 0 }` ties with it on specificity,
+   * so which one won depended on stylesheet order — and once the map was split
+   * into its own chunk, its CSS always arrived second and always won. The map
+   * container measured 0px tall, the canvas fell back to its default 412x300,
+   * and nothing rendered at all.
+   *
+   * Fixing it by raising specificity would work today and break silently again
+   * the next time MapLibre adds a class or a second matching rule. Sizing a
+   * wrapper we own, which the library has no opinion about, cannot be reordered
+   * out from under us.
+   */
+  return (
+    <div className="map-host">
+      <div ref={container} className={props.className ?? 'map'} />
+    </div>
+  );
 }
 
 function applyOverlays(m: MLMap, p: MapViewProps) {

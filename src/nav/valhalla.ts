@@ -11,6 +11,62 @@ import { decodePolyline, type LatLng } from '../geo';
 
 export const VALHALLA_ENDPOINT = 'https://valhalla1.openstreetmap.de';
 
+/**
+ * How long to wait before declaring a routing request failed.
+ *
+ * `fetch` has no timeout of its own: it waits indefinitely unless the socket
+ * errors. Measured with a black-holed endpoint, the engines screen sat on
+ * "Testing…" at 3 s, 9 s and 39.8 s, and a mistyped LAN address was still
+ * spinning at 15 s. A row that never resolves is a row that looks broken, and
+ * on a phone the user has no way to tell a slow server from a hung one.
+ *
+ * 20 s is long enough for a cold Valhalla to answer a real route request over a
+ * mobile connection and short enough that "it is not working" arrives while the
+ * driver still cares.
+ */
+export const VALHALLA_TIMEOUT_MS = 20_000;
+
+/**
+ * A `fetch` that gives up.
+ *
+ * Composed with any caller-supplied signal rather than replacing it, so an
+ * abort from the UI still cancels promptly. Returns the caller's abort reason
+ * when the caller aborts, and a timeout error when the deadline is what fired —
+ * those are different events and the message should say which happened.
+ */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit & { signal?: AbortSignal } = {},
+  timeoutMs = VALHALLA_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const onOuterAbort = () => controller.abort(init.signal?.reason);
+  if (init.signal) {
+    if (init.signal.aborted) controller.abort(init.signal.reason);
+    else init.signal.addEventListener('abort', onOuterAbort, { once: true });
+  }
+  const timer = setTimeout(
+    () => controller.abort(new DOMException(`Timed out after ${timeoutMs} ms`, 'TimeoutError')),
+    timeoutMs,
+  );
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (e) {
+    // Distinguish "the user navigated away" from "the server never answered".
+    if (init.signal?.aborted) throw e;
+    if (controller.signal.aborted) {
+      throw new RoutingError(
+        `The routing server did not answer within ${Math.round(timeoutMs / 1000)} seconds. ` +
+        'It may be down, or the address may be wrong.',
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    init.signal?.removeEventListener('abort', onOuterAbort);
+  }
+}
+
 /** FOSSGIS asks distributed clients to identify themselves. */
 const CLIENT_ID = 'canopy-nav';
 
@@ -157,6 +213,8 @@ export async function routeOnValhalla(
   req: RouteRequest,
   endpoint = VALHALLA_ENDPOINT,
   extraHeaders?: Record<string, string>,
+  /** Caller-side cancellation, composed with the built-in timeout. */
+  signal?: AbortSignal,
 ): Promise<Route> {
   const costing = req.costing ?? 'auto';
   const units = req.units ?? 'km';
@@ -193,7 +251,7 @@ export async function routeOnValhalla(
 
   let res: Response;
   try {
-    res = await fetch(`${endpoint.replace(/\/$/, '')}/route`, {
+    res = await fetchWithTimeout(`${endpoint.replace(/\/$/, '')}/route`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -201,8 +259,12 @@ export async function routeOnValhalla(
         ...(extraHeaders ?? {}),
       },
       body: JSON.stringify(body),
+      signal,
     });
-  } catch {
+  } catch (e) {
+    // `fetchWithTimeout` already produces a specific message for a timeout;
+    // only a bare network failure needs the generic one.
+    if (e instanceof RoutingError) throw e;
     throw new RoutingError('Could not reach the routing server — check your connection');
   }
 
@@ -237,9 +299,12 @@ function encodeSigned(n: number): string {
 }
 
 /** Probe a Valhalla endpoint for availability + version. */
-export async function valhallaStatus(endpoint = VALHALLA_ENDPOINT): Promise<{ ok: boolean; version?: string }> {
+export async function valhallaStatus(
+  endpoint = VALHALLA_ENDPOINT,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean; version?: string }> {
   try {
-    const res = await fetch(`${endpoint.replace(/\/$/, '')}/status`, { headers: { 'X-Client-Id': CLIENT_ID } });
+    const res = await fetchWithTimeout(`${endpoint.replace(/\/$/, '')}/status`, { headers: { 'X-Client-Id': CLIENT_ID }, signal });
     if (!res.ok) return { ok: false };
     const j = (await res.json()) as { version?: string };
     return { ok: true, version: j.version };

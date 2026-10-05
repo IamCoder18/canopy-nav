@@ -30,6 +30,10 @@ import {
 import { ink, accentNight, applyThemeTokens, type as T, DP, ICON } from './theme';
 import { useLocation, type LocationMode } from './nav/location';
 import {
+  readSelection, writeSelection, readUnits, writeUnits,
+  readApiKey, writeApiKey, readEndpoint, writeEndpoint,
+} from './settings';
+import {
   importRegionFile, localRegionId, localRegionName, regionLib, useRegions,
   restoreRegions,
 } from './regions/store';
@@ -39,6 +43,16 @@ import {
   IconLayers, IconTraffic, IconSettings, IconHome, IconGoto, IconChevronRight,
   IconFile, IconLocate, IconCar, IconRefresh,
 } from './icons';
+
+/**
+ * Every engine id the app knows about, for validating a saved selection.
+ *
+ * Read from the provider list rather than hard-coded, so adding an engine does
+ * not silently make previously-saved settings unreadable — an unknown id falls
+ * back to the default rather than putting the selection into a state no row
+ * matches.
+ */
+const ENGINE_IDS: readonly string[] = [...PROVIDERS.map((p) => p.id as string), 'any-online'];
 
 /* --------------------------- deferred views --------------------------- */
 
@@ -58,6 +72,24 @@ const MapView = lazy(() => import('./map/MapView'));
 const RegionsScreen = lazy(() => import('./regions/RegionsScreen'));
 
 type Screen = 'home' | 'search' | 'preview' | 'navigating' | 'steps' | 'settings' | 'import' | 'regions' | 'engines';
+
+/**
+ * Where Escape goes from each screen.
+ *
+ * Unwinding one level is what a back affordance means. Anything absent returns
+ * to `home`, which is the right answer for a screen that *is* the top level.
+ * `navigating` is deliberately absent: Escape must not end a trip, because
+ * ending a navigation is a decision with consequences, not a dismissal.
+ */
+const BACK_FROM: Partial<Record<Screen, Screen>> = {
+  search: 'home',
+  preview: 'home',
+  steps: 'navigating',
+  settings: 'home',
+  import: 'home',
+  regions: 'home',
+  engines: 'settings',
+};
 
 /* ---------------------------- engines ---------------------------- */
 
@@ -216,9 +248,15 @@ export default function App() {
    * me have the offline engine if Valhalla is down" are different requests. See
    * `nav/engines.ts`.
    */
-  const [selection, setSelection] = useState<EngineSelection>(DEFAULT_SELECTION);
-  const [apiKey, setApiKey] = useState('');
-  const [endpoint, setEndpoint] = useState('');
+const [selection, setSelection] = useState<EngineSelection>(() => {
+    const saved = readSelection(ENGINE_IDS);
+    return {
+      preferred: (ENGINE_IDS.includes(saved.engine) ? saved.engine : DEFAULT_SELECTION.preferred) as EngineId,
+      allowFallback: saved.fallback !== 'strict',
+    };
+  });
+  const [apiKey, setApiKey] = useState(() => readApiKey());
+  const [endpoint, setEndpoint] = useState(() => readEndpoint());
 
   /** The ordered engine plan implied by the current selection. */
   const enginePlan = useMemo(
@@ -264,7 +302,35 @@ export default function App() {
   const [muted, setMuted] = useState(false);
   // A character typed on a hardware keyboard before the search screen mounted.
   const [pendingInitialQuery, setPendingInitialQuery] = useState('');
-  const [units, setUnits] = useState<'metric' | 'imperial'>('metric');
+  const [units, setUnits] = useState<'metric' | 'imperial'>(() => readUnits());
+
+  /**
+   * Surfaced only when storage actually refused something.
+   *
+   * Cleared on the next successful write, so a private-window warning does not
+   * become permanent.
+   */
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+
+  /**
+   * Persist every settings change.
+   *
+   * One effect rather than four so the writes are visible in one place, and a
+   * storage failure is reported once through the existing banner rather than
+   * swallowed per-setting.
+   */
+  useEffect(() => {
+    const problems = [
+      writeSelection({
+        engine: selection.preferred,
+        fallback: selection.allowFallback ? 'fallback' : 'strict',
+      }),
+      writeUnits(units),
+      writeApiKey(apiKey),
+      writeEndpoint(endpoint),
+    ].filter((p): p is string => p !== null);
+    setSettingsNotice(problems.length ? problems[0] : null);
+  }, [selection.preferred, selection.allowFallback, units, apiKey, endpoint]);
   // Valhalla expects km/miles; our formatters expect metric/imperial.
   const valhallaUnits: 'km' | 'miles' = units === 'imperial' ? 'miles' : 'km';
 
@@ -276,6 +342,15 @@ export default function App() {
 
   const [layer, setLayer] = useState<LayerId>('default');
   const [layersOpen, setLayersOpen] = useState(false);
+  /**
+   * Mirror of `layersOpen` for the keydown handler.
+   *
+   * The handler is registered once on mount with `[]` deps so it does not churn
+   * a listener on every render, which means it cannot close over the state
+   * value. A ref keeps it current without re-subscribing.
+   */
+  const layersOpenRef = useRef(false);
+  useEffect(() => { layersOpenRef.current = layersOpen; }, [layersOpen]);
   const [traffic, setTraffic] = useState<TrafficVerdict>(NO_TRAFFIC);
   // The pair a traffic query re-asks about: a route's ends, captured when the
   // route was computed, since the driver has moved since then.
@@ -459,17 +534,52 @@ export default function App() {
   // convention is that typing anywhere jumps to search. Without this the search
   // field has to be tapped first, which is exactly the wrong thing to make a
   // driver do.
+  //
+  // Two rules govern the order, and both were learned from a browser audit:
+  //
+  //  - **Named keys are matched before the alnum catch-all.** `m` is mute. The
+  //    catch-all matched it first, so the documented mute shortcut opened the
+  //    search screen seeded with "m" and never reached its own branch.
+  //  - **Escape means "go back one level", not "go home".** It unconditionally
+  //    set the screen to `home`, so pressing it dismissed the layers sheet by
+  //    destroying the navigation underneath it, and left the engines screen by
+  //    discarding an API key mid-typing.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
 
-      // Escape and mute work even from inside the search field; every other
-      // shortcut is suppressed while typing so it cannot fight the query.
+      // Escape unwinds one level at a time. A sheet first (it is an overlay on
+      // top of whatever opened it), then the screen stack, and home only when
+      // there is nowhere further back to go.
       if (e.key === 'Escape') {
-        setScreen('home');
+        e.preventDefault();
+        if (typing) {
+          // Escape inside a field is the platform's "dismiss" gesture. Taking it
+          // as navigation threw away whatever the user had typed.
+          el?.blur();
+          return;
+        }
+        setLayersOpen(false);
+        if (layersOpenRef.current) return;
+        setScreen((s) => {
+          // Ending a trip is a decision with consequences, not a dismissal, so
+          // Escape deliberately does nothing here. There is an explicit Exit
+          // control for it, and the exit path asks.
+          if (s === 'navigating') return s;
+          return BACK_FROM[s] ?? 'home';
+        });
         return;
       }
+
+      // Mute, before the alnum branch that used to swallow it. Works while
+      // typing too: muting is a thing a driver does mid-search.
+      if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        setMuted((m) => !m);
+        return;
+      }
+
       if (typing) return;
 
       if (e.key === '/') {
@@ -488,8 +598,6 @@ export default function App() {
         requestAnimationFrame(() => {
           document.querySelector<HTMLInputElement>('.inline-search input')?.focus();
         });
-      } else if (e.key === 'm' || e.key === 'M') {
-        setMuted((m) => !m);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -929,7 +1037,20 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
 
   return (
     <div className="app">
-      <Suspense fallback={<div className="map" aria-hidden="true" />}>
+      {/*
+        The map's Suspense boundary.
+
+        The fallback was a full-viewport `.map` div, which paints the *offline*
+        canvas colour #F8F7F5 — a white sheet over the whole app for 301-935 ms,
+        and 3,315 ms on a cold chunk. That is worse than showing nothing: it
+        undoes the dark chrome the rest of the app established and reads as a
+        crash rather than as a map still arriving.
+
+        Now it is a `null` on a transparent layer. The app chrome — app bar,
+        launcher, status pill — renders immediately, which is what the user
+        actually needs first, and the map appears when it is ready.
+      */}
+      <Suspense fallback={null}>
       <MapView
         dataset={dataset}
         useTiles={online}
@@ -1061,6 +1182,7 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
           units={units}
           setUnits={setUnits}
           provenance={provenance}
+          storageNotice={settingsNotice}
           onBack={() => setScreen('home')}
           onImport={() => setScreen('import')}
           onRegions={() => setScreen('regions')}
@@ -2182,8 +2304,18 @@ function EnginesScreen(props: {
           <button
             key={s.id}
             className={`provider-row ${chosen === s.id ? 'selected' : ''}`}
-            onClick={() => props.setSelection({ ...props.selection, preferred: s.id })}
+            // An engine that cannot route must not be selectable. It was fully
+            // live — `disabled=false`, `cursor:pointer`, full opacity — so a row
+            // reading "Unavailable — no offline map loaded" could still be chosen
+            // and then fail every request. The row stays focusable and readable;
+            // only the activation is refused.
+            disabled={!s.ready}
+            aria-disabled={!s.ready}
             aria-pressed={chosen === s.id}
+            onClick={() => {
+              if (!s.ready) return;
+              props.setSelection({ ...props.selection, preferred: s.id });
+            }}
           >
             <span className="result-icon">
               {s.online ? <IconTraffic size={ICON.secondary} /> : <IconFile size={ICON.secondary} />}
@@ -2309,6 +2441,8 @@ function SettingsScreen(props: {
   endpoint: string; setEndpoint: (v: string) => void;
   units: 'metric' | 'imperial'; setUnits: (u: 'metric' | 'imperial') => void;
   provenance: RouteProvenance | null;
+  /** Set when the browser refused to persist a setting. */
+  storageNotice?: string | null;
   onBack: () => void; onImport: () => void; onRegions: () => void;
   onEngines: () => void;
 }) {
@@ -2323,6 +2457,12 @@ function SettingsScreen(props: {
       </div>
 
       <div className="settings-body">
+        {props.storageNotice && (
+          // Only rendered when storage actually refused. A permanent warning
+          // about settings not persisting would be noise in the normal case,
+          // and a silent one would be a lie in the private-window case.
+          <div className="hint-card warn" role="status">{props.storageNotice}</div>
+        )}
         <div className="section-head" style={T.body3m}>Routing</div>
         <button className="hint-card" onClick={props.onEngines} style={{ textAlign: 'left', width: '100%' }}>
           <div style={T.body3m}>
@@ -2383,6 +2523,7 @@ function ImportScreen(props: {
   onBack: () => void;
 }) {
   const [dragging, setDragging] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   return (
     <div className="search-root">
       <div className="top-app-bar">
@@ -2391,21 +2532,53 @@ function ImportScreen(props: {
       </div>
 
       <div className="settings-body">
-        <label
+        {/*
+          The picker is a real button, not a styled `<label>` wrapped around a
+          `hidden` input.
+
+          A `hidden` input is removed from the accessibility tree entirely, so
+          the whole dropzone exposed *zero* controls: tab order ran from the four
+          attribution links to Back to the map canvas with no way to open a file
+          dialog at all. A visually-hidden input driven by a real button is
+          operable by keyboard, announced with a name, and still styled as the
+          large drop target.
+
+          The button carries the drop handlers too, so both gestures land on one
+          element rather than two overlapping ones.
+        */}
+        <button
+          type="button"
           className={`dropzone ${dragging ? 'over' : ''}`}
+          onClick={() => fileRef.current?.click()}
           onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
-          onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) props.onFile(f); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragging(false);
+            const f = e.dataTransfer.files[0];
+            if (f) props.onFile(f);
+          }}
         >
-          <input type="file" accept=".osm,.pbf,.xml,application/octet-stream" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) props.onFile(f); }} />
           <IconFile size={64} color={ink.secondary} />
-          <div style={{ ...T.body1m, marginTop: DP.P3 }}>Choose or drop an .osm file</div>
-          <div style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1, textAlign: 'center' }}>
+          <span style={{ ...T.body1m, marginTop: DP.P3 }}>Choose or drop an .osm file</span>
+          <span style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1, textAlign: 'center' }}>
             Accepts <code>.osm</code> (XML) and <code>.osm.pbf</code> (protobuf),<br />
             which is what Geofabrik publishes. Smaller extracts can be converted
             with <code>osmium cat region.osm.pbf -o region.osm</code>.
-          </div>
-        </label>
+          </span>
+        </button>
+        {/* Present for the programmatic `.click()` above and for automation;
+            taken out of the layout and out of the tab order so the visible
+            button is the only stop. */}
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".osm,.pbf,.xml,application/octet-stream"
+          className="visually-hidden-input"
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) props.onFile(f); }}
+        />
 
         {props.progress && <ProgressCard progress={props.progress} />}
         {props.error && (
