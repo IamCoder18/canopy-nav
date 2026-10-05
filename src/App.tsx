@@ -239,6 +239,15 @@ export default function App() {
   const [dataset, setDataset] = useState<OsmDataset | null>(null);
   const [progress, setProgress] = useState<BuildProgress | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  /**
+   * Non-fatal import complaints, shown separately from `importError`.
+   *
+   * Distinct because they mean different things: an error means nothing was
+   * changed, a warning means the import succeeded and something about it is
+   * worth knowing. Rendering them with the same card would teach users to ignore
+   * the card that means "your map is gone".
+   */
+  const [importWarn, setImportWarn] = useState<string | null>(null);
   // Subscribes to the library, so every screen re-renders when a region lands.
   const regions = useRegions();
 
@@ -520,10 +529,24 @@ export default function App() {
    */
   const build = useCallback(async (file: File, id: string, name: string, code: string) => {
     setImportError(null);
+    setImportWarn(null);
     const ds = await importRegionFile({
       id, name, code, file,
       onProgress: setProgress,
       onError: setImportError,
+      onWarn: setImportWarn,
+      /*
+       * The import worked; only the *cache* did not. Reporting this is what the
+       * callback exists for, and it was passed by nobody in the repo — so a
+       * device that ran out of room silently lost the region on next launch
+       * while the UI said "1 loaded". Quota is precisely the case the driver
+       * needs to hear about, because it is the one they can act on.
+       */
+      onPersistError: (m) => setImportWarn(
+        m
+          ? `Imported, but it could not be saved for next time: ${m}. It will be gone when you close the app.`
+          : null,
+      ),
     });
     if (!ds) return null;
     setDataset(ds);
@@ -989,6 +1012,9 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
           locationError={locationError}
           progress={progress}
           error={importError}
+          warn={importWarn}
+          onDismissError={() => setImportError(null)}
+          onDismissWarn={() => setImportWarn(null)}
           route={route}
           onImport={() => setScreen('import')}
           onImportFile={onFile}
@@ -1061,6 +1087,9 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
         <ImportScreen
           progress={progress}
           error={importError}
+          warn={importWarn}
+          onDismissError={() => setImportError(null)}
+          onDismissWarn={() => setImportWarn(null)}
           onFile={onFile}
           onBack={() => setScreen('home')}
         />
@@ -1124,6 +1153,10 @@ interface HomeProps {
   locationError: string | null;
   progress: BuildProgress | null;
   error: string | null;
+  /** Non-fatal: the import succeeded, with a caveat worth reading. */
+  warn?: string | null;
+  onDismissError?: () => void;
+  onDismissWarn?: () => void;
   route: Route | null;
   onImport: () => void;
   /**
@@ -1236,7 +1269,20 @@ function HomeScreen(p: HomeProps) {
         )}
 
         {p.progress && <ProgressCard progress={p.progress} />}
-        {p.error && <div className="error-card">{p.error}</div>}
+        {p.error && (
+          <ImportMessage
+            tone="error"
+            message={p.error}
+            onDismiss={() => p.onDismissError?.()}
+          />
+        )}
+        {p.warn && (
+          <ImportMessage
+            tone="warn"
+            message={p.warn}
+            onDismiss={() => p.onDismissWarn?.()}
+          />
+        )}
         {!p.dataset && !p.progress && (
           <div className="hint-card">
             <div style={{ ...T.body3m, marginBottom: DP.P1 }}>Import a map to route offline</div>
@@ -1330,10 +1376,47 @@ function QuickTile({ label, icon, onClick }: { label: string; icon: React.ReactN
 
 function ProgressCard({ progress }: { progress: BuildProgress }) {
   return (
-    <div className="progress-card">
+    <div className="progress-card" role="status" aria-live="polite">
       <div style={T.body3m}>{progress.stage}</div>
       <div className="bar"><div className="fill" style={{ width: `${Math.round(progress.pct * 100)}%` }} /></div>
       <div style={{ ...T.sub3, color: ink.secondary }}>{Math.round(progress.pct * 100)}%</div>
+    </div>
+  );
+}
+
+/**
+ * An import message the user can see, read and dismiss.
+ *
+ * The card it replaces had no dismiss, no ARIA role and no live region, and it
+ * stayed on the launcher until the *next* import started — so a failure the user
+ * had already understood stayed on screen indefinitely, and a screen reader
+ * never learned it had happened at all.
+ *
+ * `role="alert"` for the error (assertive: the thing they asked for did not
+ * happen) and `role="status"` for the warning (polite: it did, with a caveat).
+ */
+function ImportMessage({
+  tone, message, onDismiss,
+}: {
+  tone: 'error' | 'warn';
+  message: string;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      className={`error-card ${tone}`}
+      role={tone === 'error' ? 'alert' : 'status'}
+      style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: DP.P2 }}
+    >
+      <span style={{ flex: '1 1 auto', minWidth: 0 }}>{message}</span>
+      <button
+        type="button"
+        className="msg-dismiss"
+        onClick={onDismiss}
+        aria-label={tone === 'error' ? 'Dismiss this error' : 'Dismiss this message'}
+      >
+        <IconClose size={ICON.tertiary} />
+      </button>
     </div>
   );
 }
@@ -2292,6 +2375,10 @@ function SettingsScreen(props: {
 function ImportScreen(props: {
   progress: BuildProgress | null;
   error: string | null;
+  /** Non-fatal: the import succeeded, with a caveat worth reading. */
+  warn?: string | null;
+  onDismissError?: () => void;
+  onDismissWarn?: () => void;
   onFile: (f: File) => void;
   onBack: () => void;
 }) {
@@ -2321,7 +2408,12 @@ function ImportScreen(props: {
         </label>
 
         {props.progress && <ProgressCard progress={props.progress} />}
-        {props.error && <div className="error-card">{props.error}</div>}
+        {props.error && (
+          <ImportMessage tone="error" message={props.error} onDismiss={() => props.onDismissError?.()} />
+        )}
+        {props.warn && (
+          <ImportMessage tone="warn" message={props.warn} onDismiss={() => props.onDismissWarn?.()} />
+        )}
       </div>
     </div>
   );

@@ -16,7 +16,7 @@
  */
 
 import { useSyncExternalStore } from 'react';
-import { OsmEngine, type BuildProgress } from '../osm/engine';
+import { OsmEngine, importPreflight, type BuildProgress } from '../osm/engine';
 import type { OsmDataset } from '../osm/engine.worker';
 import { RegionLibrary, type Region, type RegionMeta } from '../osm/regions';
 import { saveRegion, deleteRegion, loadAllRegions, probePersistence } from './persist';
@@ -45,6 +45,17 @@ export interface ImportRequest {
    * genuinely needs to see, so it is reported without failing the import.
    */
   onPersistError?: (message: string | null) => void;
+  /**
+   * Non-fatal complaint about a file that *did* import — a valid extract with
+   * nothing routable in it, say. Distinct from `onError`, which means the import
+   * failed and nothing changed.
+   */
+  onWarn?: (message: string | null) => void;
+}
+
+/** Best-effort guess that a file is a saved web page rather than map data. */
+function isProbablyHtml(file: File): boolean {
+  return /\.(html?|htm|txt|json)$/i.test(file.name ?? '');
 }
 
 /**
@@ -53,21 +64,80 @@ export interface ImportRequest {
  * reported through `onError`, so callers only need to check for `null`).
  */
 export async function importRegionFile(req: ImportRequest): Promise<OsmDataset | null> {
-  const { onProgress, onError, onPersistError } = req;
+  const { onProgress, onError, onPersistError, onWarn } = req;
   onError?.(null);
+  onWarn?.(null);
   onProgress?.({ stage: 'Reading file', pct: 0 });
 
   // An engine can only be built once, so replacing a region needs a new worker.
   const prev = engines.get(req.id);
-  const engine = new OsmEngine();
-  engines.set(req.id, engine);
-  engine.setProgressHandler(onProgress ?? null);
+  // Declared outside the try so the catch can release a worker that was created
+  // but then failed. It is `let` rather than `const` because construction can
+  // itself throw -- `new Worker(...)` does in any environment without one -- and
+  // when it did, that rejection escaped `importRegionFile` entirely instead of
+  // being reported through `onError`, so the UI was left with whatever it had
+  // before and no explanation.
+  let engine: OsmEngine | null = null;
+  let registered = false;
 
   try {
+    // Reject an obviously-wrong file *before* constructing the engine, so a
+    // bad import costs no worker and the diagnosis is the file's, not the
+    // environment's.
+    const problem = await importPreflight(req.file);
+    if (problem) throw new Error(problem);
+
+    engine = new OsmEngine();
+    engines.set(req.id, engine);
+    registered = true;
+    engine.setProgressHandler(onProgress ?? null);
+
     // Both .osm (XML) and .osm.pbf (protobuf) are accepted; OsmEngine sniffs
     // which it actually got, so a mislabelled extension still works.
     onProgress?.({ stage: 'Reading extract', pct: 0 });
     const dataset = await engine.build(req.file);
+
+    /**
+     * Refuse a parse that produced nothing usable, *before* it touches the
+     * library.
+     *
+     * This is the check whose absence was the worst defect in the import path.
+     * A corrupt, truncated, empty or road-free file used to parse "successfully"
+     * into an empty dataset, replace the region the user had working, report no
+     * error at all, and leave the home screen reading "0 routable ways · 2
+     * regions" — the previous map gone with nothing said and nothing to undo it.
+     */
+    const { nodes, ways, routable } = dataset.counts;
+    if (nodes === 0 && ways === 0) {
+      throw new Error(
+        `${req.file.name} contains no OpenStreetMap data. ` +
+        (isProbablyHtml(req.file)
+          ? 'It looks like a saved web page, not map data — the download probably returned an error page. '
+          : 'The file may be truncated, or the wrong file was chosen. ') +
+        'Nothing was changed.',
+      );
+    }
+    if (routable === 0) {
+      /**
+       * Refused, not merely warned about.
+       *
+       * It was originally accepted with a warning, which read as the polite
+       * choice — and still displaced the region the user had working, because
+       * the new dataset becomes the active one. So a file containing a single
+       * building could silently replace a province, leaving the home screen
+       * reading "0 routable ways" and leaving the user with no way to route and
+       * no way back.
+       *
+       * For this app an extract with no roads has no use at all: offline
+       * routing *is* the feature. Refusing costs the user a specific message
+       * instead of their map.
+       */
+      throw new Error(
+        `${req.file.name} has no routable roads — ${ways} way${ways === 1 ? '' : 's'} but ` +
+        'none of them are highways this app can drive on. It may be a building-only or ' +
+        'pedestrian-only extract. Nothing was changed.',
+      );
+    }
 
     const meta: RegionMeta = {
       id: req.id,
@@ -95,11 +165,21 @@ export async function importRegionFile(req: ImportRequest): Promise<OsmDataset |
   } catch (e) {
     // A failed replace must not take the working region down with it: the
     // parsed data lives on the library's Region, not on the worker.
-    engine.dispose();
-    if (prev) engines.set(req.id, prev);
-    else engines.delete(req.id);
+    // Guarded because the engine may never have been constructed.
+    engine?.dispose();
+    if (registered) {
+      if (prev) engines.set(req.id, prev);
+      else engines.delete(req.id);
+    }
     onProgress?.(null);
-    onError?.((e as Error).message);
+    // `(e as Error).message` is `undefined` for a thrown string, a rejected
+    // non-Error, or a `null` — which reaches the user as an empty card. Coerce,
+    // so every failure carries words.
+    const message = e instanceof Error ? e.message
+      : typeof e === 'string' ? e
+      : e == null ? 'The import failed for an unknown reason.'
+      : (() => { try { return JSON.stringify(e); } catch { return 'The import failed for an unknown reason.'; } })();
+    onError?.(message);
     return null;
   }
 }

@@ -73,6 +73,15 @@ export function RegionsScreen(props: RegionsScreenProps) {
   const [warnings, setWarnings] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const [availability, setAvailability] = useState<Record<string, boolean>>({});
+  /**
+   * Why a catalogue row is unavailable, keyed by id.
+   *
+   * Kept as text rather than folded into the boolean because the reason is the
+   * only useful thing on screen. It used to live in a `title` attribute, which is
+   * a hover affordance — invisible on a touch device, so every row read
+   * "Unavailable" with no explanation and nothing the user could act on.
+   */
+  const [unavailableReason, setUnavailableReason] = useState<Record<string, string>>({});
 
   const groups = catalogByCountry();
 
@@ -155,6 +164,9 @@ export function RegionsScreen(props: RegionsScreenProps) {
       );
       if (cancelled) return;
       setAvailability(Object.fromEntries(results.map(([id, r]) => [id, r.ok])));
+      setUnavailableReason(Object.fromEntries(
+        results.filter(([, r]) => !r.ok && r.error).map(([id, r]) => [id, r.error as string]),
+      ));
     })();
     return () => { cancelled = true; };
   }, []);
@@ -414,6 +426,11 @@ export function RegionsScreen(props: RegionsScreenProps) {
                       {parent ? ` · part of ${parent.name}` : ''}
                     </span>
                     <span className="truncate" style={{ ...T.sub2, color: ink.tertiary }} title={e.pbfUrl}>{e.pbfUrl}</span>
+                    {/* The reason, on screen. A `title` is unreachable on a
+                        touch device, which is the only kind this app has. */}
+                    {unavailableReason[e.id] && (
+                      <span className="unavailable-reason">{unavailableReason[e.id]}</span>
+                    )}
                   </span>
                   <span className="region-actions">
                     {have
@@ -423,7 +440,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
                       className="pill-btn"
                       disabled={dl?.entry.id === e.id || availability[e.id] === false}
                       title={availability[e.id] === false
-                        ? 'This download URL could not be reached'
+                        ? (unavailableReason[e.id] ?? 'This download URL could not be reached')
                         : `Download ${e.name} (${formatBytes(e.approxMb * 1024 * 1024)})`}
                       onClick={() => void startDownload(e)}
                     >

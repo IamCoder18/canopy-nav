@@ -11,6 +11,61 @@ import { searchGazetteer, RENDER_MIN_ZOOM } from './engine.worker';
 
 type Handler = (ev: MessageEvent) => void;
 
+/** A file's name for messages that quote it, or a neutral stand-in. */
+function quoted(name: string | undefined): string {
+  return name ? `"${name}"` : 'The file';
+}
+
+/**
+ * Reject a file that cannot possibly be OSM data, before any work is done.
+ *
+ * Pure and async because it reads the first bytes of the file; returns `null`
+ * when the file is worth parsing, or a message explaining why it is not.
+ *
+ * Called both by `build()` and by `importRegionFile` *before* it constructs an
+ * `OsmEngine`. That ordering matters: the engine constructor spawns a Web Worker,
+ * so validating afterwards meant every bad file still paid for a worker, and in
+ * an environment without one the constructor's failure masked the real diagnosis
+ * entirely — the user was told "Worker is not defined" for an empty file.
+ */
+export async function importPreflight(file: OsmFile): Promise<string | null> {
+  const name = file.name;
+
+  // A 0-byte file is the most common failed import — a cancelled download, a
+  // truncated placeholder — and it used to reach the parser and produce a
+  // valid-looking dataset with nothing in it.
+  if (typeof file.size === 'number' && file.size === 0) {
+    return `${quoted(name)} is empty (0 bytes). If this was a download, it did not complete — ` +
+      'fetch the extract again before importing it.';
+  }
+
+  // Enough of the head to identify both formats. PBF identifies itself by the
+  // type string following the 4-byte blob header, and "OSMHeader" is 9 bytes, so
+  // 32 leaves room for that plus a length prefix.
+  const head = new Uint8Array(await file.slice(0, 32).arrayBuffer());
+  const ascii = Array.from(head, (b) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ' ')).join('');
+
+  const looksXml = ascii.includes('<');
+  const looksPbf = ascii.includes('OSMHeader') || ascii.includes('OSMData');
+  if (looksXml || looksPbf) return null;
+
+  if (file.size !== undefined && file.size <= head.length) {
+    // We just read every byte of it and it is neither. That is conclusive: a
+    // short note or an HTML fragment cannot become `<osm>` further in, because
+    // there is no further in. Only a *partial* sniff is inconclusive — a valid
+    // extract may open with a comment or a licence block longer than 32 bytes.
+    return `${quoted(name)} is not OpenStreetMap data — it starts with ` +
+      `${JSON.stringify(ascii.slice(0, 16))}, which is neither XML (\`<osm\`) nor a PBF ` +
+      'blob header (`OSMHeader`). A saved web page or a cancelled download looks like ' +
+      'this. Convert a .pbf with `osmium cat region.osm.pbf -o region.osm`.';
+  }
+
+  // A long file whose first 32 bytes are unrecognised: possibly a licence
+  // preamble, possibly not OSM at all. Let the parser decide rather than
+  // guessing from a prefix.
+  return null;
+}
+
 /** The slice of `File` the engine needs, so tests can pass a stub. */
 export interface OsmFile {
   name?: string;
@@ -35,7 +90,17 @@ export interface BuildProgress {
 }
 
 export class OsmEngine {
-  private worker: Worker;
+  /**
+   * Nullable so `dispose()` is safe on a half-built engine.
+   *
+   * `new Worker(...)` throws outright in any environment without one — a
+   * non-browser test runner, or a WebView that refused the blob URL. When that
+   * happened, `importRegionFile`'s catch block called `engine.dispose()` on an
+   * object whose `worker` had never been assigned, which threw a second time and
+   * replaced the real error with "Cannot read properties of undefined". The user
+   * saw a null message and the actual cause was lost.
+   */
+  private worker: Worker | null = null;
   private dataset: OsmDataset | null = null;
   private buildPromise: Promise<OsmDataset> | null = null;
   private onProgress: ((p: BuildProgress) => void) | null = null;
@@ -86,14 +151,43 @@ export class OsmEngine {
     if (this.buildPromise) return this.buildPromise;
 
     const name = file.name ?? '';
-    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
-    // XML begins with '<' after an optional BOM/whitespace; PBF never does.
-    let looksXml = false;
-    for (const b of head) {
-      if (b === 0x3c) { looksXml = true; break; }
-      if (b !== 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d && b !== 0xef && b !== 0xbb && b !== 0xbf) break;
+
+    // A 0-byte file is the single most common failed import — a cancelled
+    // download, a truncated placeholder, an empty picker — and it used to reach
+    // the parser and produce a valid-looking dataset with nothing in it.
+    if (typeof file.size === 'number' && file.size === 0) {
+      throw new Error(
+        `${quoted(name)} is empty (0 bytes). If this was a download, it did not complete — ` +
+        'fetch the extract again before importing it.',
+      );
     }
-    const isXml = looksXml || /\.(osm|xml)$/i.test(name);
+
+    // Enough of the head to identify both formats. PBF identifies itself by the
+    // type string that follows the 4-byte blob header, and "OSMHeader" is 9
+    // bytes, so 32 leaves room for that plus a length prefix.
+    const head = new Uint8Array(await file.slice(0, 32).arrayBuffer());
+    const ascii = Array.from(head, (b) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ' ')).join('');
+
+    // The bytes get to decide. It used to be `looksXml || /\.(osm|xml)$/`, which
+    // let the *extension* override a definite byte-level answer: a real PBF
+    // renamed to `.osm` was parsed as XML, matched nothing, and imported
+    // "successfully" as an empty region that then displaced a working map.
+    const isXml = ascii.includes('<')
+      ? true
+      : ascii.includes('OSMHeader') || ascii.includes('OSMData')
+        ? false
+        // Genuinely inconclusive (a very short file, or leading bytes we do not
+        // recognise): fall back to the name.
+        : !/\.pbf$/i.test(name);
+
+    if (!isXml && !/\.pbf$/i.test(name) && !ascii.includes('OSMHeader') && !ascii.includes('OSMData')) {
+      throw new Error(
+        `${quoted(name)} is not OpenStreetMap data — its first bytes are neither XML ` +
+        '(`<osm`) nor a PBF blob header (`OSMHeader`). A saved web page or a ' +
+        'cancelled download looks like this. Convert with ' +
+        '`osmium cat region.osm.pbf -o region.osm` if you have a .pbf.',
+      );
+    }
 
     this.buildPromise = new Promise<OsmDataset>((resolve, reject) => {
       this.resolveBuild = resolve;
@@ -106,6 +200,9 @@ export class OsmEngine {
           // whole-file forms are kept for callers that pass a plain Blob-shaped
           // object without `stream`, and for the test fixtures.
           const totalChars = typeof file.size === 'number' && file.size > 0 ? file.size : undefined;
+          // Captured once: `dispose()` can null the field from another tick.
+          const worker = this.worker;
+          if (!worker) throw new Error('The OSM worker is not available in this environment.');
           if (isXml) {
             if (typeof file.stream === 'function') {
               // `stream()` is called exactly once: each call returns a *new*
@@ -119,18 +216,18 @@ export class OsmEngine {
               // transferred". Transferring also moves the handle rather than
               // copying it, which is the point.
               const stream = file.stream();
-              this.worker.postMessage(
+              worker.postMessage(
                 { type: 'build', payload: { stream, format: 'xml', totalChars } },
                 [stream as unknown as Transferable],
               );
             } else {
               const text = await file.text();
-              this.worker.postMessage({ type: 'build', payload: { text, format: 'xml' } });
+              worker.postMessage({ type: 'build', payload: { text, format: 'xml' } });
             }
           } else {
             // Transfer the buffer instead of copying a province-sized file.
             const bytes = await file.arrayBuffer();
-            this.worker.postMessage({ type: 'build', payload: { bytes, format: 'pbf' } }, [bytes]);
+            worker.postMessage({ type: 'build', payload: { bytes, format: 'pbf' } }, [bytes]);
           }
         } catch (err) {
           reject(err as Error);
@@ -154,7 +251,10 @@ export class OsmEngine {
   }
 
   dispose() {
-    this.worker.terminate();
+    // Terminating an already-terminated worker is harmless; calling it on one
+    // that was never created is not.
+    this.worker?.terminate();
+    this.worker = null;
   }
 }
 
