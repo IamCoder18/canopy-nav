@@ -2124,19 +2124,63 @@ people to delete the explanation.
 
 ### 11.9 Still open from this pass
 
-1. **The navigation screen cannot reflow.** `overflow: hidden` on `html`/`body`
-   and `position: fixed` on `.app` mean nothing scrolls, and every part of that
-   screen is absolutely positioned. At 200% text zoom the banner and the control
-   stack overlap. This needs a layout change, not a media query, and it is the
-   largest single piece of work left.
-2. **Confirming a region removal loses focus**, because the Remove button is
-   unmounted when the confirm state appears — so a keyboard user who activates it
-   cannot reach Confirm or Cancel without tabbing into a Download button, which
-   starts a 380 MB transfer.
-3. **Search results and catalogue rows are still not lists**, so the same "item 3
-   of 24" gap remains on the two screens with the most rows.
+1. **The navigation screen cannot reflow, and the platform's font setting does
+   not reach this app at all.** One defect, two causes.
 
-None of these blocks ordinary use. All three are recorded so they are not lost.
+   *The setting.* On Android the system font size reaches a WebView by scaling
+   the **root** font size, and absolute `px` lengths are unaffected by it. Every
+   token here emits an absolute `px`, so the setting a driver uses because the
+   display is not big enough at a glance — the exact audience AAOS's 24dp
+   minimum type size exists for — **does nothing**. Converting the type scale to
+   `rem` is the real fix: large, mechanical, and safe to do one token at a time.
+
+   *The layout.* `overflow: hidden` on `html`/`body`, `position: fixed` on
+   `.app`, and every part of the navigation screen `position: absolute` against
+   `inset: 0`. Nothing scrolls, so a banner that grows has nowhere to go.
+
+   Measured by `tools/reflow.mjs` at 200% on an 892x412 landscape phone:
+
+   | | |
+   |---|---|
+   | Banner stack vs bottom bar | **560 x 20px intersection** |
+   | Off-route notice vs bottom bar | **560 x 20px intersection** |
+   | Chrome labels clipped | all 7 — "14 min", "5.2 km", "310 m", "Turn left.", "Steps", "Exit", "Overview" |
+   | Control column | leaves the viewport |
+
+   The instruction is unreadable and unreachable. This is the largest single
+   piece of work left in the app.
+
+   **Partly shipped; the rest deliberately not.** `src/textscale.ts` measures the
+   resolved root font size and sets `<html data-textsize="large">` above one
+   documented threshold. That part is correct, reacts to a change made while the
+   app is open, and is worth having on its own — the app no longer ignores a
+   setting without saying so.
+
+   The layout that responds to it is **not** shipped. The first attempt bounded
+   the banner stack (`bottom` plus `overflow-y: auto`), which worked and is
+   measured working. Its control-column rule did not: the base rule's
+   `flex-wrap` and `max-height` won somewhere, the column stayed 168px wide and
+   grew *upward* out of the viewport, and every position the probe reported was
+   worse than before — `y=-296` in a 412px viewport, 604px tall. So that half was
+   reverted, and the measurements were left in `styles.css` in place of a rule
+   that degrades the layout.
+
+   A change measured to make things worse is worse than no change, and shipping
+   it because a deadline was close is the exact failure §3.19 records.
+
+   `tools/reflow.mjs` is **not** in `npm run check`: it fails, and a gate that
+   always fails is a gate people learn to ignore. It is a diagnostic, and
+   `styles.css` records what it reports.
+
+2. ~~Confirming a region removal loses focus~~ — **closed.** The Remove button
+   stays mounted and hidden, focus moves to Confirm, cancelling returns focus to
+   it. It was also claiming `role="alertdialog"`, which implies modality and an
+   assertive live region, and is neither true of an inline pair of buttons.
+3. ~~Search results have no list semantics~~ — **closed.** A `<ul>` wrapping only
+   the rows, so the count is reported without counting the status cards above it.
+
+None of the remaining items blocks ordinary use at the design system's own type
+sizes.
 
 ---
 

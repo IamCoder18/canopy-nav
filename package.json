@@ -20,7 +20,9 @@
     "screens": "node test/screens.mjs",
     "serve": "node tools/serve.mjs",
     "focus": "node tools/focus.mjs",
-    "shots": "node tools/shots.mjs"
+    "shots": "node tools/shots.mjs",
+    "reflow": "node tools/reflow.mjs",
+    "reflow:note": "node tools/reflow.mjs || true"
   },
   "engines": {
     "node": ">=20"

@@ -36,6 +36,7 @@ import {
   readPlaces, writePlace, type PlaceSlot, type SavedPlace,
 } from './settings';
 import { describeError } from './errors';
+import { useTextScale } from './textscale';
 import { isVoiceAvailable, speak, cancelSpeech, voiceKey } from './nav/voice';
 import {
   importRegionFile, localRegionId, localRegionName, regionLib, useRegions,
@@ -260,6 +261,11 @@ function congestionSpans(route: Route): TrafficOverlay[] {
 /* ------------------------------ App ------------------------------ */
 
 export default function App() {
+  // A no-op whose only job is the attribute it writes. See `textscale.ts`: the
+  // platform's font-size setting does not reach this app's type, because every
+  // token emits an absolute `px`. Without this the navigation screen overlaps
+  // itself the moment the text is large by any means.
+  useTextScale();
   const [screen, setScreen] = useState<Screen>('home');
   const [online, setOnline] = useState(isOnline());
   /**

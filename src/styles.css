@@ -1930,3 +1930,47 @@ ul.result-list {
   padding: 0;
 }
 ul.result-list > li { margin: 0; }
+
+/*
+ * The large-font reflow this file needs, and does not yet have.
+ *
+ * ## What is measured
+ *
+ * `tools/reflow.mjs` drives the navigation screen at 100%, 175% and 200% text on
+ * an 892x412 landscape phone. At 200%:
+ *
+ *   - the banner stack intersects the bottom bar by 560x20px,
+ *   - the off-route notice does too,
+ *   - all seven chrome labels are clipped ("14 min", "5.2 km", "310 m",
+ *     "Turn left.", "Steps", "Exit", "Overview"),
+ *   - the control column leaves the viewport entirely.
+ *
+ * The instruction — the only thing on that screen — is unreadable, and nothing
+ * scrolls, because `html`/`body` are `overflow: hidden`, `.app` is
+ * `position: fixed`, and every part of the navigation screen is `position:
+ * absolute` against `inset: 0`.
+ *
+ * ## Why there is no rule here
+ *
+ * Because the first attempt made it worse, and shipping a layout change that has
+ * been measured to degrade is worse than shipping nothing. Written and then
+ * measured:
+ *
+ *   - `[data-textsize="large"] .banner-stack { bottom: …; overflow-y: auto }`
+ *     works — measured `overflow-y: auto`, bounded, no collision with the bar.
+ *   - `[data-textsize="large"] .nav-controls { flex-direction: row }` does not.
+ *     The base rule's `flex-wrap: wrap` and its `max-height` win somewhere, the
+ *     column stays 168px wide and grows *upward* out of the viewport instead of
+ *     becoming a row, and every position the probe reports for it is worse than
+ *     before the change: y=-296 in a 412px viewport, 604px tall.
+ *
+ * So the banner-stack half is worth keeping and the control-column half needs
+ * solving properly, which means understanding why a later rule wins — not
+ * guessing at more properties.
+ *
+ * `src/textscale.ts` and the `data-textsize` attribute *are* shipped, because
+ * that part is correct and independently useful: it measures the platform's font
+ * scale and marks the document, rather than the app silently ignoring a setting
+ * whose entire audience is the one AAOS's 24dp minimum type size exists for.
+ * Only the layout that responds to it is outstanding.
+ */
