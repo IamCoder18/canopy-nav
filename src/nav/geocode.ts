@@ -64,6 +64,48 @@ function headers(): HeadersInit {
   };
 }
 
+/**
+ * How long a geocoder request may take.
+ *
+ * `fetch` has no deadline of its own — it waits indefinitely unless the socket
+ * errors — and without one here a hanging geocoder left the search screen on
+ * "Searching…" indefinitely, with no cancel and no way to tell a slow server from
+ * a dead one. Measured: still spinning at 30 s.
+ *
+ * 12 s is comfortably longer than a real request (the live endpoint answers in
+ * roughly 0.6 s) and short enough that the app reports failure while the user
+ * still cares. The same reasoning, and the same 20 s figure on a different
+ * budget, as `VALHALLA_TIMEOUT_MS` in `valhalla.ts`.
+ */
+export const GEOCODE_TIMEOUT_MS = 12_000;
+
+/**
+ * A `fetch` that gives up.
+ *
+ * On timeout it throws a message that says so, rather than the generic
+ * "connection failed" — the two need different responses from the user: one is
+ * worth retrying, the other usually is not.
+ */
+async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    GEOCODE_TIMEOUT_MS,
+  );
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (e) {
+    if (controller.signal.aborted) {
+      throw new Error(
+        `The search service did not answer within ${Math.round(GEOCODE_TIMEOUT_MS / 1000)} seconds.`,
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 interface NominatimPlace {
   place_id: number;
   osm_type: 'node' | 'way' | 'relation';
@@ -146,7 +188,7 @@ export function searchPlaces(
   }
 
   return throttle(async () => {
-    const res = await fetch(`${endpoint}/search?${params}`, { headers: headers() });
+    const res = await fetchWithTimeout(`${endpoint}/search?${params}`, { headers: headers() });
     if (!res.ok) throw new Error(`Nominatim search failed (HTTP ${res.status})`);
     const json = (await res.json()) as NominatimPlace[];
     return json.map(toPlace);
@@ -169,7 +211,7 @@ export function reverseGeocode(
   });
 
   return throttle(async () => {
-    const res = await fetch(`${endpoint}/reverse?${params}`, { headers: headers() });
+    const res = await fetchWithTimeout(`${endpoint}/reverse?${params}`, { headers: headers() });
     if (res.status === 404) return [];
     if (!res.ok) throw new Error(`Nominatim reverse failed (HTTP ${res.status})`);
     return [toPlace((await res.json()) as NominatimPlace)];

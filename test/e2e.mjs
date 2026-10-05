@@ -54,9 +54,69 @@ const page = await context.newPage();
 const pageErrors = [];
 page.on('pageerror', (e) => pageErrors.push(e.message));
 
+/**
+ * Successful tile responses.
+ *
+ * The only in-suite signal that the map actually drew something rather than
+ * merely existing at the right size — an element can have correct geometry and
+ * still be painting an empty canvas.
+ */
+const tileRequests = [];
+page.on('response', (r) => {
+  if (/tiles\.openfreemap|\/tiles\/|\.pbf$/.test(r.url()) && r.ok()) tileRequests.push(r.url());
+});
+
 try {
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await page.waitForTimeout(2500);
+
+  /* ---------------- the map actually draws ---------------- */
+  // This block exists because of a real regression. Splitting the bundle put
+  // MapLibre's stylesheet in a lazily-loaded chunk, so it arrived after the
+  // entry CSS; `.maplibregl-map { position: relative }` and
+  // `.map { position: absolute; inset: 0 }` tie on specificity, so stylesheet
+  // order decided the winner and the map's won. The container collapsed to 0px,
+  // the canvas fell back to 412x300, and **the map rendered nothing**.
+  //
+  // The rest of this suite passed throughout. It asserts overflow and text
+  // visibility, neither of which notices an empty div — which is the whole point:
+  // a gate that cannot see the primary feature failing is not a gate.
+  //
+  // Two independent signals, because either alone has a way of being fooled: the
+  // element geometry, and whether the tile CDN was actually asked for anything.
+  console.log('\nmap');
+  const mapState = await page.evaluate(() => {
+    const host = document.querySelector('.map-host');
+    const map = document.querySelector('.map');
+    const canvas = document.querySelector('.maplibregl-canvas');
+    const box = (e) => {
+      if (!e) return null;
+      const r = e.getBoundingClientRect();
+      return { w: Math.round(r.width), h: Math.round(r.height) };
+    };
+    return {
+      host: box(host),
+      map: box(map),
+      canvas: box(canvas),
+      backing: canvas ? { w: canvas.width, h: canvas.height } : null,
+      vw: window.innerWidth,
+      vh: window.innerHeight,
+    };
+  });
+  const tiles = tileRequests.length;
+  check('map container fills the viewport',
+    mapState.map !== null && mapState.map.w >= mapState.vw - 1 && mapState.map.h >= mapState.vh - 1,
+    JSON.stringify(mapState.map));
+  check('map canvas is full size, not the 412x300 default',
+    mapState.backing !== null && mapState.backing.w >= mapState.vw && mapState.backing.h >= mapState.vh,
+    JSON.stringify(mapState.backing));
+  check('map tiles were fetched and drawn', tiles > 0, `${tiles} tile responses`);
+  check('map attribution is displayed (ODbL requires it)',
+    await page.evaluate(() => {
+      const a = document.querySelector('.maplibregl-ctrl-attrib');
+      return !!a && /OpenStreetMap/i.test(a.textContent ?? '') && a.getBoundingClientRect().width > 0;
+    }));
+
 
   /* ---------------- import an .osm file ---------------- */
   console.log('\nimport');

@@ -1507,8 +1507,8 @@ anything is interactive.
 
 ### 10.5 Still open, from the audits
 
-These were found and are **not** fixed. They are listed here rather than dropped,
-because a finding nobody records is a finding nobody fixes.
+These were found and are **not** fixed, except where marked. They are listed here
+rather than dropped, because a finding nobody records is a finding nobody fixes.
 
 1. **Inferred turn-by-turn is unreliable, and now says so.** Comparing an offline
    route against Valhalla over one 4 km stretch found three of seven real
@@ -1519,8 +1519,11 @@ because a finding nobody records is a finding nobody fixes.
 2. **The ETA can read `0 m` while route remains**, and flips between `0 m` and
    `670 m` on a 36 m move. The snapping logic needs a monotonicity property
    asserted in a unit test; written up, not yet implemented.
-3. **`geocode.ts` has no timeout.** A hanging geocoder leaves "Searching…" on
-   screen indefinitely. The Valhalla client has one (§4); this does not.
+3. ~~**`geocode.ts` has no timeout.**~~ **Closed.** Both HTTP clients now have
+   one — 20 s for routing, 12 s for geocoding — composed with any caller-side
+   abort so the two remain distinguishable. Verified against a host that accepts
+   the connection and never answers: the screen stops saying "Searching…",
+   reports the failure, and keeps the offline results.
 4. **Cross-region routing is still wrong** — the original gap 1, unchanged.
 5. **A tile-host failure can substitute the style silently**, and MapLibre logs
    exceptions for the offline style's own validation. Harmless to the user, noisy

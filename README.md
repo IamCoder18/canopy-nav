@@ -180,7 +180,7 @@ builds a debug APK and attaches it to a GitHub Release — see
 [STATUS.md](./STATUS.md) is the design record: what is verified, how, and what
 is not.
 
-Four things worth knowing before relying on this:
+Three things worth knowing before relying on this:
 
 - **Cross-region routing is wrong** (§7 gap 1). Single-region routing is
   unaffected and is the common case.
@@ -189,8 +189,6 @@ Four things worth knowing before relying on this:
   Measured against Valhalla it missed three of seven real maneuvers on one 4 km
   stretch. The app labels inferred guidance as inferred; choose a Valhalla engine
   for real turn-by-turn.
-- **`geocode.ts` has no request timeout.** A hanging online geocoder can leave
-  "Searching…" on screen indefinitely (§10.5).
 - **It has never run on physical hardware.** Everything is browser-verified plus
   one Android 14 emulator. WebView behaviour, real GPS quality and on-phone
   memory pressure are unproven.
