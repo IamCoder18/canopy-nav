@@ -2168,9 +2168,20 @@ people to delete the explanation.
    A change measured to make things worse is worse than no change, and shipping
    it because a deadline was close is the exact failure §3.19 records.
 
+   The banner stack's lower bound **does** ship. `tools/reflow.mjs` reports
+   `{"overflowY":"auto","bottom":"96px"}` and the banner stack no longer
+   intersects the bottom bar — the one collision that was measured, fixed and
+   re-measured. The control-column override is still absent, because it made that
+   column worse: as a wrapping row inside its own 168px width it grew *upward* out
+   of the viewport, `y=-296` in a 412px viewport.
+
    `tools/reflow.mjs` is **not** in `npm run check`: it fails, and a gate that
    always fails is a gate people learn to ignore. It is a diagnostic, and
    `styles.css` records what it reports.
+
+   Two things the probe still reports as failing, honestly: the control column,
+   and seven clipped chrome labels. The labels are clipped because the tokens are
+   absolute `px` — which is the *other* cause above, and fixing it means `rem`.
 
 2. ~~Confirming a region removal loses focus~~ — **closed.** The Remove button
    stays mounted and hidden, focus moves to Confirm, cancelling returns focus to
