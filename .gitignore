@@ -33,8 +33,16 @@ coverage/
 *.osm.pbf
 *.osm
 !test/fixture.osm
+# ...and its PBF twin. These two are tiny hand-made fixtures, not map data, and
+# tests/pbf.spec.ts asserts the XML and PBF readers agree on this exact file --
+# which cannot work if CI has no PBF to read. Regenerate after changing the
+# nanodegree encoding: `node tools/osm2pbf.mjs test/fixture.osm test/fixture.osm.pbf`
+!test/fixture.osm.pbf
 .env
 .env.local
 *.p12
 e2e-screenshots/
+# Any other .pbf under test/ stays ignored (regenerated downloads, scratch
+# files). Must come after the negation above, hence the second one.
 test/*.pbf
+!test/fixture.osm.pbf
