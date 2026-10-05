@@ -962,6 +962,16 @@ code {
 }
 .primary-btn { background: #60A8F0; color: #00204A; }
 .secondary-btn { background: rgba(255, 255, 255, 0.12); color: #F1F3F4; }
+/* Pressed state on the primary CTAs. None existed — the most important taps on the
+   screen gave no visual confirmation, which on a touchscreen (no hover, no
+   cursor) is the difference between "did that register?" and a gesture one
+   hasn't to repeat. The existing active pattern elsewhere in the app is a white
+   veil at 0.18; here, on the filled primary, a darker ink-blue is the more
+   faithful "pushed down", and a scale matches the tile. */
+.primary-btn:active { background: #4A90E2; transform: scale(0.98); }
+.secondary-btn:active { background: rgba(255, 255, 255, 0.18); transform: scale(0.98); }
+.text-btn:active { background: rgba(96, 168, 240, 0.3); transform: scale(0.98); }
+.pill-btn:active { background: rgba(96, 168, 240, 0.36); }
 
 /* ------------------------- list screens (search etc) -------------------- */
 
