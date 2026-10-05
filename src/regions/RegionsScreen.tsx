@@ -12,10 +12,10 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  downloadRegion, checkRegionAvailable, clearCachedRegion,
-  formatBytes, DownloadError, type DownloadProgress,
+  downloadRegion, checkRegionAvailable,
+  formatBytes, DownloadError, type DownloadProgress, type Availability,
 } from './download';
-import { CATALOG, catalogByCountry, type CatalogEntry } from '../osm/regions';
+import { CATALOG, catalogByCountry, type CatalogEntry, type Region } from '../osm/regions';
 import type { RouteResult } from '../osm/engine.worker';
 import type { BuildProgress } from '../osm/engine';
 import type { LatLng } from '../geo';
@@ -23,6 +23,7 @@ import { formatDistance, formatDuration } from '../geo';
 import { ink, type as T, DP, ICON } from '../theme';
 import {
   IconBack, IconClose, IconFile, IconLayers, IconCompass, IconLocate, IconChevronRight,
+  IconTrash, IconWarning, IconCheck,
 } from '../icons';
 import {
   importRegionFile, localRegionId, localRegionName, regionLib, removeRegion, useRegions,
@@ -49,6 +50,12 @@ interface Pending {
 
 type Outcome =
   | { error: string }
+  /**
+   * A removal that worked. Not an error and not a warning, but worth saying:
+   * the driver freed a few hundred megabytes and the screen should acknowledge
+   * it, because the alternative — the row simply vanishing — reads as a bug.
+   */
+  | { removed: string }
   | {
     a: { label: string; pos: LatLng };
     b: { label: string; pos: LatLng };
@@ -129,6 +136,9 @@ export function RegionsScreen(props: RegionsScreenProps) {
         setError(null);
         props.onActivated();
       }
+      // Cleared here as well as in `onPicked`, because this path sets it too and
+      // a download that *fails* must not leave "100%" on screen either.
+      setProgress(null);
     } catch (e) {
       // Every failure path is surfaced with an actionable message; a download
       // that silently half-succeeded would be worse than one that reports.
@@ -142,24 +152,99 @@ export function RegionsScreen(props: RegionsScreenProps) {
   const setDlProgress = (entry: CatalogEntry) => (p: DownloadProgress) =>
     setDl({ entry, progress: p });
 
+  /* ------------------------------- removal ------------------------------- */
+
+  /**
+   * Remove a region and report what happened to its bytes.
+   *
+   * Both halves can fail independently and both used to be silent. The in-memory
+   * region goes immediately — that part always worked — while the stored extract
+   * was deleted with `.catch(() => {})`, so a refused IndexedDB write left a few
+   * hundred megabytes on the device, the byte counter already decremented, and
+   * no message anywhere. `deleteRegion` builds exactly the sentence that would
+   * have explained it and the catch threw it away.
+   *
+   * Now the two outcomes are reported separately, because they mean different
+   * things: a successful removal, or a removal whose file is still there.
+   */
+  const doRemove = async (r: Region) => {
+    setError(null);
+    setOutcome(null);
+    setConfirmRemove(null);
+    const problem = await removeRegion(r.id);
+    if (problem) {
+      setOutcome({ error: `${r.name} was removed from the app, but ${problem}` });
+      return;
+    }
+    setOutcome({ removed: r.name });
+  };
+
   const cancelDownload = () => {
     abortRef.current?.abort();
   };
 
+  /**
+   * A download that is still running must not outlive this screen.
+   *
+   * `RegionsScreen` is mounted only while the screen is `regions`, and the
+   * cancel button was the only thing that called `abort`. Leaving the screen
+   * mid-download therefore left a 380 MB – 1.4 GB transfer running with nothing
+   * consuming it: `onProgress` kept firing `setDl` on an unmounted component,
+   * every chunk kept accumulating in memory, and if it happened to finish, the
+   * import ran anyway and changed the module-level region library under a live
+   * `App`. On a metered automotive connection that is the difference between
+   * cancelling and not.
+   */
+  useEffect(() => () => abortRef.current?.abort(), []);
+
   /* --------------------------- availability probe ------------------------- */
 
-  // A single catalogue can hold a dozen dead URLs; probe them lazily so the
-  // screen can grey out what genuinely cannot be downloaded.
+  // A single catalogue can hold a dozen dead URLs; probe them so the screen can
+  // grey out what genuinely cannot be downloaded.
+  //
+  // The comment here used to say "lazily", and it was not: this was one
+  // `Promise.all` over the *entire* catalogue — every province and state — fired
+  // on every mount, with no `AbortController` and no deadline, while
+  // `startDownload` fifteen lines above correctly arms a 15 s timeout. So
+  // opening the screen issued dozens of parallel requests and then waited on the
+  // browser's own network stack, with no Download button enabled and no
+  // explanation of why for as long as that took. On a metered automotive
+  // connection that is not free.
+  //
+  // Now: four at a time, each with a 10 s deadline, the effect cancelled on
+  // unmount, and the rows show "Checking…" rather than nothing at all.
+  const [probing, setProbing] = useState(true);
   useEffect(() => {
     let cancelled = false;
+    const CONCURRENCY = 4;
+    const PROBE_TIMEOUT_MS = 10_000;
     void (async () => {
-      const ids = catalogByCountry().flatMap((g) => g.entries).map((e) => e.id);
-      const results = await Promise.all(
-        ids.map(async (id) => {
-          const entry = catalogByCountry()
-            .flatMap((g) => g.entries)
-            .find((e) => e.id === id);
-          return [id, await checkRegionAvailable(entry!)] as const;
+      const entries = catalogByCountry().flatMap((g) => g.entries);
+      const results: Array<readonly [string, Awaited<ReturnType<typeof checkRegionAvailable>>]> = [];
+      // A simple worker pool rather than a batched chunk: a slow probe holds one
+      // slot, not the whole batch behind it.
+      let next = 0;
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, entries.length) }, async () => {
+          while (!cancelled) {
+            const i = next++;
+            if (i >= entries.length) return;
+            const entry = entries[i];
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
+            try {
+              results.push([entry.id, await checkRegionAvailable(entry, { signal: ctrl.signal })]);
+            } catch {
+              // A probe that timed out is simply "not available", which is what
+              // the row will say — with the reason, from `unavailableReason`.
+              results.push([entry.id, {
+                ok: false, status: 0, bytes: null, resumable: false,
+                etag: null, modified: null, error: 'No response in 10 s',
+              } satisfies Availability]);
+            } finally {
+              clearTimeout(timer);
+            }
+          }
         }),
       );
       if (cancelled) return;
@@ -167,6 +252,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
       setUnavailableReason(Object.fromEntries(
         results.filter(([, r]) => !r.ok && r.error).map(([id, r]) => [id, r.error as string]),
       ));
+      setProbing(false);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -183,19 +269,44 @@ export function RegionsScreen(props: RegionsScreenProps) {
   const onPicked = useCallback(async (file: File | undefined) => {
     if (!file) return;
     const p = pending.current ?? { id: '', name: '', code: 'local' };
-    const ds = await importRegionFile({
-      id: p.id || localRegionId(file),
-      name: p.name || localRegionName(file),
-      code: p.code,
-      file,
-      onProgress: setProgress,
-      onError: setError,
-    });
-    if (ds) {
-      setError(null);
-      props.onActivated();
+    try {
+      const ds = await importRegionFile({
+        id: p.id || localRegionId(file),
+        name: p.name || localRegionName(file),
+        code: p.code,
+        file,
+        onProgress: setProgress,
+        onError: setError,
+        // Regions is the *primary* import surface — the catalogue lives here — so
+        // it must carry the same caveats `App`'s own picker does. A quota
+        // failure is the one case a driver can act on, and omitting these made it
+        // invisible exactly where they are most likely to hit it.
+        onWarn: (msg: string | null) => {
+          if (msg) setWarnings((w) => (w.includes(msg) ? w : [...w, msg]));
+        },
+        onPersistError: (msg: string | null) => {
+          if (msg) setWarnings((w) => (w.includes(msg) ? w : [...w, msg]));
+        },
+      });
+      if (ds) {
+        setError(null);
+        props.onActivated();
+      }
+    } finally {
+      // Clear the pinned card.
+      //
+      // This `progress` is `RegionsScreen`'s own state, not the one `App` owns,
+      // so `props.onActivated()` does not clear it. It therefore stayed pinned at
+      // "Parse complete — 100%" for the rest of the screen's life, on top of the
+      // region list, telling the driver something was still running when nothing
+      // was. Cleared in `finally` so the failure path gets it too.
+      setProgress(null);
     }
-  }, [props]);
+    // Depends on `props`, which is a fresh object on every `App` render — and App
+    // re-renders at 1 Hz while navigating. So this `useCallback` had a new
+    // identity every render and memoised nothing, while costing a closure
+    // allocation each time. `props.onActivated` is the only prop actually used.
+  }, [props.onActivated]);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -245,7 +356,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
     <div className="search-root">
       <div className="top-app-bar">
         <button className="icon-btn" onClick={props.onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
-        <div style={{ ...T.body1m, marginLeft: DP.P2 }}>Regions</div>
+        <h1 className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Regions</h1>
         <div className="spacer" />
         {/* Green only once something is actually loaded. */}
         <span className={`chip ${regions.length ? 'ok' : ''}`}>
@@ -293,22 +404,48 @@ export function RegionsScreen(props: RegionsScreenProps) {
                 </button>
                 {removing ? (
                   <>
-                    <button className="pill-btn danger" onClick={() => {
-                      removeRegion(r.id);
-                      // Also drop the cached extract; otherwise the device keeps
-                      // a few hundred MB per province forever.
-                      void clearCachedRegion(r.id).catch(() => {});
-                      setConfirmRemove(null);
-                      setOutcome(null);
-                    }}>
+                    {/*
+                      The confirming state says what is about to happen and to
+                      what. A row that swaps "Remove" for "Confirm" alone is a
+                      dialog with no dialog: a screen reader announces "Confirm,
+                      button", the region name is absent, and with several
+                      regions on screen the destructive action is unbounded.
+                      This is the point at which a driver should be told they are
+                      about to free a few hundred megabytes.
+                    */}
+                    <span className="remove-confirm" role="alertdialog" aria-label={`Confirm removing ${r.name}`}>
+                      <span className="remove-question">
+                        <IconWarning size={ICON.secondary} />
+                        <span>Remove {r.name}?</span>
+                      </span>
+                      <span className="remove-detail">
+                        Frees {formatBytes(r.bytes)} of downloads
+                      </span>
+                    </span>
+                    <button
+                      className="pill-btn danger"
+                      aria-label={`Confirm removing ${r.name}, freeing ${formatBytes(r.bytes)}`}
+                      onClick={() => void doRemove(r)}
+                    >
                       Confirm
                     </button>
-                    <button className="pill-btn ghost" onClick={() => setConfirmRemove(null)} aria-label="Cancel remove">
+                    <button
+                      className="pill-btn ghost"
+                      onClick={() => setConfirmRemove(null)}
+                      aria-label={`Cancel removing ${r.name}`}
+                    >
                       <IconClose size={ICON.secondary} />
                     </button>
                   </>
                 ) : (
-                  <button className="pill-btn danger" onClick={() => setConfirmRemove(r.id)}>Remove</button>
+                  <button
+                    className="pill-btn danger"
+                    aria-label={`Remove ${r.name}, ${formatBytes(r.bytes)}`}
+                    onClick={() => setConfirmRemove(r.id)}
+                  >
+                    <IconTrash size={ICON.secondary} />
+                    Remove
+                  </button>
                 )}
               </span>
             </div>
@@ -355,11 +492,39 @@ export function RegionsScreen(props: RegionsScreenProps) {
           </div>
         </div>
 
-        {outcome && 'error' in outcome && <div className="error-card">{outcome.error}</div>}
+        {/*
+          Both messages are announced. The error card here was a plain `<div>`
+          with no `role`, so a failed cross-region preview — after a synchronous
+          A* over a merged graph — was silent for anyone using assistive
+          technology, while the *same* failure on the Import screen was announced.
+          Two implementations of one message with two different accessibility
+          stories.
+        */}
+        {outcome && 'error' in outcome && <div className="error-card" role="alert">{outcome.error}</div>}
 
-        {outcome && !('error' in outcome) && (
-          <div className="progress-card">
-            <div style={T.body3m}>{outcome.a.label} → {outcome.b.label}</div>
+        {outcome && 'removed' in outcome && (
+          <div className="result-panel ok" role="status">
+            <IconCheck size={ICON.secondary} />
+            <span>{outcome.removed} removed and its downloads freed.</span>
+          </div>
+        )}
+
+        {outcome && !('error' in outcome) && !('removed' in outcome) && (
+          /*
+            An in-flow panel, not `.progress-card`.
+            `.progress-card` is `position: fixed` — correct for transient progress
+            that must float over a scrolling list, wrong for a *result*. This used
+            to be one of them, so after computing a cross-region route the
+            distance, the "Merged across 2 regions" line and the **Send to
+            navigation** button were pinned to the bottom of the viewport and
+            followed the driver around the catalogue. The `marginTop` passed here
+            did nothing at all, because margins do not apply to a fixed box.
+          */
+          <div className="result-panel" role="status">
+            <div className="result-panel-head">
+              <IconCompass size={ICON.secondary} />
+              <span style={T.body3m}>{outcome.a.label} → {outcome.b.label}</span>
+            </div>
             <div style={{ ...T.body3, color: ink.secondary, margin: `${DP.P1}px 0 ${DP.P2}px` }}>
               {formatDistance(outcome.result.metres, props.units)} · {formatDuration(outcome.result.time)}
             </div>
@@ -438,7 +603,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
                       : null}
                     <button
                       className="pill-btn"
-                      disabled={dl?.entry.id === e.id || availability[e.id] === false}
+                      disabled={dl?.entry.id === e.id || availability[e.id] === false || probing}
                       title={availability[e.id] === false
                         ? (unavailableReason[e.id] ?? 'This download URL could not be reached')
                         : `Download ${e.name} (${formatBytes(e.approxMb * 1024 * 1024)})`}
@@ -450,7 +615,8 @@ export function RegionsScreen(props: RegionsScreenProps) {
                       aria-label={
                         dl?.entry.id === e.id ? 'Downloading' : availability[e.id] === false
                           ? `Unavailable — ${unavailableReason[e.id] ?? 'This download URL could not be reached'}`
-                          : have ? `Replace the ${e.name} map` : `Download the ${e.name} map`
+                          : probing ? `Checking whether the ${e.name} download is reachable`
+                            : have ? `Replace the ${e.name} map` : `Download the ${e.name} map`
                       }
                       onClick={() => void startDownload(e)}
                     >
@@ -458,7 +624,11 @@ export function RegionsScreen(props: RegionsScreenProps) {
                         ? 'Downloading…'
                         : availability[e.id] === false
                           ? 'Unavailable'
-                          : have ? 'Replace' : 'Download'}
+                          : /* A row whose reachability is not yet known says so.
+                               The alternative — a live Download button that may
+                               turn out to be pointing at a dead URL — is a
+                               button that lies for the length of the probe. */
+                          probing ? 'Checking…' : have ? 'Replace' : 'Download'}
                     </button>
                   </span>
                 </div>

@@ -32,6 +32,7 @@ export const SETTINGS_KEYS = {
   units: `${PREFIX}units`,
   apiKey: `${PREFIX}apiKey`,
   endpoint: `${PREFIX}endpoint`,
+  places: `${PREFIX}places`,
 } as const;
 
 /** The fallback policy is part of the engine selection object. */
@@ -82,8 +83,107 @@ export function defaultStore(): Store | null {
   }
 }
 
+/**
+ * `getItem`, guarded.
+ *
+ * `defaultStore()` probes with a write and a delete, which catches the cases it
+ * is aimed at — no `localStorage`, or an object that throws on write. It does
+ * **not** catch a store whose `getItem` throws: some enterprise WebViews and
+ * ITM-managed profiles deny reads by policy while permitting the object to
+ * exist.
+ *
+ * That distinction mattered: every reader below called `store.getItem(...)`
+ * bare, from inside a `useState` initialiser. A throwing `getItem` therefore
+ * threw *during the first render*, and the app opened on the crash card with
+ * `readUnits` as the message and no settings screen to fix it from. The module's
+ * own header claimed "the read of `window.localStorage` is guarded too — not
+ * just the writes", which was true of the probe and false of the reads.
+ */
+function safeGet(store: Store | null, key: string): string | null {
+  try {
+    return store?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Saved Home and Work, as coordinates.
+ *
+ * ## Why these exist
+ *
+ * The launcher had `Home` and `Work` tiles wired to `[-0.1276, 51.5072]` and
+ * `[-0.142, 51.5]` — two points in the English Channel — and a tile labelled
+ * "Home" reads as *your* home. Tapping one asked the routing engine for a trip
+ * to a fixed point in the ocean, and on an offline extract it answered
+ * "No route found in the offline map for this pair", which is a confusing way to
+ * say "this button does not do what its label says".
+ *
+ * There is no correct hard-coded value: it depends on where the driver is. So
+ * they are unset until someone sets them, and a tile with no destination says so
+ * rather than pretending.
+ */
+export interface SavedPlace {
+  /** `[lon, lat]`, validated finite and in range on the way in *and* out. */
+  pos: [number, number];
+  label: string;
+}
+
+const isFiniteLonLat = (v: unknown): v is [number, number] =>
+  Array.isArray(v) &&
+  v.length === 2 &&
+  typeof v[0] === 'number' && typeof v[1] === 'number' &&
+  Number.isFinite(v[0]) && Number.isFinite(v[1]) &&
+  Math.abs(v[0]) <= 180 && Math.abs(v[1]) <= 90;
+
+/** The two slots the launcher offers. */
+export type PlaceSlot = 'home' | 'work';
+
+export function readPlaces(store: Store | null = defaultStore()): Partial<Record<PlaceSlot, SavedPlace>> {
+  const raw = safeGet(store, SETTINGS_KEYS.places);
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out: Partial<Record<PlaceSlot, SavedPlace>> = {};
+    for (const slot of ['home', 'work'] as const) {
+      const entry = (parsed as Record<string, unknown>)[slot];
+      // Validated on read as well as on write: this is untrusted durable state,
+      // and `persisted.ts` makes the same argument about region records.
+      if (entry && typeof entry === 'object' && isFiniteLonLat((entry as SavedPlace).pos)) {
+        const label = String((entry as SavedPlace).label ?? '').slice(0, 80).trim();
+        out[slot] = { pos: (entry as SavedPlace).pos, label: label || slot[0].toUpperCase() + slot.slice(1) };
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function writePlace(
+  slot: PlaceSlot,
+  value: SavedPlace | null,
+  store: Store | null = defaultStore(),
+): string | null {
+  const current = readPlaces(store);
+  if (!value) delete current[slot];
+  else if (isFiniteLonLat(value.pos)) {
+    current[slot] = { pos: value.pos, label: value.label.slice(0, 80).trim() || slot };
+  } else {
+    // Refuse to store a coordinate that is not a coordinate, rather than
+    // writing something that reads back as a place on the ocean.
+    return 'That is not a valid location.';
+  }
+  if (!Object.keys(current).length) {
+    clear(SETTINGS_KEYS.places, store);
+    return null;
+  }
+  return persist(store, SETTINGS_KEYS.places, JSON.stringify(current));
+}
+
 export function readUnits(store: Store | null = defaultStore()): 'metric' | 'imperial' {
-  const raw = store?.getItem(SETTINGS_KEYS.units);
+  const raw = safeGet(store, SETTINGS_KEYS.units);
   return raw === 'imperial' ? 'imperial' : 'metric';
 }
 
@@ -107,7 +207,7 @@ export function readSelection(
   allowed: readonly string[] = DEFAULT_ENGINE_IDS,
   store: Store | null = defaultStore(),
 ): StoredSelection {
-  const raw = store?.getItem(SETTINGS_KEYS.selection);
+  const raw = safeGet(store, SETTINGS_KEYS.selection);
   if (!raw) return { ...DEFAULT_SELECTION };
   let parsed: unknown;
   try {
@@ -132,7 +232,7 @@ export function writeSelection(
 export function readApiKey(store: Store | null = defaultStore()): string {
   // Trimmed on read as well as write: a pasted key usually carries a newline,
   // and a trailing \n in a header value is a request that fails mysteriously.
-  return (store?.getItem(SETTINGS_KEYS.apiKey) ?? '').trim();
+  return (safeGet(store, SETTINGS_KEYS.apiKey) ?? '').trim();
 }
 
 export function writeApiKey(value: string, store: Store | null = defaultStore()): string | null {
@@ -145,7 +245,7 @@ export function writeApiKey(value: string, store: Store | null = defaultStore())
 }
 
 export function readEndpoint(store: Store | null = defaultStore()): string {
-  return (store?.getItem(SETTINGS_KEYS.endpoint) ?? '').trim();
+  return (safeGet(store, SETTINGS_KEYS.endpoint) ?? '').trim();
 }
 
 export function writeEndpoint(value: string, store: Store | null = defaultStore()): string | null {

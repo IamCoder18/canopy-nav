@@ -33,6 +33,7 @@ import { useLocation, type LocationMode } from './nav/location';
 import {
   readSelection, writeSelection, readUnits, writeUnits,
   readApiKey, writeApiKey, readEndpoint, writeEndpoint, validateEndpoint,
+  readPlaces, writePlace, type PlaceSlot, type SavedPlace,
 } from './settings';
 import { isVoiceAvailable, speak, cancelSpeech, voiceKey } from './nav/voice';
 import {
@@ -44,6 +45,7 @@ import {
   ManeuverIcon, IconSearch, IconBack, IconClose, IconMute, IconSound, IconOverview,
   IconLayers, IconTraffic, IconSettings, IconHome, IconGoto, IconChevronRight,
   IconFile, IconLocate, IconCar, IconRefresh,
+  IconInfo, IconPin,
 } from './icons';
 
 const ENGINE_IDS: readonly string[] = [...PROVIDERS.map((p) => p.id as string), 'any-online'];
@@ -301,6 +303,31 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   const [units, setUnits] = useState<'metric' | 'imperial'>(() => readUnits());
 
   /**
+   * The driver's own Home and Work.
+   *
+   * Read through `readPlaces`, which validates: this is durable untrusted state,
+   * and a coordinate that is not a coordinate reads back as a destination in the
+   * ocean. See the note on `SavedPlace`.
+   */
+  const [places, setPlaces] = useState<Partial<Record<PlaceSlot, SavedPlace>>>(() => readPlaces());
+
+  /**
+   * Which slot the next picked destination should be saved to, or `null`.
+   *
+   * Set by tapping an unset launcher tile; consumed by the preview screen, whose
+   * "Set as Home"/"Set as Work" button then writes here and clears it. Kept as
+   * state rather than a ref because it has to survive the screen change.
+   */
+  const [placePending, setPlacePending] = useState<PlaceSlot | null>(null);
+
+  const savePlace = useCallback((slot: PlaceSlot, value: SavedPlace) => {
+    const problem = writePlace(slot, value);
+    if (problem) { setSettingsNotice(problem); return; }
+    setPlaces(readPlaces());
+    setPlacePending(null);
+  }, []);
+
+  /**
    * Surfaced only when storage actually refused something.
    *
    * Cleared on the next successful write, so a private-window warning does not
@@ -347,6 +374,11 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
    */
   const layersOpenRef = useRef(false);
   useEffect(() => { layersOpenRef.current = layersOpen; }, [layersOpen]);
+  // Same reason: the key handler is registered once, so it needs the current
+  // screen to know whether a bare letter is a shortcut into search or a
+  // keystroke for whatever is already focused there.
+  const screenRef = useRef<Screen>('home');
+  useEffect(() => { screenRef.current = screen; }, [screen]);
   const [traffic, setTraffic] = useState<TrafficVerdict>(NO_TRAFFIC);
   // The pair a traffic query re-asks about: a route's ends, captured when the
   // route was computed, since the driver has moved since then.
@@ -568,15 +600,26 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         return;
       }
 
-      // Mute, before the alnum branch that used to swallow it. Works while
-      // typing too: muting is a thing a driver does mid-search.
+      // Typing guard first, and it is load-bearing rather than defensive.
+      //
+      // This branch used to sit *above* the guard with a comment defending it
+      // ("works while typing too: muting is a thing a driver does mid-search").
+      // It `preventDefault()`s unconditionally, so every `m` was swallowed
+      // before it reached the field: the search box, the Simplerouting API
+      // key and the custom Valhalla endpoint all silently refused the letter.
+      // "Museum", "Memorial Dr" and `valhalla.mylab.net` are all untypable.
+      // A driver cannot search for a place with an `m` in the name, which is a
+      // total failure of the app's one primary input, introduced by a comment
+      // arguing for the behaviour.
+      if (typing) return;
+
+      // Mute. Bare `m` is only safe once nothing is focused on a text field;
+      // above that point the guard above has already returned.
       if (e.key === 'm' || e.key === 'M') {
         e.preventDefault();
         setMuted((m) => !m);
         return;
       }
-
-      if (typing) return;
 
       if (e.key === '/') {
         // preventDefault stops Chrome's own quick-find from also consuming it,
@@ -588,6 +631,11 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
           document.querySelector<HTMLInputElement>('.inline-search input')?.focus();
         });
       } else if (e.key.length === 1 && /^[a-z0-9]$/i.test(e.key)) {
+        // Only seed a query when this is a shortcut *into* search. On the
+        // search screen itself a bare letter belongs to whatever is focused:
+        // typing "coffee" then tapping a result row (which moves focus off the
+        // field) and pressing `s` used to replace the whole query with `s`.
+        if (screenRef.current === 'search') return;
         e.preventDefault();
         setScreen('search');
         setPendingInitialQuery(e.key);
@@ -1110,8 +1158,46 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
  *
  * A reroute notice outranks a stale degradation note: if the driver has just
  * gone off-route, why the last request mentioned a missing API key is history.
+ *
+ * `degraded` used to be folded into this same string as `routeError`, so a
+ * *successful* fallback route rendered an engine warning inside the red error
+ * card — on the preview screen, directly above the Start button, which is the
+ * worst possible place to imply a trip is not viable when it very much is. A
+ * fallback is the *expected* path here: the offline engine is the default and
+ * Valhalla is the fallback, so this fired on most routes. It is now its own
+ * value and takes its own tone at each consumer.
  */
-const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
+const banner = rerouteNotice ?? routeError ?? null;
+
+  /**
+   * Where each turn happens, as map points.
+   *
+   * Memoised on the route, and filtered to finite, in-range coordinates.
+   *
+   * Two defects in one expression that used to be inline in the JSX:
+   *
+   *   - it was a fresh array on every render, and `MapView`'s overlay effect
+   *     lists it as a dependency, so App's 1 Hz re-render re-ran `applyOverlays`
+   *     every second — which, with a dataset loaded, meant re-serialising the
+   *     entire provincial road network to GeoJSON once a second.
+   *   - `route.geometry[Math.min(m.begin_shape_index, geometry.length - 1)]` is
+   *     `undefined` when `begin_shape_index` is absent or non-numeric (NaN), or
+   *     when the geometry is empty (`-1`), and an undefined coordinate became
+   *     `{ type: 'Point', coordinates: undefined }` handed to `setData`. A
+   *     malformed response from an engine produced an invalid FeatureCollection
+   *     on every render instead of no markers.
+   */
+  const maneuverPoints = useMemo<LatLng[]>(() => {
+    if (route?.engine !== 'valhalla' || route.geometry.length === 0) return [];
+    const out: LatLng[] = [];
+    for (const m of route.maneuvers) {
+      const i = m.begin_shape_index;
+      if (!Number.isFinite(i)) continue;
+      const pt = route.geometry[Math.min(Math.max(0, i), route.geometry.length - 1)];
+      if (pt && Number.isFinite(pt[0]) && Number.isFinite(pt[1])) out.push(pt);
+    }
+    return out;
+  }, [route]);
 
   return (
     /*
@@ -1122,7 +1208,7 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
       screens. `aria-label` on the main region names the current screen, which
       makes "jump to main" tell you where you are as well as getting you there.
     */
-    <div className="app" role="region" aria-label={`Canopy Nav — ${SCREEN_NAMES[screen]}`}>
+    <main className="app" aria-label={`Canopy Nav — ${SCREEN_NAMES[screen]}`}>
       <Suspense fallback={null}>
       <MapView
         dataset={dataset}
@@ -1133,11 +1219,7 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
         origin={origin ?? location}
         destination={destination?.pos ?? null}
         location={location}
-        maneuverPoints={
-          route?.engine === 'valhalla'
-            ? route.maneuvers.map((m) => route.geometry[Math.min(m.begin_shape_index, route.geometry.length - 1)])
-            : []
-        }
+        maneuverPoints={maneuverPoints}
         focus={focus}
         fitNonce={fitNonce}
       />
@@ -1189,6 +1271,13 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
           units={units}
           routing={routing}
           error={banner}
+          degraded={degraded[0] ?? null}
+          places={places}
+          onSetPlace={(slot) => {
+            if (!destination) return;
+            savePlace(slot, { pos: destination.pos, label: destination.label });
+            setImportWarn(`Saved "${destination.label}" as ${slot === 'home' ? 'Home' : 'Work'}.`);
+          }}
           onGo={() => setScreen('navigating')}
           onBack={() => setScreen('home')}
           onProvider={() => setScreen('settings')}
@@ -1207,6 +1296,7 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
           progress={progress}
           error={importError}
           warn={importWarn}
+          degraded={degraded[0] ?? null}
           onDismissError={() => setImportError(null)}
           onDismissWarn={() => setImportWarn(null)}
           route={route}
@@ -1217,6 +1307,22 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
           onContinue={() => route && setScreen('navigating')}
           onSettings={() => setScreen('settings')}
           onRoute={(pos, label) => doRoute({ pos, label })}
+          places={places}
+          onPickPlace={(slot) => {
+            // Tapping an unset tile opens search with the slot named, so the
+            // driver knows what picking a result is *for*.
+            setPlacePending(slot);
+            setPendingInitialQuery('');
+            setScreen('search');
+            requestAnimationFrame(() => {
+              document.querySelector<HTMLInputElement>('.inline-search input')?.focus();
+            });
+          }}
+          onSetPlace={(slot) => {
+            if (!destination) return;
+            savePlace(slot, { pos: destination.pos, label: destination.label });
+            setImportWarn(`Saved "${destination.label}" as ${slot === 'home' ? 'Home' : 'Work'}.`);
+          }}
           onClear={() => { setRoute(null); setDestination(null); setOrigin(null); resetTraffic(null); }}
           destination={destination}
           units={units}
@@ -1231,8 +1337,20 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
           location={location}
           initialQuery={pendingInitialQuery}
           onInitialQueryConsumed={() => setPendingInitialQuery('')}
-          onPick={(pos, label) => { setScreen('home'); doRoute({ pos, label }); }}
-          onBack={() => setScreen('home')}
+          pickHint={placePending ? `Saved as ${placePending === 'home' ? 'Home' : 'Work'} once you pick a destination` : null}
+          onPick={(pos, label) => {
+            // Choosing a destination while a slot is pending saves it, so the
+            // unset tile becomes set in the one flow a driver already knows.
+            if (placePending) {
+              savePlace(placePending, { pos, label });
+              setImportWarn(`Saved "${label}" as ${placePending === 'home' ? 'Home' : 'Work'}.`);
+              setScreen('home');
+              return;
+            }
+            setScreen('home');
+            doRoute({ pos, label });
+          }}
+          onBack={() => { setPlacePending(null); setScreen('home'); }}
         />
       )}
 
@@ -1242,6 +1360,7 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
           onBack={() => setScreen('navigating')}
           inferred={!guidance && !!localGuidance}
           engineLabel={provenance ? describeProvenance(provenance.used, provenance.fellBack) : null}
+          destination={destination}
         />
       )}
 
@@ -1316,7 +1435,7 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
         />
         </Suspense>
       )}
-    </div>
+    </main>
   );
 }
 
@@ -1352,9 +1471,23 @@ interface HomeProps {
   locationMode: LocationMode;
   locationError: string | null;
   progress: BuildProgress | null;
+  /**
+   * Saved Home and Work, or `undefined` where the driver has not set one.
+   *
+   * These tiles used to point at two fixed coordinates in the English Channel.
+   * A tile labelled "Home" that navigates somewhere nobody lives is worse than
+   * no tile: it reads as a broken feature rather than as an unset one, and on an
+   * offline extract it produced a plausible-looking "No route found" for a trip
+   * to nowhere.
+   */
+  places: Partial<Record<PlaceSlot, SavedPlace>>;
+  onPickPlace: (slot: PlaceSlot) => void;
+  onSetPlace: (slot: PlaceSlot) => void;
   error: string | null;
   /** Non-fatal: the import succeeded, with a caveat worth reading. */
   warn?: string | null;
+  /** The last route came from a fallback engine, and this names which. */
+  degraded?: string | null;
   onDismissError?: () => void;
   onDismissWarn?: () => void;
   route: Route | null;
@@ -1411,8 +1544,34 @@ function HomeScreen(p: HomeProps) {
         <div className="brand">
           <IconCar size={40} />
           <div className="brand-text">
-            <div style={T.body3m}>Canopy Nav</div>
-            <div style={{ ...T.sub3, color: ink.secondary }}>
+            {/* The document had no heading on any screen, so a screen-reader user
+                navigating by heading found nothing to move between. This is the
+                launcher's `<h1>`; the other screens use their own app-bar title.
+                `aria-level` is not needed — a real `<h1>` is the point. */}
+            <h1 className="brand-title" style={T.body3m}>
+              {/*
+                "Canopy Nav" needs 151px at body3; at 412px the bar can spare
+                about 127 once the car glyph, the gaps, the status pill and the
+                76dp settings button have their share — so it ellipsised to
+                "Canopy …" and the pill to "Onl…". Two truncated labels on the
+                app's first screen, neither saying anything.
+
+                The wordmark's short form is the fix. Real brands have one, and it
+                costs nothing: a single `<h1>` whose tail is hidden at narrow
+                widths, so the accessible name is "Canopy" exactly when the
+                pixels say "Canopy". Two spans of the full name would have put it
+                in the accessibility tree twice.
+              */}
+              Canopy<span className="brand-tail"> Nav</span>
+            </h1>
+            {/*
+              The map summary, hidden below 600px. It is a duplicate of the first
+              card on this screen, and at 412px it and the status pill and the
+              settings button left the app's own name 92px — which rendered as
+              "Can…" above "No m…". See the narrow-screen block at the end of
+              `styles.css`.
+            */}
+            <div className="brand-summary" style={{ ...T.sub3, color: ink.secondary }}>
               {p.dataset
                 // Pluralised on the count, not assumed. It read "1 routable ways"
                 // for a single-way extract, which is the sort of small wrongness
@@ -1442,8 +1601,33 @@ function HomeScreen(p: HomeProps) {
 
         <div className="quick-grid">
           <QuickTile label="Search" icon={<IconSearch size={ICON.primary} />} onClick={p.onSearch} />
-          <QuickTile label="Home" icon={<IconHome size={ICON.primary} />} onClick={() => p.onRoute([-0.1276, 51.5072], 'Home')} />
-          <QuickTile label="Work" icon={<IconGoto size={ICON.primary} />} onClick={() => p.onRoute([-0.142, 51.5], 'Work')} />
+          {/*
+            Home and Work route to the driver's own saved destination, or ask
+            for one. Long-press is not discoverable and there is no room for a
+            second control on a 76dp tile, so the tile routes when it can and
+            *says* when it cannot: the hint is on the tile, the accessible name
+            repeats it, and the tap opens search with the slot named.
+          */}
+          <QuickTile
+            label={p.places.home?.label ?? 'Home'}
+            icon={<IconHome size={ICON.primary} />}
+            hint={p.places.home ? undefined : 'Not set'}
+            onClick={() => {
+              const home = p.places.home;
+              if (home) p.onRoute(home.pos, home.label);
+              else p.onPickPlace('home');
+            }}
+          />
+          <QuickTile
+            label={p.places.work?.label ?? 'Work'}
+            icon={<IconGoto size={ICON.primary} />}
+            hint={p.places.work ? undefined : 'Not set'}
+            onClick={() => {
+              const work = p.places.work;
+              if (work) p.onRoute(work.pos, work.label);
+              else p.onPickPlace('work');
+            }}
+          />
           <QuickTile label="Regions" icon={<IconLayers size={ICON.primary} />} onClick={p.onRegions} />
           {/* Label stays short: five tiles share the row at head-unit widths and
               "Import .osm" truncates. The hint card below names the format. */}
@@ -1501,6 +1685,45 @@ function HomeScreen(p: HomeProps) {
             message={p.warn}
             onDismiss={() => p.onDismissWarn?.()}
           />
+        )}
+        {/*
+          * The route came from a fallback engine. Not an error — a warning — and
+          * it says which engine answered rather than only that one did not,
+          * because "your route exists" and "your route came from somewhere else"
+          * are different facts and the driver may only care that it works.
+        */}
+        {p.degraded && !p.error && (
+          <ImportMessage
+            tone="warn"
+            message={p.degraded}
+            onDismiss={() => p.onDismissWarn?.()}
+          />
+        )}
+        {/*
+          * A location problem, in full.
+          *
+          * This was only ever reported by the app bar's status pill, which at
+          * 412px had ~140px to hold "Online" and "User denied Geolocation" at
+          * once — so it rendered as `O Use…`. Two half-words, neither of which
+          * says anything, and the one fact the driver needs ("your position is
+          * not real") was the part that got cut.
+          *
+          * A full-width card can hold the whole sentence, and it is dismissible,
+          * which the pill is not. Below 600px the pill drops this line entirely —
+          * see the narrow-screen block at the end of `styles.css` — so if the card
+          * did not exist the information would be gone rather than truncated.
+          */}
+        {p.locationError && (
+          <div className="hint-card warn location-card" role="status">
+            <IconInfo size={ICON.secondary} />
+            <div>
+              <div style={T.body3m}>Position unavailable</div>
+              <div style={{ ...T.sub3, marginTop: 2 }}>
+                {p.locationError}. Routing will start from the map's centre until
+                a real position arrives.
+              </div>
+            </div>
+          </div>
         )}
         {!p.dataset && !p.progress && (
           <div className="hint-card">
@@ -1584,11 +1807,48 @@ function StatusPill({
   );
 }
 
-function QuickTile({ label, icon, onClick }: { label: string; icon: React.ReactNode; onClick: () => void }) {
+/**
+ * A launcher tile.
+ *
+ * `hint` marks a tile that is present but not yet usable, and it changes the
+ * tile's *meaning* rather than just its appearance: the tile stops looking
+ * finished. A tile that is silently inert is read as broken, whereas one that
+ * admits it is unset is read as a thing to do — so the hint is drawn on the tile
+ * and repeated in the accessible name, which is the only thing a screen reader
+ * gets.
+ */
+function QuickTile({
+  label,
+  icon,
+  onClick,
+  hint,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+  hint?: string;
+}) {
   return (
-    <button className="quick-tile" onClick={onClick}>
+    <button
+      className={`quick-tile ${hint ? 'unset' : ''}`}
+      onClick={onClick}
+      aria-label={hint ? `${label} — ${hint}` : label}
+    >
       <span className="quick-icon">{icon}</span>
-      <span style={{ ...T.body3, textAlign: 'center' }}>{label}</span>
+      {/*
+        Label and hint in ONE element, not two siblings.
+        `.quick-tile > span:last-child` carries the AAOS single-line truncate —
+        `white-space: nowrap` plus `text-overflow: ellipsis` — so adding a hint
+        as a third child moved that rule onto the hint, and the *label* silently
+        lost its truncation while the hint inherited it. Worse, at two-up phone
+        width a row layout left 85px beside the icon and clipped "Search" to
+        "S…", "Regions" to "R…" and "Import" to "I…".
+        One text element, two lines, one set of rules.
+      */}
+      <span className="quick-label">
+        {label}
+        {hint && <span className="quick-hint">{hint}</span>}
+      </span>
     </button>
   );
 }
@@ -1627,6 +1887,7 @@ function ImportMessage({
       role={tone === 'error' ? 'alert' : 'status'}
       style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: DP.P2 }}
     >
+      {tone === 'warn' && <IconInfo size={ICON.secondary} />}
       <span style={{ flex: '1 1 auto', minWidth: 0 }}>{message}</span>
       <button
         type="button"
@@ -1687,6 +1948,17 @@ function NavOverlay(props: {
   const lg = props.localGuidance;
 
   /**
+   * The route's own length, in metres, computed once per route.
+   *
+   * This was `lineLength(route.geometry)` inline in the remaining-time
+   * expression, and `NavOverlay` re-renders on every GPS fix. `lineLength` sums
+   * `haversine` over every segment, so a provincial geometry meant tens of
+   * thousands of `sin`/`cos` pairs per second on the main thread, spent
+   * computing a *ratio* whose denominator only changes when the route does.
+   */
+  const totalLineM = useMemo(() => lineLength(route.geometry), [route]);
+
+  /**
  * The banner's next turn, whichever engine produced it.
  *
  * The offline engine emits no maneuvers, so for an `.osm` route this comes from
@@ -1709,13 +1981,44 @@ function NavOverlay(props: {
 
   const remainingM = g?.remainingM ?? lg?.remainingM ?? 0;
 
-  /** True once the driver has passed the last turn, i.e. is arriving. */
-  const arriving = !nextManeuver && !localTurn && remainingM > 0;
-  const remainingSec = remainingM > 0 ? (route.summary.time || 0) * (remainingM / Math.max(1, lineLength(route.geometry))) : 0;
+  /**
+   * True once the driver has arrived, or is close enough to say so.
+   *
+   * This used to be `!nextManeuver && !localTurn && remainingM > 0` — "there is
+   * no next maneuver". `next` is built as
+   * `legs.slice(i + 1).find(...) ?? active`, so the `?? active` makes it
+   * non-null *by construction* and the condition was never true for any
+   * Valhalla route. Two things silently never happened as a result:
+   *
+   *   - the spoken "You have arrived at your destination" (the destination
+   *     maneuver is type 4, which `isMajorManeuver` excludes), and
+   *   - the `role="status"` announcement added specifically to carry arrival.
+   *
+   * The live region existed, the code was written, and the log said arrival was
+   * announced. It was not, and no test would have said otherwise because the
+   * *shape* of the check was right and its *inputs* were unreachable.
+   *
+   * Arrival is a property of the trip's progress, not of a maneuver's absence,
+   * so it is derived from progress. The threshold is the same ~30 m Google Maps
+   * uses for the last instruction, and `ARRIVED_FRACTION` covers the case where
+   * the geometry has run out but the summary still claims kilometres.
+   */
+  const ARRIVAL_M = 30;
+  const ARRIVED_FRACTION = 0.995;
+  const arriving =
+    props.progressAlong >= ARRIVED_FRACTION || (nextManeuver?.type === 4 && distToTurn <= ARRIVAL_M);
+
+  const remainingSec = remainingM > 0 ? (route.summary.time || 0) * (remainingM / Math.max(1, totalLineM)) : 0;
 
   // Google Maps dims the instruction once you're within ~30 m.
   const imminent = distToTurn < 40;
-  const laneDist = imminent ? distToTurn : Math.min(distToTurn, 9999);
+  // The true distance. This was `Math.min(distToTurn, 9999)`, which pinned the
+  // number at "10 km" / "6 mi" and *said it out loud* — "In 10 km, turn right" —
+  // for every leg of a rural route longer than that. A capped distance is not a
+  // conservative distance; it is a different, wrong number presented as the
+  // real one, and this one is spoken to a driver mid-turn. `formatDistance`
+  // already switches to kilometres and miles, and both read correctly at 40 km.
+  const laneDist = distToTurn;
 
   // The traffic control's label carries its state *and* its reason: a driver
   // reaching for it must learn from the label alone what it will do.
@@ -1761,16 +2064,27 @@ function NavOverlay(props: {
    */
   useEffect(() => {
     if (muted || !voiceAvailable || !instructionText) return;
-    if (!major && !arriving) return;
+    // Every *change of instruction* is spoken, not only major maneuvers.
+    //
+    // This was `if (!major && !arriving) return;`, so a "slight right", a
+    // "continue" or a "take the ramp" was painted across the banner at 32dp and
+    // produced silence. A driver who cannot see the banner — or who has the
+    // volume down and is listening, which is the entire point of the feature —
+    // got no information at the exact moment the instruction changed.
+    //
+    // `voiceKey` buckets the distance, so the several position updates per
+    // second that would otherwise re-announce the same turn stay silent; only a
+    // genuine new step speaks. `imminent` steps interrupt (`assertive`) because
+    // the driver is about to act; everything else waits its turn.
     speak({
       text: arriving
         ? 'You have arrived at your destination.'
         : `In ${formatDistance(laneDist, units)}, ${instructionText}`,
       key: voiceKey(instructionText, laneDist, units),
-      priority: arriving ? 'polite' : 'assertive',
+      priority: arriving || imminent ? 'assertive' : 'polite',
     });
     return () => { /* keep speaking across re-render; cancel only on unmute */ };
-  }, [muted, voiceAvailable, instructionText, laneDist, units, major, arriving]);
+  }, [muted, voiceAvailable, instructionText, laneDist, units, arriving, imminent]);
 
   /* Stop talking the moment guidance is torn down or unmuted. */
   useEffect(() => {
@@ -1790,7 +2104,7 @@ function NavOverlay(props: {
    */
   const announcement = arriving
     ? 'You have arrived at your destination.'
-    : major && nextManeuver
+    : instructionText
       ? `In ${formatDistance(laneDist, units)}, ${instructionText.toLowerCase()}`
       : '';
 
@@ -1859,15 +2173,26 @@ function NavOverlay(props: {
 
       {/* Maneuver banner — the big card Google Maps shows before each turn */}
       <div className="maneuver-banner">
-        <div className={`maneuver-icon ${major ? 'major' : ''}`}>
-          <ManeuverIcon kind={icon} size={88} />
+        <div className={`maneuver-icon ${major || arriving ? 'major' : ''}`}>
+          <ManeuverIcon kind={arriving ? 'arrive' : icon} size={88} />
         </div>
         <div className="maneuver-text">
-          <div className="maneuver-dist" style={T.display3}>{formatDistance(laneDist, units)}</div>
-          {nextManeuver?.sign?.exit_number_elements?.length ? (
+          {/*
+            The distance block is hidden on arrival rather than shown as "0 m".
+            At the end of a route `distToTurn` is 0, so the largest text in the
+            app sat at `0 m` in display3 next to the arrival copy — a number that
+            is not a distance and answers nothing. The arrival state has its own
+            meaningful content; the distance block has nothing left to add.
+          */}
+          {!arriving && (
+            <div className="maneuver-dist" style={T.display3}>{formatDistance(laneDist, units)}</div>
+          )}
+          {!arriving && nextManeuver?.sign?.exit_number_elements?.length ? (
             <div className="shield">{nextManeuver.sign.exit_number_elements.map((e) => e.text).join('')}</div>
           ) : null}
-          <div className={`maneuver-instr ${imminent ? 'is-imminent' : ''}`} style={T.body1}>{instructionText}</div>
+          <div className={`maneuver-instr ${imminent && !arriving ? 'is-imminent' : ''}`} style={T.body1}>
+            {arriving ? 'You have arrived' : instructionText}
+          </div>
         </div>
       </div>
 
@@ -2001,7 +2326,7 @@ function NavPanel(props: {
   return (
     <div className="nav-panel" role="dialog" aria-label="Map layers">
       <div className="panel-head">
-        <span style={T.body3m}>Map layers</span>
+        <h2 className="panel-title" style={T.body3m}>Map layers</h2>
         {/* Re-asking is a header action, not a row: it keeps the panel short
             enough to clear the maneuver banner on a head unit. */}
         {props.canCheckTraffic && (
@@ -2051,29 +2376,86 @@ function PreviewCard(props: {
   units: 'metric' | 'imperial';
   routing: boolean;
   error: string | null;
+  /**
+   * The route worked, but something along the way did not — a preferred engine
+   * was unavailable and a fallback answered.
+   *
+   * This is *not* an error and must never be drawn as one. It used to be folded
+   * into the same `error` state as a real failure, so every fallback route —
+   * which is the common case, because the offline engine is the default and
+   * Valhalla is the fallback — put a red card directly above the **Start**
+   * button. The codebase already draws this distinction correctly on the import
+   * screen (`ImportMessage` has a `tone`), and `PreviewCard` threw it away.
+   */
+  degraded?: string | null;
+  /** Offers to save this destination as a Home/Work slot. */
+  places?: Partial<Record<PlaceSlot, SavedPlace>>;
+  onSetPlace?: (slot: PlaceSlot) => void;
   onGo: () => void;
   onBack: () => void;
   onProvider: () => void;
 }) {
-  const { route, units, routing, error } = props;
+  const { route, units, routing, error, degraded } = props;
   return (
-    <div className="preview-root">
+    <div className="preview-root" role="dialog" aria-label="Route preview" aria-busy={routing}>
       <button className="floating-back" onClick={props.onBack} aria-label="Back">
         <IconBack size={ICON.primary} />
       </button>
 
       <div className="preview-card">
-        {routing && <div className="bar"><div className="fill anim" /></div>}
-        {error && <div className="error-card">{error}</div>}
+        {routing && (
+          <div
+            className="bar"
+            role="progressbar"
+            aria-label="Calculating route"
+            aria-busy="true"
+          >
+            <div className="fill anim" />
+          </div>
+        )}
+        {/*
+          * `role="alert"` on the failure so it is announced, `role="status"` on
+          * the fallback so it is announced without interrupting — a warning the
+          * driver can still act on should not cut across whatever is being read.
+        */}
+        {error && <div className="error-card" role="alert">{error}</div>}
+        {!error && degraded && (
+          <div className="error-card warn" role="status">
+            <span className="warn-dot" aria-hidden="true" />
+            <span>{degraded}</span>
+          </div>
+        )}
 
         {route && (
           <>
             <div className="preview-dest" style={T.body1m}>{props.destination?.label ?? 'Destination'}</div>
-            <div className="preview-rows">
+            <div className="preview-rows" role="status">
               <PreviewRow label="Time" value={formatDuration(route.summary.time)} icon={<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>} />
               <PreviewRow label="Distance" value={formatDistance(route.summary.length, units)} />
               <PreviewRow label="Engine" value={route.engine === 'valhalla' ? 'Valhalla' : 'Offline .osm'} />
             </div>
+            {/*
+              * Saving a place is a secondary action, so it sits *below* the
+              * primary pair rather than competing with it — and it only appears
+              * where it means something: a route has a destination, and the
+              * destination is not already that slot.
+            */}
+            {props.onSetPlace && (
+              <div className="save-places">
+                {!props.places?.home && (
+                  <button className="text-btn" onClick={() => props.onSetPlace?.('home')}>
+                    <IconHome size={ICON.secondary} />
+                    Set as Home
+                  </button>
+                )}
+                {!props.places?.work && (
+                  <button className="text-btn" onClick={() => props.onSetPlace?.('work')}>
+                    <IconGoto size={ICON.secondary} />
+                    Set as Work
+                  </button>
+                )}
+              </div>
+            )}
             <div className="preview-actions">
               <button className="secondary-btn" onClick={props.onProvider}>Options</button>
               <button className="primary-btn" onClick={props.onGo}>Start</button>
@@ -2182,6 +2564,15 @@ function SearchScreen(props: {
   onInitialQueryConsumed?: () => void;
   online: boolean;
   location: LatLng;
+  /**
+   * What picking a result will *do*, when it is not the usual thing.
+   *
+   * Arriving here from an unset Home or Work tile means the next result becomes
+   * a saved place rather than a route. That is a different action with different
+   * consequences, and it has to be said before the tap — the alternative is a
+   * driver who saves their home and is then surprised not to be routed there.
+   */
+  pickHint?: string | null;
   onPick: (pos: LatLng, label: string) => void;
   onBack: () => void;
 }) {
@@ -2191,12 +2582,46 @@ function SearchScreen(props: {
   );
   const [q, setQ] = useState(props.initialQuery ?? '');
   // Adopt a keyboard-seeded query whenever the screen is reopened.
+  //
+  // `onInitialQueryConsumed` is read through a ref rather than listed as a
+  // dependency. `App` passes it as an inline arrow, so it is a new function on
+  // every one of App's 1 Hz re-renders; as a dependency it re-ran this effect
+  // every second, calling `setQ` with the value already in the box. React
+  // bails out of an identical `setState`, so it never looped — but the effect
+  // was doing nothing except re-queuing itself, which is exactly the shape that
+  // becomes a real bug the moment the body grows a line.
+  const consumedRef = useRef(props.onInitialQueryConsumed);
+  consumedRef.current = props.onInitialQueryConsumed;
+  const { initialQuery } = props;
+
+  /**
+   * Where the driver is, as a *stable* dependency.
+   *
+   * `props.location` is a fresh `[lon, lat]` array on every GPS fix — about
+   * once a second, and with `maximumAge: 0` even while stationary. It was a
+   * dependency of the search effect below, so every fix ran that effect's
+   * cleanup, which is `clearTimeout(t)`, and re-armed the 250 ms debounce.
+   *
+   * The visible result: a search that re-armed roughly every second while
+   * searching, so up to a second of every keystroke was discarded, "Searching…"
+   * flickered back on, and the in-flight Nominatim request was repeatedly
+   * cancelled and restarted. Results were also re-sorted against a moving
+   * reference point mid-list.
+   *
+   * Rounding to three decimals is ~110 m at the equator — finer than the search
+   * result ranking cares about, and coarse enough that GPS jitter under a
+   * stopped car does not re-arm anything. The value itself is read from a ref so
+   * the ranking uses the real current position rather than the rounded one.
+   */
+  const locationRef = useRef(props.location);
+  locationRef.current = props.location;
+  const locationKey = `${props.location[0].toFixed(3)},${props.location[1].toFixed(3)}`;
   useEffect(() => {
-    if (props.initialQuery) {
-      setQ(props.initialQuery);
-      props.onInitialQueryConsumed?.();
+    if (initialQuery) {
+      setQ(initialQuery);
+      consumedRef.current?.();
     }
-  }, [props.initialQuery, props.onInitialQueryConsumed]);
+  }, [initialQuery]);
   // A category chip filters the gazetteer by tag category. It is deliberately
   // not a text query: searching the literal word "city" matches no place names.
   const [cat, setCat] = useState<string | null>(null);
@@ -2246,6 +2671,7 @@ function SearchScreen(props: {
     // two-character query.
     if (term.length < 2) { setResults([]); setBusy(false); setErr(null); setSearchedTerm(''); return; }
     let cancelled = false;
+    const here = locationRef.current;
     const t = setTimeout(async () => {
       setBusy(true); setErr(null);
       setSearchedTerm(term);
@@ -2256,13 +2682,13 @@ function SearchScreen(props: {
       // identical to one underfoot.
       const multi = props.regions.length > 1;
       const localHits: SearchHit[] = multi
-        ? searchAll(regionLib, term, props.location, 20).map((h) => ({
+        ? searchAll(regionLib, term, here, 20).map((h) => ({
             label: h.entry.name,
             sub: h.regionName === 'Local map' ? h.entry.cat : `${h.entry.cat} · ${h.regionName}`,
             pos: [h.entry.lon, h.entry.lat] as LatLng,
             source: 'offline' as const,
           }))
-        : searchGazetteer(props.dataset?.gaz ?? [], term, props.location, 12).map((g) => ({
+        : searchGazetteer(props.dataset?.gaz ?? [], term, here, 12).map((g) => ({
             label: g.name, sub: g.cat, pos: [g.lon, g.lat] as LatLng, source: 'offline' as const,
           }));
       if (!cancelled) setResults(dedupeHits(localHits));
@@ -2270,7 +2696,7 @@ function SearchScreen(props: {
       // Enrich with Nominatim when there's a network.
       if (props.online) {
         try {
-          const places = await searchPlaces(term, { near: props.location, limit: 8 });
+          const places = await searchPlaces(term, { near: here, limit: 8 });
           if (!cancelled) {
             setResults((prev) => {
               const extra = places.map((p: Place) => ({
@@ -2293,7 +2719,13 @@ function SearchScreen(props: {
       if (!cancelled) setBusy(false);
     }, 250);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [q, cat, props.dataset, props.online, props.location, props.regions]);
+    // `props.location` is intentionally NOT a dependency and `locationKey` is
+    // its stand-in; the body reads the live value from `locationRef`. Adding
+    // `props.location` here is exactly the bug this note exists to prevent — see
+    // `locationKey` above — and `test/search-debounce.spec.ts` fails if the raw
+    // array comes back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, cat, props.dataset, props.online, locationKey, props.regions, locationRef]);
 
   return (
     <div className="search-root">
@@ -2337,6 +2769,12 @@ function SearchScreen(props: {
 
       <div className="search-results">
         {err && <div className="hint-card" role="status">{err}</div>}
+        {props.pickHint && (
+          <div className="hint-card pick-hint" role="status">
+            <IconInfo size={ICON.secondary} />
+            <span>{props.pickHint}</span>
+          </div>
+        )}
         {!props.regions.length && (
           <div className="hint-card">No offline map loaded — import an .osm file for offline search.</div>
         )}
@@ -2422,7 +2860,7 @@ function SearchScreen(props: {
 /* ---------------------------- StepsScreen --------------------------- */
 
 function StepsScreen({
-  steps, onBack, inferred, engineLabel,
+  steps, onBack, inferred, engineLabel, destination,
 }: {
   steps: LegStep[];
   onBack: () => void;
@@ -2434,12 +2872,14 @@ function StepsScreen({
   inferred?: boolean;
   /** The engine that produced the route, for the same reason. */
   engineLabel?: string | null;
+  /** Names the final row, which is the one a driver scans for. */
+  destination?: { label: string } | null;
 }) {
   return (
     <div className="search-root">
       <div className="top-app-bar">
         <button className="icon-btn" onClick={onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
-        <div style={{ ...T.body1m, marginLeft: DP.P2 }}>Route steps</div>
+        <h1 className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Route steps</h1>
       </div>
       <div className="search-results">
         {/*
@@ -2490,6 +2930,25 @@ function StepsScreen({
             </span>
           </div>
         ))}
+        {/*
+          * The trip's end, as a row.
+          *
+          * Every other list of directions in the world ends with "You have
+          * arrived" — Google Maps, Apple Maps, every paper route card. This one
+          * stopped at the last turn, so the list gave no way to confirm where
+          * the trip was *going*, only how to drive the part before it. The
+          * destination is already known here (`props` below), so the last row is
+          * free and it is the row a driver scans for.
+        */}
+        {destination && steps.length > 0 && (
+          <div className="result-row arrival-row">
+            <span className="result-icon"><IconPin size={ICON.secondary} /></span>
+            <span className="result-text">
+              <span style={T.body3m}>Arrive at {destination.label}</span>
+              <span style={{ ...T.sub3, color: ink.secondary }}>Destination</span>
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2541,7 +3000,7 @@ function EnginesScreen(props: {
     <div className="search-root">
       <div className="top-app-bar">
         <button className="icon-btn" onClick={props.onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
-        <div style={{ ...T.body1m, marginLeft: DP.P2 }}>Engines</div>
+        <h1 className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Engines</h1>
       </div>
 
       <div className="settings-body">
@@ -2744,7 +3203,7 @@ function SettingsScreen(props: {
     <div className="search-root">
       <div className="top-app-bar">
         <button className="icon-btn" onClick={props.onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
-        <div style={{ ...T.body1m, marginLeft: DP.P2 }}>Settings</div>
+        <h1 className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Settings</h1>
       </div>
 
       <div className="settings-body">
@@ -2819,7 +3278,7 @@ function ImportScreen(props: {
     <div className="search-root">
       <div className="top-app-bar">
         <button className="icon-btn" onClick={props.onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
-        <div style={{ ...T.body1m, marginLeft: DP.P2 }}>Import .osm</div>
+        <h1 className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Import .osm</h1>
       </div>
 
       <div className="settings-body">

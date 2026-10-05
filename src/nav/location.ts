@@ -40,8 +40,35 @@ export interface LocationState {
   stale: boolean;
 }
 
+/**
+ * Where the app thinks you are when it does not know.
+ *
+ * ## Why this is exported, and why it is the *only* placeholder
+ *
+ * Three files each had their own idea of "somewhere to point the map":
+ * `MapView` opened on London `[-0.1276, 51.5072]`, the Home and Work launcher
+ * tiles routed to London, and this module's no-fix position was Calgary.
+ *
+ * With no GPS — denied permission, a cold lock indoors, or a browser build,
+ * which is where most of this app is verified — those disagree by 7,000 km.
+ * The map showed London, search results drawn from a London extract were ranked
+ * against Calgary, and "Route" asked Valhalla for Calgary → London, which came
+ * back `Path distance exceeds the max distance limit: 1500000 meters.` That last
+ * one looked like an upstream server limit and was, in the end, this bug.
+ *
+ * A navigation app that does not know where it is must at least be
+ * *internally* consistent about where it thinks it is. So there is one
+ * exported constant and the map opens on it.
+ *
+ * Calgary is the choice because the region catalogue is Canadian provinces and
+ * US states (`osm/regions.ts`) — an offline extract of Alberta is the most
+ * likely thing to be loaded, and the most likely thing this placeholder should
+ * be inside.
+ */
+export const NO_FIX_POSITION: [number, number] = [-114.0719, 51.0447]; // Calgary, AB
+
 /** Somewhere recognisable while there is no real fix. */
-const FALLBACK: [number, number] = [-114.0719, 51.0447]; // Calgary, AB
+const FALLBACK = NO_FIX_POSITION;
 
 /**
  * Age at which a fix is treated as not current.

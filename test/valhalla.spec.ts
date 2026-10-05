@@ -368,15 +368,53 @@ describe('routeOnValhalla — response parsing', () => {
 });
 
 describe('routeOnValhalla — errors', () => {
-  it('rejects with the server error string and status', async () => {
-    respond({ error: 'No path could be found for the requested locations.', error_code: 442 }, 400);
-    await expect(routeOnValhalla({ from: FROM, to: TO })).rejects.toThrow(
-      'No path could be found for the requested locations.',
-    );
+  /**
+   * The driver-facing message and the server's own words are *different
+   * strings*, deliberately.
+   *
+   * This test used to assert that Valhalla's error text reached the user
+   * verbatim, which is how a red card reading
+   *
+   *   > Path distance exceeds the max distance limit: 1500000 meters.
+   *
+   * got shipped and verified — an upstream developer's sentence about an
+   * implementation limit, naming no place and no action. `message` is now what
+   * the driver reads; `detail` keeps the raw text for the engine trace.
+   */
+  it('translates a documented error_code and keeps the raw text as detail', async () => {
+    respond({ error: 'Path distance exceeds the max distance limit: 1500000 meters.', error_code: 154 }, 400);
     const err = await routeOnValhalla({ from: FROM, to: TO }).catch((e) => e);
     expect(err).toBeInstanceOf(RoutingError);
     expect(err.name).toBe('RoutingError');
     expect(err.status).toBe(400);
+    // Actionable, and no longer an upstream sentence.
+    expect(err.message).toMatch(/longer than the routing server will plan/i);
+    expect(err.message).not.toMatch(/1500000/);
+    expect(err.message).not.toMatch(/max distance limit/i);
+    // The raw text survives, for the trace.
+    expect(err.detail).toBe('Path distance exceeds the max distance limit: 1500000 meters.');
+  });
+
+  it('falls back to a phrase match when the server sends no error_code', async () => {
+    respond({ error: 'No path could be found for the requested locations.' }, 400);
+    const err = await routeOnValhalla({ from: FROM, to: TO }).catch((e) => e);
+    expect(err.message).toMatch(/No route found/i);
+    expect(err.message).not.toMatch(/could be found for the requested locations/i);
+    expect(err.detail).toBe('No path could be found for the requested locations.');
+  });
+
+  it('honours status_code when error_code is absent', async () => {
+    respond({ error: 'Origin / destination point is not routable', status_code: 442 }, 400);
+    const err = await routeOnValhalla({ from: FROM, to: TO }).catch((e) => e);
+    expect(err.message).toMatch(/could not find a road to snap the start or destination/i);
+  });
+
+  it('never echoes an unrecognised upstream string verbatim', async () => {
+    respond({ error: 'STACK OVERFLOW in loki_worker.cc:4123' }, 500);
+    const err = await routeOnValhalla({ from: FROM, to: TO }).catch((e) => e);
+    expect(err.message).toMatch(/HTTP 500/);
+    expect(err.message).not.toMatch(/loki_worker/);
+    expect(err.detail).toBe('STACK OVERFLOW in loki_worker.cc:4123');
   });
 
   it('keeps a 5xx status for retry decisions', async () => {
@@ -385,7 +423,7 @@ describe('routeOnValhalla — errors', () => {
     expect(err.status).toBe(503);
   });
 
-  it('falls back to HTTP <status> when the error body is not JSON', async () => {
+  it('says what happened when the error body is not JSON', async () => {
     fetchMock.mockResolvedValue({
       ok: false,
       status: 502,
@@ -396,7 +434,7 @@ describe('routeOnValhalla — errors', () => {
     await expect(routeOnValhalla({ from: FROM, to: TO })).rejects.toThrow('HTTP 502');
   });
 
-  it('falls back to HTTP <status> when the body has no error field', async () => {
+  it('says what happened when the body has no error field', async () => {
     respond({ unexpected: true }, 400);
     await expect(routeOnValhalla({ from: FROM, to: TO })).rejects.toThrow('HTTP 400');
   });

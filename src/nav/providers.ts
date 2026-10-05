@@ -287,7 +287,12 @@ export async function resolveRoute(
           const reason =
             err instanceof RoutingError ? err.message : (err as Error).message || 'Routing request failed';
           row.outcome = 'failed';
-          row.reason = reason;
+          // `message` is what the driver reads; `detail` is the server's own
+          // words. The trace is the surface a person debugging this app reads,
+          // so it gets both — but the raw text never becomes the headline.
+          row.reason = err instanceof RoutingError && err.detail
+            ? `${reason} (${err.detail})`
+            : reason;
           row.ms = Date.now() - t0;
           degraded.push({ provider: id, reason });
 
@@ -295,7 +300,11 @@ export async function resolveRoute(
           // trying the offline engine would only produce a second wrong answer.
           const fatal = err instanceof RoutingError && typeof err.status === 'number' &&
             err.status < 500 && err.status !== 429;
-          if (fatal) throw new NoRouteError(`${reason}.`);
+          // Every driver-facing reason is a complete sentence, so appending a
+          // full stop unconditionally produced "...for this pair.." in a red
+          // card. Composed through `withStop` so the punctuation is a
+          // property of the reason, not a guess at the call site.
+          if (fatal) throw new NoRouteError(withStop(reason));
         }
       }
     } else {
@@ -325,14 +334,28 @@ export async function resolveRoute(
   // never asked. Say what actually happened instead.
   throw new NoRouteError(
     strict
-      ? `${degraded[0]?.reason ?? 'The selected engine could not route.'} Fallback is off, so no other engine was tried.`
+      ? degraded[0]?.reason
+        ? `${withStop(degraded[0].reason)} Fallback is off, so no other engine was tried.`
+        : 'The selected engine could not route. Fallback is off, so no other engine was tried.'
       : degraded.length
-        ? `${degraded[0].reason}. No route found in the offline map for this pair.`
+        ? `${withStop(degraded[0].reason)} No route found in the offline map for this pair.`
         : 'No route found. Import an .osm file covering this area, or connect to the network.',
   );
 }
 
 /** Check whether a provider is currently usable, for the settings screen. */
+/**
+ * One terminal full stop, whatever the reason already ends with.
+ *
+ * Reasons are complete sentences assembled from several sources — this app's
+ * own, Valhalla's, and `RoutingError.message` — and the punctuation was
+ * previously decided at the call site (`${reason}.`), which printed
+ * "…for this pair.." every time a translated server message was fatal. Two
+ * sentences composed together need the same treatment as one, so both the
+ * single-sentence and two-sentence paths use this.
+ */
+const withStop = (s: string) => `${s.replace(/[.\s]+$/, '')}.`;
+
 export async function probeProvider(p: Provider, state: { endpoint?: string; apiKey?: string }) {
   if (!p.online) return { ok: true, detail: 'Always available' };
   const endpoint = p.id === 'valhalla-custom' ? (state.endpoint ?? '') : p.endpoint;

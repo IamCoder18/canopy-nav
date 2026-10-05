@@ -128,20 +128,110 @@ export interface RouteRequest {
 }
 
 export class RoutingError extends Error {
-  constructor(message: string, readonly status?: number) {
+  /**
+   * The server's own words, kept alongside the message shown to the driver.
+   *
+   * `readError` used to hand Valhalla's `error` string straight through, so the
+   * route preview displayed
+   *
+   *   > Path distance exceeds the max distance limit: 1500000 meters.
+   *
+   * in a red card. That is an upstream developer's sentence about an
+   * implementation limit; it names no place, no cause the driver can act on,
+   * and no next step. The raw text is genuinely useful, just not *to them* —
+   * so it is carried here for the engine trace, which is the surface a person
+   * debugging this app actually reads, while `message` becomes something a
+   * driver can act on.
+   */
+  constructor(message: string, readonly status?: number, readonly detail?: string) {
     super(message);
     this.name = 'RoutingError';
   }
 }
 
+/**
+ * Valhalla `error_code` values that a driver can be told something about.
+ *
+ * From Valhalla's `TripLeg`/`PathEdge` error table. Codes not listed fall
+ * through to `HTTP <status>`, which is honest rather than invented: this app
+ * does not know what a code it has never seen means.
+ *
+ * The right-hand column is the driver's problem, not Valhalla's: pick a pair of
+ * places closer together, use the offline map, or try another engine.
+ */
+const VALHALLA_ERRORS: Record<number, string> = {
+  100: 'The routing server rejected the request as malformed.',
+  101: 'The routing server could not read the request.',
+  110: 'The routing server rejected the request URL.',
+  125: 'The routing server could not read the request body.',
+  154: 'That trip is longer than the routing server will plan. Pick a closer destination, or use the offline map.',
+  155: 'The routing server cannot plan a route with no start or destination.',
+  156: 'That trip is longer than the routing server will plan. Pick a closer destination, or use the offline map.',
+  157: 'That route has more turns than the routing server will plan. Split the trip into shorter legs.',
+  160: 'The routing server could not plan that route.',
+  161: 'The routing server could not find a path between those points.',
+  171: 'No route found between those points on this server. Try another engine, or use the offline map.',
+  172: 'The routing server found no alternative routes.',
+  442: 'The routing server could not find a road to snap the start or destination to.',
+  443: 'The destination is too close to the start to route.',
+};
+
+/**
+ * Status codes worth naming on their own.
+ *
+ * 429 is here because it is the one failure where the driver knows something
+ * useful: the server is rate-limiting, not refusing the trip. Valhalla does not
+ * send an `error_code` for it, and the generic "the routing server refused this
+ * route" would turn a five-second wait into an apparent dead end.
+ */
+const ROUTING_STATUS: Record<number, string> = {
+  429: 'The routing server is busy and is limiting requests. Try again in a moment, or use the offline map.',
+};
+
+/**
+ * Turn an upstream failure into a sentence a driver can act on.
+ *
+ * Prefers the documented `error_code`, then a phrase match on the raw text for
+ * servers that do not send one, and never echoes the upstream string verbatim
+ * into the UI.
+ */
+export function describeRoutingFailure(status: number, code: number | null, raw: string): string {
+  const known = code !== null ? VALHALLA_ERRORS[code] : undefined;
+  if (known) return known;
+  // Checked before the phrase match: a rate limit's own wording ("too many
+  // requests") is not in the phrase list, but its *status* is unambiguous.
+  const byStatus = ROUTING_STATUS[status];
+  if (byStatus) return byStatus;
+
+  // Servers vary in whether they send `error_code`. A phrase match covers the
+  // common shapes without pretending to have read the whole table.
+  const text = raw.toLowerCase();
+  if (/max distance|exceeds the max/.test(text))
+    return 'That trip is too long for the routing server to plan. Pick a closer destination, or use the offline map.';
+  if (/no path|no route|no edges|not connected|cannot find/.test(text))
+    return 'No route found between those points on this server. Try another engine, or use the offline map.';
+  if (/origin|destination|snap/.test(text))
+    return 'The routing server could not match the start or destination to a road.';
+  if (/maneuver|turn limit/.test(text))
+    return 'That route has too many turns to plan. Split the trip into shorter legs.';
+
+  // Nothing recognisable: say what actually happened, not what we guessed.
+  return `The routing server refused this route (HTTP ${status}). Try another engine, or use the offline map.`;
+}
+
 /** Valhalla returns 400 with a JSON body on failure. */
-async function readError(res: Response): Promise<string> {
+async function readError(res: Response): Promise<{ message: string; detail: string }> {
+  let raw = `HTTP ${res.status}`;
+  let code: number | null = null;
   try {
     const j = (await res.json()) as { error?: string; error_code?: number; status_code?: number };
-    return j.error ?? `HTTP ${res.status}`;
+    if (typeof j.error === 'string' && j.error.trim()) raw = j.error.trim();
+    if (typeof j.error_code === 'number') code = j.error_code;
+    else if (typeof j.status_code === 'number') code = j.status_code;
   } catch {
-    return `HTTP ${res.status}`;
+    // Not JSON. The status line is all there is.
   }
+  return { message: describeRoutingFailure(res.status, code, raw), detail: raw };
 }
 
 /**
@@ -268,7 +358,10 @@ export async function routeOnValhalla(
     throw new RoutingError('Could not reach the routing server — check your connection');
   }
 
-  if (!res.ok) throw new RoutingError(await readError(res), res.status);
+  if (!res.ok) {
+    const { message, detail } = await readError(res);
+    throw new RoutingError(message, res.status, detail);
+  }
   return parseTrip(await res.json(), units);
 }
 

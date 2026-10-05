@@ -14,6 +14,11 @@ import maplibregl, { type Map as MLMap, type StyleSpecification } from 'maplibre
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { LatLng } from '../geo';
 import type { TrafficLevel } from '../nav/traffic';
+// The map's opening position is the app's no-fix position, not a hard-coded
+// London. They used to disagree by 7,000 km, which meant that with no GPS the
+// map showed one place, the position model used another, and routing asked for a
+// trip between them. See `NO_FIX_POSITION`.
+import { NO_FIX_POSITION } from '../nav/location';
 import { buildStyle, trafficLayers, offlineStyleSpec, ROUTE_LINE_WIDTH } from './style';
 import {
   greenToGeoJSON,
@@ -81,6 +86,25 @@ export function MapView(props: MapViewProps) {
   clickRef.current = props.onMapClick;
   longPressRef.current = props.onMapLongPress;
 
+  /**
+   * Current overlay props, for the same reason — and for one more.
+   *
+   * The style-boot effect below is keyed on `[props.useTiles]`, so `props` inside
+   * `boot()` is frozen at the render that started the boot. `buildStyle()` is a
+   * network round-trip, and the overlays it applies on `styledata` therefore
+   * carried whatever was true when the boot *began*.
+   *
+   * The window is real: it opens on launch and again on every tile/offline
+   * transition, which the app performs by itself when connectivity changes. A
+   * route chosen inside it produced no line, no destination pin and no origin
+   * marker — and nothing errored, because the overlays effect had already run
+   * and bailed on `ready.current === false`, so no prop had changed to make it
+   * run again. `cancelled` guarded the *style* race; nothing guarded the *prop*
+   * race.
+   */
+  const overlayProps = useRef(props);
+  overlayProps.current = props;
+
   useEffect(() => {
     if (!container.current || map.current) return;
 
@@ -88,7 +112,7 @@ export function MapView(props: MapViewProps) {
       container: container.current,
       // Google Maps' default pitch-free, top-down presentation.
       style: { version: 8, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#F8F7F5' } }] } as StyleSpecification,
-      center: [-0.1276, 51.5072],
+      center: NO_FIX_POSITION,
       zoom: 12,
       // Attribution is not optional: the ODbL requires OSM credit to be
       // displayed, and the data here is OSM's in both the tile and the imported
@@ -111,11 +135,29 @@ export function MapView(props: MapViewProps) {
     });
     m.on('mouseup', () => { if (pressTimer) clearTimeout(pressTimer); });
 
+    // The offline basemap's detail level is a function of zoom (`roadsToGeoJSON`
+    // is called with the zoom to decide which roads are worth sending), but
+    // nothing re-applied the overlays when the zoom changed — they were only
+    // refreshed as a side effect of a GPS fix. On the offline style that meant
+    // zooming in drew no new roads until the next position tick, and at a
+    // standstill — where `maximumAge: 0` means fixes keep arriving, so at most a
+    // second — the map visibly refused to gain detail.
+    //
+    // `zoomend` rather than `move` so a pinch does not re-serialise the
+    // province once per frame; the overlay effect below already covers every
+    // prop change, and this covers the one that is not a prop.
+    const onZoomEnd = () => {
+      if (!ready.current) return;
+      applyOverlays(m, overlayProps.current);
+    };
+    m.on('zoomend', onZoomEnd);
+
     return () => {
       // `m.remove()` detaches the map's own listeners but leaves a pending
       // press timer armed, which would then call into refs of a component that
       // is already gone.
       if (pressTimer) clearTimeout(pressTimer);
+      m.off('zoomend', onZoomEnd);
       m.remove();
       map.current = null;
       mapRef.current = null;
@@ -166,7 +208,7 @@ export function MapView(props: MapViewProps) {
       current.setStyle(style);
       const onReady = () => {
         ready.current = true;
-        applyOverlays(current, props);
+        applyOverlays(current, overlayProps.current);
       };
       current.once('styledata', onReady);
       current.once('idle', onReady);
@@ -185,22 +227,32 @@ export function MapView(props: MapViewProps) {
       cancelled = true;
       for (const off of listeners.splice(0)) off();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // The suppressions this effect used to need are gone: `onReady` now reads
+    // `overlayProps.current` rather than closing over `props`, so the only prop
+    // this effect depends on is the one it is keyed on.
   }, [props.useTiles]);
 
   /* --------------------------- overlays ------------------------------ */
   useEffect(() => {
     const m = map.current;
     if (!m || !ready.current) return;
-    applyOverlays(m, props);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Reads the ref, not the closure: a prop can change inside the window where
+    // the style is booting, and this effect has already bailed by then. The
+    // `styledata`/`idle` handler on that boot reads the same ref, so both paths
+    // see the same props whichever order things happen in.
+    applyOverlays(m, overlayProps.current);
+    // The dependency list is spelled out rather than `[props]` on purpose: the
+    // overlays are the expensive part of a render, and `props` is a fresh object
+    // on every one of App's 1 Hz re-renders, so depending on it would
+    // re-serialise the province every second whether or not anything visible
+    // had changed. These are the values `applyOverlays` actually reads.
   }, [props.route, props.travelled, props.traffic, props.origin, props.destination, props.location, props.maneuverPoints, props.dataset]);
 
   /* ---------------------------- camera ------------------------------- */
   useEffect(() => {
     const m = map.current;
     if (!m || !props.focus) return;
-    m.easeTo({ center: props.focus.center, zoom: props.focus.zoom, duration: 400 });
+    m.easeTo({ center: props.focus.center, zoom: props.focus.zoom, duration: cameraDuration(400) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.focus?.center?.[0], props.focus?.center?.[1], props.focus?.zoom]);
 
@@ -235,6 +287,69 @@ export function MapView(props: MapViewProps) {
   );
 }
 
+/**
+ * Serialised offline basemap, cached per dataset and per integer zoom.
+ *
+ * `roadsToGeoJSON` walks every way in the extract and allocates a Feature per
+ * way. For a province — the 100–900 MB extracts this app is built for — that is
+ * 10⁵–10⁶ objects and a multi-megabyte JSON string, built on the main thread.
+ *
+ * `applyOverlays` runs on every GPS fix (~1 Hz, and `maximumAge: 0` means even
+ * while stationary), so before this cache the entire provincial road network was
+ * re-serialised once a second, forever, while driving — and the code's own
+ * comment named the cause and left it in place. The banner and route line
+ * stuttered at exactly the moment the driver needed them.
+ *
+ * Keyed on the dataset object with a `WeakMap`, so an imported region is
+ * collectable once it is replaced, and on the integer zoom, because the LOD is
+ * a function of zoom only.
+ */
+const basemapCache = new WeakMap<object, {
+  zoom: number;
+  roads: GeoJSON.FeatureCollection;
+  water: GeoJSON.FeatureCollection;
+  green: GeoJSON.FeatureCollection;
+}>();
+
+function basemapFor(dataset: OsmDataset, zoom: number) {
+  const hit = basemapCache.get(dataset as unknown as object);
+  if (hit && hit.zoom === zoom) return hit;
+  const built = {
+    zoom,
+    roads: roadsToGeoJSON(dataset, zoom),
+    water: waterToGeoJSON(dataset),
+    green: greenToGeoJSON(dataset),
+  };
+  basemapCache.set(dataset as unknown as object, built);
+  return built;
+}
+
+/**
+ * Whether the driver asked for reduced motion.
+ *
+ * Read live rather than captured once: the preference can change while the app
+ * is open, and a WebView that reports `false` before the system setting has
+ * propagated should start honouring it the moment it does.
+ *
+ * MapLibre's camera animations are configured in JS, not CSS, so the
+ * `prefers-reduced-motion` rule in `styles.css` cannot reach them. That rule's
+ * comment says as much and points here — but nothing here implemented it, so
+ * every recentre, overview, fit-route and fit-region move animated for 400–450 ms
+ * regardless of the setting. `fitPoints` is exported and used by the overlay, so
+ * it reads the same value.
+ */
+function reducedMotion(): boolean {
+  try {
+    return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    // A WebView with no `matchMedia` at all: animate, as before.
+    return false;
+  }
+}
+
+/** `duration: 0` is a jump. That is the point. */
+const cameraDuration = (ms: number) => (reducedMotion() ? 0 : ms);
+
 function applyOverlays(m: MLMap, p: MapViewProps) {
   // Sources only exist once a style has loaded; setData before that is a no-op.
   if (!m.getSource('canopy-route')) return;
@@ -245,13 +360,12 @@ function applyOverlays(m: MLMap, p: MapViewProps) {
 
   // Offline base layers only exist in the offline style.
   if (p.dataset) {
-    // The current zoom decides how much road is worth sending. Rebuilding every
-    // way in a provincial extract to draw sub-pixel lines is the expensive part,
-    // and the GeoJSON is rebuilt on every position update otherwise.
-    const zoom = Math.round(m.getZoom());
-    set('canopy-osm-roads', roadsToGeoJSON(p.dataset, zoom));
-    set('canopy-osm-water', waterToGeoJSON(p.dataset));
-    set('canopy-osm-green', greenToGeoJSON(p.dataset));
+    // The current zoom decides how much road is worth sending: rebuilding every
+    // way in a provincial extract to draw sub-pixel lines is the expensive part.
+    const layers = basemapFor(p.dataset, Math.round(m.getZoom()));
+    set('canopy-osm-roads', layers.roads);
+    set('canopy-osm-water', layers.water);
+    set('canopy-osm-green', layers.green);
   }
 
   set('canopy-route', lineToGeoJSON(p.route ?? []));
@@ -285,7 +399,7 @@ function trafficToGeoJSON(spans: TrafficOverlay[]): GeoJSON.FeatureCollection {
 
 export function fitPoints(m: MLMap, pts: LatLng[], padding = 72) {
   if (pts.length === 1) {
-    m.easeTo({ center: pts[0], zoom: 16, duration: 400 });
+    m.easeTo({ center: pts[0], zoom: 16, duration: cameraDuration(400) });
     return;
   }
   let w = 180, s = 90, e = -180, n = -90;
@@ -293,7 +407,7 @@ export function fitPoints(m: MLMap, pts: LatLng[], padding = 72) {
     if (x < w) w = x; if (x > e) e = x;
     if (y < s) s = y; if (y > n) n = y;
   }
-  m.fitBounds([[w, s], [e, n]], { padding, duration: 450, maxZoom: 17 });
+  m.fitBounds([[w, s], [e, n]], { padding, duration: cameraDuration(450), maxZoom: 17 });
 }
 
 /** Style used with no network: Google palette, our own .osm geometry. */

@@ -74,9 +74,24 @@ describe('App renders without throwing', () => {
     // §10 found the app had no `main` and no headings on any of its screens, and
     // added a labelled region on the root element. This is the only test in the
     // suite that renders that element, so it is where the landmark is pinned.
+    //
+    // The assertion was `role="(region|main)"` — which a real `<main>` element
+    // does *not* have, so satisfying it required keeping the weaker form. The
+    // element is a `<main>` now: `role="region"` made the entire application a
+    // single landmark whose accessible name changed as the driver moved between
+    // screens, and "jump to main" still had nothing to jump to. The test is
+    // tightened to the real thing rather than loosened to match it.
     const html = await renderApp();
-    expect(html).toMatch(/role="(region|main)"/);
+    expect(html).toMatch(/<main class="app"/);
     expect(html).toMatch(/aria-label="Canopy Nav/);
+  });
+
+  it('gives the launcher a real heading, so heading navigation has somewhere to land', async () => {
+    // The document had no `<h1>` on any screen, so a screen-reader user
+    // navigating by heading found nothing to move between. The brand line is the
+    // launcher's heading; the other screens use their app-bar title.
+    const html = await renderApp();
+    expect(html).toMatch(/<h1 class="brand-title"[^>]*>Canopy Nav<\/h1>/);
   });
 
   it('names the current screen in the landmark, not just the app', async () => {

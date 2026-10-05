@@ -300,7 +300,16 @@ describe('resolveRoute — online provider', () => {
     const out = await resolveRoute({ from: FROM, to: TO, provider: 'valhalla-fossgis' }, dataset(), {});
     expect(out.used).toBe('local');
     expect(out.route.engine).toBe('osm-local');
-    expect(out.degraded).toEqual([{ provider: 'valhalla-fossgis', reason: 'no tiles loaded' }]);
+    // `degraded` is what the banner shows a driver, so it is driver-facing. It
+    // used to be Valhalla's own error text verbatim, which is how a card
+    // reading "Path distance exceeds the max distance limit: 1500000 meters."
+    // reached the preview screen and passed this assertion.
+    expect(out.degraded).toHaveLength(1);
+    expect(out.degraded[0].provider).toBe('valhalla-fossgis');
+    expect(out.degraded[0].reason).toMatch(/HTTP 503/);
+    expect(out.degraded[0].reason).not.toMatch(/no tiles loaded/);
+    // The raw text is not discarded — it is filed where a developer reads it.
+    expect(out.attempts.find((a) => a.engine === 'valhalla-fossgis')?.reason).toMatch(/no tiles loaded/);
   });
 
   it('records a readable reason for a network failure', async () => {
@@ -317,7 +326,10 @@ describe('resolveRoute — online provider', () => {
     const err = await resolveRoute({ from: FROM, to: TO, provider: 'valhalla-fossgis' }, null, {})
       .catch((e) => e);
     expect(err).toBeInstanceOf(NoRouteError);
-    expect(err.message).toBe('internal error. No route found in the offline map for this pair.');
+    // Both halves are driver-facing: the server failure and the offline failure.
+    expect(err.message).toMatch(/^The routing server refused this route \(HTTP 500\)/);
+    expect(err.message).toContain('No route found in the offline map for this pair.');
+    expect(err.message).not.toMatch(/internal error/);
   });
 
   it('uses the first degraded reason when the online failure had none', async () => {
@@ -326,7 +338,8 @@ describe('resolveRoute — online provider', () => {
       .catch((e) => e);
     // A 4xx is a bad request, not a network problem, so it is fatal and
     // reported as-is rather than dressed up as a failed offline lookup.
-    expect(err.message).toBe('bad request.');
+    expect(err.message).toMatch(/^The routing server refused this route \(HTTP 400\)/);
+    expect(err.message).not.toMatch(/bad request/);
   });
 
   it('skips the network entirely when the link is down', async () => {
@@ -417,14 +430,16 @@ describe('resolveRoute — online provider', () => {
       { endpoint: 'https://valhalla.mydomain.net' },
     );
     expect(out.used).toBe('local');
-    expect(out.degraded).toEqual([{ provider: 'valhalla-custom', reason: 'boom' }]);
+    expect(out.degraded).toHaveLength(1);
+    expect(out.degraded[0].provider).toBe('valhalla-custom');
+    expect(out.degraded[0].reason).toMatch(/HTTP 500/);
   });
 
   it('treats 429 as retryable and still uses the offline fallback', async () => {
     respondError(429, 'Too many requests');
     const out = await resolveRoute({ from: FROM, to: TO, provider: 'valhalla-fossgis' }, dataset(), {});
     expect(out.used).toBe('local');
-    expect(out.degraded[0].reason).toBe('Too many requests');
+    expect(out.degraded[0].reason).toMatch(/limiting requests/i);
   });
 
   it('treats a 4xx as fatal instead of pretending offline could answer', async () => {
@@ -436,7 +451,7 @@ describe('resolveRoute — online provider', () => {
       { from: FROM, to: TO, provider: 'valhalla-fossgis' }, dataset(), {},
     ).catch((e) => e);
     expect(err).toBeInstanceOf(NoRouteError);
-    expect(err.message).toBe('bad request.');
+    expect(err.message).toMatch(/^The routing server refused this route \(HTTP 400\)/);
   });
 
   it('still falls back offline for a non-4xx server failure', async () => {
@@ -448,7 +463,7 @@ describe('resolveRoute — online provider', () => {
     );
     expect(out.used).toBe('local');
     expect(out.degraded).toHaveLength(1);
-    expect(out.degraded[0].reason).toMatch(/service unavailable/i);
+    expect(out.degraded[0].reason).toMatch(/HTTP 503/);
   });
 
   it('still falls back offline for a 429 rate limit', async () => {
@@ -527,15 +542,16 @@ describe('probeProvider', () => {
 
 describe('RoutingError interop', () => {
   it('the online client raises RoutingError with a status the chain can inspect', async () => {
-    // 422 is a 4xx, so resolveRoute treats it as fatal and surfaces the server's
-    // own message. That message only reaches the user intact because the client
-    // parsed it out of the JSON error body into a RoutingError.
+    // 422 is a 4xx, so resolveRoute treats it as fatal and surfaces it rather
+    // than falling back. What it surfaces is the *translated* sentence; the
+    // client parsed the JSON error body to get far enough to translate it.
     respondError(422, 'No path could be found for the requested locations');
     const err = await resolveRoute(
       { from: FROM, to: TO, provider: 'valhalla-fossgis' }, dataset(), {},
     ).catch((e) => e);
     expect(err).toBeInstanceOf(NoRouteError);
-    expect(err.message).toBe('No path could be found for the requested locations.');
+    expect(err.message).toMatch(/No route found between those points/);
+    expect(err.message).not.toMatch(/could be found for the requested locations/);
 
     // RoutingError is what resolveRoute inspects for `status`
     const re = new RoutingError('x', 422);

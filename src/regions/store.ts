@@ -207,11 +207,34 @@ export async function restoreRegions(): Promise<Region[]> {
 }
 
 /** Drop a region, release its worker, and forget the cached copy. */
-export function removeRegion(id: string) {
+/**
+ * Forget a region, in memory and on disk.
+ *
+ * ## Why this returns a promise now
+ *
+ * The storage delete was `void deleteRegion(id).catch(() => {})`, and
+ * `deleteRegion` goes to real trouble to build the sentence "It will reappear
+ * the next time the app starts." — which the catch discarded. So on a device
+ * where IndexedDB refused (another tab holding the database, which
+ * `persist.ts` explicitly detects), the region vanished from the UI, the byte
+ * count fell, the bytes were **not** freed, and nothing was said. A few
+ * hundred megabytes per province, gone silently.
+ *
+ * Both callers now await this and report a failure. The in-memory removal still
+ * happens first and unconditionally: the region *is* gone from the running app
+ * regardless of whether the file on disk could be deleted, so the failure to
+ * report is about the bytes, not about the map.
+ */
+export async function removeRegion(id: string): Promise<string | null> {
   regionLib.remove(id);
   engines.get(id)?.dispose();
-  void deleteRegion(id).catch(() => { /* nothing to do if it is already gone */ });
   engines.delete(id);
+  try {
+    await deleteRegion(id);
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
 }
 
 /** Total bytes held by loaded extracts, for the manage screen. */

@@ -205,7 +205,10 @@ describe('a pinned engine with fallback off', () => {
     // Exactly one attempt: no local fallback, no second provider.
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(error).toBeInstanceOf(NoRouteError);
-    expect(error!.message).toMatch(/No path could be found/);
+    expect(error!.message).toMatch(/No route found between those points/);
+    // Driver-facing, and a single trailing full stop.
+    expect(error!.message).not.toMatch(/No path could be found/);
+    expect(error!.message).not.toMatch(/\.\./);
     expect(state.status).toBe('failed');
   });
 

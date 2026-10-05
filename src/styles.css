@@ -170,13 +170,16 @@ code {
 
 .top-app-bar {
   position: absolute;
-  top: var(--inset-top); left: 0; right: 0;
+  top: 0; left: 0; right: 0;
   height: var(--app-bar, 96px);
-  padding-top: var(--inset-top);
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 0 24px;
+  /* Same longhand-then-shorthand reset as `.eta-bar` and `.nav-bottom`: the
+     shorthand below zeroed the inset-top this rule sets first. Anchored at
+     `top: var(--inset-top)` *and* padded by it, the bar started below the status
+     bar and then pushed its own 96px of content down by the inset again. */
+  padding: var(--inset-top) 24px 0;
   /* elevation +3 in the AAOS night ramp */
   background: #202124;
   z-index: 30;
@@ -185,6 +188,27 @@ code {
 .brand { display: flex; align-items: center; gap: 16px; min-width: 0; flex: 1 1 auto; }
 .brand-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
 .brand-text > * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/*
+ * Screen titles.
+ *
+ * These are `<h1>`/`<h2>` elements now, which brings the browser's default
+ * heading margins, `font-size` and `font-weight` with them. Every one of them is
+ * styled inline with a `T.*` token that sets size and line height but not weight
+ * or margin, so without this rule each screen's title rendered at a bold weight
+ * and 0.67em of surrounding margin — a visible regression on every screen, from
+ * the change that fixed the landmark.
+ *
+ * `font: inherit` first, then `font-weight` from the token: the design system's
+ * titles are 400, not bold, and an `<h1>` at 700 reads as a different product.
+ */
+.screen-title, .brand-title, .panel-title {
+  margin: 0;
+  font-weight: 400;
+}
+.panel-title { font-weight: 400; }
+/* A heading is not a tab stop and not a click target. */
+.screen-title, .brand-title, .panel-title { user-select: none; }
 /*
  * The car glyph must never be the only thing left. At 412dp the status pill and
  * the settings button together are wider than the bar, so the brand — the only
@@ -304,13 +328,38 @@ code {
   flex-shrink: 0;
 }
 
+/* Every row keeps its own height and the panel scrolls.
+   `flex-shrink: 0` had been applied to `.search-field` and `.quick-grid` only,
+   so in a column flex container with a definite height the *other* children —
+   the "Continue navigation" card and the import hint — absorbed all the
+   compression and collapsed to slivers while the user scrolled past five
+   oversized tiles. One rule for all of them cannot be forgotten the next time
+   a row is added. */
+.home-search > * { flex-shrink: 0; }
+
 .quick-grid {
   display: grid;
-  /* 156dp is the tile min already used by .nav-bottom-btn; auto-fit keeps
-     five tiles on one row at head-unit widths and wraps instead of squashing. */
-  grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
+  /*
+   * Five tiles across on a head unit, three on a landscape phone, two on a
+   * portrait phone.
+   *
+   * This was `repeat(auto-fit, minmax(156px, 1fr))`, which computes to **one**
+   * column at phone portrait: the content box is 412 x 0.76 = 313px, and
+   * floor((313 + 24) / (156 + 24)) is 1. So five 158dp tiles stacked into an
+   * 886px scroll on the screen whose whole purpose is one tap to search.
+   *
+   * Explicit columns rather than `auto-fit`, because the count that matters is
+   * the number of tiles — five — and only an explicit rule can say "two per row
+   * at this width" instead of "whatever fits".
+   *
+   * The breakpoints live *below* the base rule, not above it. A media query adds
+   * no specificity, so an override written earlier in the file loses on source
+   * order and silently does nothing — which is exactly what happened the first
+   * time this was written, and is the same trap the `.nav-status` block at the
+   * end of this file documents. Narrow-screen overrides go last.
+   */
+  grid-template-columns: repeat(5, 1fr);
   gap: 24px;
-  flex-shrink: 0;
 }
 
 .quick-tile {
@@ -325,8 +374,22 @@ code {
   box-shadow: 0 2px 2px rgba(0, 0, 0, 0.22);
   transition: background 120ms ease, transform 120ms ease;
 }
-.quick-tile:hover { background: rgba(23, 24, 27, 0.95); }
-.quick-tile:active { transform: scale(0.98); }
+/*
+ * Was `rgba(23, 24, 27, 0.95)` — a hover state *darker* than the tile's own
+ * `#17181B` background, which is a difference of about 1% and reads as no hover
+ * at all. Lightening is what makes a surface respond to a pointer.
+ */
+.quick-tile:hover { background: rgba(255, 255, 255, 0.06); }
+.quick-tile:active { transform: scale(0.98); background: rgba(255, 255, 255, 0.12); }
+/*
+ * A tile with no destination yet. It is drawn recessed rather than finished, so
+ * "Not set" is visible before the tap rather than only after it.
+ */
+.quick-tile.unset { background: rgba(23, 24, 27, 0.72); }
+.quick-tile.unset .quick-icon {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.45);
+}
 .quick-icon {
   width: 56px; height: 56px; border-radius: 9999px;
   display: grid; place-items: center;
@@ -335,13 +398,40 @@ code {
   flex-shrink: 0;
 }
 
-.quick-tile > span:last-child {
+/*
+ * The tile's text block: the label, and optionally the hint under it.
+ *
+ * This owns the truncation rather than inheriting it from
+ * `.quick-tile > span:last-child`, which is an accident of child order: adding a
+ * third child moved that rule onto the hint, so the label lost its ellipsis and
+ * the hint gained it. One named element, one set of rules.
+ */
+.quick-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  text-align: center;
   line-height: 32px;
+}
+.quick-label > span:first-child {
   max-width: 100%;
   /* AAOS single-line truncate for long labels */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.quick-hint {
+  font-size: 17px;
+  line-height: 22px;
+  color: rgba(255, 255, 255, 0.45);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  /* Never truncates: it is two words, and a clipped "Not se…" is worse than
+     nothing because it stops reading as a word at all. */
+  white-space: nowrap;
 }
 
 .continue-card {
@@ -376,11 +466,115 @@ code {
      read carefully, so they use body3 rather than inheriting a browser default. */
   font-size: 24px;
   line-height: 32px;
+  /* A left rule in the message's own colour. The fill alone carries the meaning
+     at a glance, but on a map — which is a busy, mid-value canvas — a 4px edge
+     reads at a glance where a large translucent block competes with the roads
+     underneath it. */
+  border-left: 4px solid currentColor;
+  border-radius: 4px;
 }
-/* A warning means the import worked, with a caveat. A different colour from the
-   error card on purpose: sharing one teaches people to ignore the card that
-   means "your map is gone". */
-.error-card.warn { background: rgba(97, 71, 12, 0.9); color: #FDD663; }
+/* A warning means the work succeeded, with a caveat — or, on the preview screen,
+   that the route is fine and a fallback engine produced it. A different colour
+   from the error card on purpose: sharing one teaches people to ignore the card
+   that means "your map is gone", and on most routes the fallback path is the
+   expected one, so a red card above **Start** taught exactly that. */
+.error-card.warn { background: rgba(60, 51, 20, 0.92); color: #FDD663; }
+.warn-dot {
+  width: 20px; height: 20px;
+  margin-top: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/*
+ * An in-flow outcome panel.
+ *
+ * Distinct from `.progress-card`, which is `position: fixed` and right for
+ * transient progress. A *result* belongs in the list it was computed from:
+ * pinned to the bottom of the viewport it followed the driver around the
+ * catalogue, and three of these could occupy the same fixed coordinates and
+ * overlap.
+ */
+.result-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 24px;
+  border-radius: 8px;
+  background: rgba(32, 33, 36, 0.96);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  border-left: 4px solid var(--route, #60A8F0);
+  margin: 0 0 24px;
+}
+.result-panel.ok {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  border-left-color: #81C995;
+  color: #81C995;
+}
+.result-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.result-panel-head svg { flex: 0 0 auto; color: var(--route, #60A8F0); }
+.result-panel-head span { min-width: 0; overflow-wrap: anywhere; }
+
+/* The destination row at the end of the steps list. Distinguished from a turn
+   because it is not a turn — it is where the trip stops. */
+.arrival-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  margin-top: 8px;
+  padding-top: 16px;
+}
+.arrival-row .result-icon { color: #EA4335; }
+
+/* The confirmation half of the two-step region removal. */
+.remove-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: rgba(122, 32, 32, 0.28);
+  border: 1px solid rgba(242, 139, 130, 0.4);
+  animation: fade-in 140ms ease;
+}
+.remove-question {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #F28B82;
+  line-height: 28px;
+}
+.remove-question svg { flex: 0 0 auto; }
+.remove-detail { color: rgba(255, 255, 255, 0.6); font-size: 18px; line-height: 24px; }
+
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* "Set as Home" / "Set as Work" — a secondary row under the preview summary.
+   Sits below the primary pair rather than beside it: saving a place is
+   something a driver does once, starting a trip is something they do every
+   time, and the two should not be equally weighted. */
+.save-places {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin-top: 4px;
+}
+.save-places .text-btn { color: rgba(255, 255, 255, 0.72); }
+.save-places .text-btn:hover { color: #FFFFFF; }
+
+/* The "this search will save a place" note, so the tap's consequence is stated
+   before it is taken rather than discovered afterwards. */
+.pick-hint {
+  align-items: center;
+  color: #FDD663;
+}
+.pick-hint svg { flex: 0 0 auto; margin-top: 2px; }
 /* Dismiss affordance, sized on the touch minimum. */
 .msg-dismiss {
   flex: 0 0 auto;
@@ -465,9 +659,15 @@ code {
 .eta-bar {
   position: absolute; top: 0; left: 0; right: 0;
   height: var(--app-bar, 96px);
-  padding-top: var(--inset-top);
   display: flex; align-items: center; gap: 24px;
-  padding: 0 16px 0 24px;
+  /* One shorthand, with the inset folded in. This used to be
+     `padding-top: var(--inset-top)` followed by `padding: 0 16px 0 24px`, and
+     the second declaration reset the first: the ETA bar anchored at `top: 0`
+     centred its two 76dp buttons and its two largest numbers inside a 96px band
+     starting at y=0, i.e. underneath the system status bar. The fix is not
+     reordering the lines but not needing an order — see `npm run check`, which
+     now fails a longhand-then-shorthand rule. */
+  padding: var(--inset-top) 16px 0 24px;
   background: rgba(23, 24, 27, 0.88);
   backdrop-filter: blur(20px);
   /* The ETA bar carries nowrap text and two 76dp buttons; on a narrow phone
@@ -567,6 +767,16 @@ code {
   width: 120px; height: 120px;
   display: grid; place-items: center;
   border-radius: 8px;
+  /* These two lines were stranded *after* the `.maneuver-instr` rule that
+     follows this block, sitting between its closing brace and the next one.
+     CSS error recovery discards declarations that parse as nothing, so the
+     single most important element in the app — the turn arrow — had no tile
+     background and inherited body text colour for every non-major maneuver,
+     which is the common case. Only `.major` (green) ever rendered.
+     `npm run check` now parses the stylesheet, so a stray brace fails a build
+     instead of quietly eating two declarations. */
+  background: rgba(255, 255, 255, 0.08);
+  color: #F1F3F4;
 }
 /* Imminent-turn dimming (≤40 m): Google Maps softens the instruction text so
    the maneuver arrow is the salient thing as the driver makes the turn. The
@@ -575,9 +785,6 @@ code {
 .maneuver-instr.is-imminent {
   opacity: 0.6;
   transition: opacity 120ms ease;
-}
-  background: rgba(255, 255, 255, 0.08);
-  color: #F1F3F4;
 }
 .maneuver-icon.major { background: #188038; color: #FFFFFF; }
 .maneuver-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -885,10 +1092,12 @@ code {
 .nav-bottom {
   position: absolute; bottom: 0; left: 0; right: 0;
   height: var(--navbot, 128px);
-  padding-bottom: var(--inset-bottom);
   display: flex; align-items: center; justify-content: space-around;
   gap: 8px;
-  padding: 0 8px;
+  /* Same longhand/shorthand bug as `.eta-bar`: `padding-bottom` was reset by
+     the shorthand below it, putting the bottom of every Steps/Exit/Overview
+     target in the system gesture area. */
+  padding: 0 8px var(--inset-bottom);
   background: rgba(23, 24, 27, 0.88);
   backdrop-filter: blur(20px);
 }
@@ -908,14 +1117,30 @@ code {
 .preview-root > * { pointer-events: auto; }
 
 .floating-back {
-  position: absolute; top: 24px; left: 24px;
+  /* Clears the system status bar and a display cutout. Every other top-left
+     control in the app is anchored at `var(--inset-top)` — the app bar at 0 with
+     the inset folded into its padding, the maneuver banner below the bar — and
+     this one was a flat `top: 24px`, so on any device with a nonzero inset the
+     top third of a 76dp Back target sat under the status bar. */
+  position: absolute;
+  top: calc(var(--inset-top) + 24px);
+  left: calc(var(--inset-left) + 24px);
   width: 76px; height: 76px;
   display: grid; place-items: center;
   border-radius: 9999px;
+  /* Near-white, because it sits on the *map* — which is a light canvas — and a
+     dark FAB over it would be the low-contrast option. Everywhere else in the
+     app chrome is dark, so this is deliberately the one inverted control. */
   background: rgba(255, 255, 255, 0.96);
   color: #202124;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  /* Two shadows, not one: a tight contact shadow to sit the disc on the canvas
+     and a wide soft one to separate it from a busy map beneath. A single
+     2px/8px shadow on a light basemap reads as a smudge. */
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 16px rgba(0, 0, 0, 0.24);
+  transition: background 120ms ease, transform 120ms ease;
 }
+.floating-back:hover { background: #FFFFFF; }
+.floating-back:active { transform: scale(0.94); background: #E8EAED; }
 
 .preview-card {
   position: absolute;
@@ -1387,6 +1612,15 @@ button.chip.ok { background: rgba(96, 168, 240, 0.18); color: #60A8F0; }
   border-left: 4px solid #FBBC04;
 }
 
+/* A two-column card: a glyph that leads, prose that wraps beside it. */
+.location-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.location-card svg { flex: 0 0 auto; margin-top: 2px; }
+.location-card > div { min-width: 0; }
+
 /*
  * Narrow-screen placement of the navigation status line.
  *
@@ -1406,4 +1640,109 @@ button.chip.ok { background: rgba(96, 168, 240, 0.18); color: #60A8F0; }
     align-self: stretch;
     text-align: left;
   }
+}
+
+/* ==================================================================== */
+/* Narrow-screen overrides                                             */
+/*                                                                      */
+/* At the end of this file on purpose. A media query adds no specificity, */
+/* so an override written next to the rule it overrides loses on source  */
+/* order and silently does nothing — which is what happened the first    */
+/* time the launcher breakpoints were written above the base rules, and   */
+/* is the same trap the `.nav-status` block documents above.            */
+/* ==================================================================== */
+
+@media (max-width: 1100px) {
+  /* Five tiles across needs 5 x 156 + 4 x 24 = 876px of content box, which a
+     1100px viewport minus its 12% margins does not have. Three fits. */
+  .quick-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 760px) {
+  .quick-grid {
+    grid-template-columns: repeat(2, 1fr);
+    /* 24px gaps eat 48 of a 313px content box at two columns. */
+    gap: 16px;
+  }
+  /*
+   * A shorter stacked tile, not a row.
+   *
+   * The row layout was tried first and is worse at this width: the icon eats
+   * 48px of a 148px tile and leaves ~85px of text, which clipped "Search" to
+   * "S…", "Regions" to "R…" and "Import" to "I…" — the app's own launcher
+   * labels, truncated by the app's own launcher.
+   *
+   * Stacked fits if the pieces are sized down: 40 (icon) + 6 (gap) + 32 (label)
+   * + 24 (hint) + 24 (padding) = 126px, and `.quick-icon` at 40 is still above
+   * the 24dp glyph it holds with room to spare.
+   */
+  .quick-tile {
+    height: auto;
+    min-height: 132px;
+    padding: 12px 8px;
+    gap: 6px;
+  }
+  .quick-tile .quick-icon { width: 40px; height: 40px; }
+  .quick-label { line-height: 28px; font-size: 22px; }
+  .quick-hint { font-size: 15px; line-height: 20px; }
+}
+
+@media (max-width: 600px) {
+  /*
+   * The app bar, at a width where it cannot hold everything.
+   *
+   * Measured at 412px: the car glyph (40) + gaps (32) + the status pill at its
+   * 30% cap (124) + the settings button (76) + padding (48) is 320px of the 412,
+   * leaving the brand 92px — which rendered the app's own name as "Can…" and its
+   * status line as "No m…". Every one of those three fixed pieces is 76dp or
+   * larger because the design system says so, so the brand cannot win by
+   * shrinking.
+   *
+   * So the brand stops trying to carry two things at a width where it can carry
+   * one. The map summary ("No map loaded", "12,481 routable ways · 1 region")
+   * is *already* the first card on this screen, several hundred pixels below,
+   * so hiding the duplicate buys the app's name back at full width. The status
+   * pill keeps its connectivity dot and drops the GPS-mode text, which is the
+   * part that overflowed; that mode is still reported on the navigation screen's
+   * own status line.
+   */
+  .brand-text .brand-summary { display: none; }
+  /*
+   * The brand takes the slack. `.spacer { flex: 1 }` exists to push the pill and
+   * the settings button to the right on wide screens, but it is a *second*
+   * `flex: 1` competing with the brand's own — so at 412px the two divided the
+   * surplus equally and the app's name rendered as "Cano…" even with the summary
+   * line gone. A spacer and a growing sibling cannot both want the same pixels.
+   */
+  .top-app-bar .spacer { display: none; }
+  .brand { flex: 1 1 auto; }
+  .top-app-bar { padding-left: 16px; padding-right: 16px; gap: 12px; }
+  /* The wordmark's short form. See the note on `.brand-tail` in App.tsx. */
+  .brand-tail { display: none; }
+  /*
+   * The pill becomes the coloured dot plus one word.
+   *
+   * It was trying to carry "Online" *and* "User denied Geolocation" in ~140px,
+   * which renders as `O Use…` — two half-words, neither of which says anything.
+   * The location failure is not dropped: it is not width-constrained here, it
+   * gets a full-width card on the launcher below, where it can be read and
+   * dismissed. A truncated status line is worse than a legible one elsewhere.
+   */
+  /*
+   * The pill is sized by its *content*, not by a percentage of the bar.
+   *
+   * `max-width: 34%` of a 380px content box is 129px, but the pill's content is
+   * now a dot and one word — about 90px — so 39px was being withheld from the
+   * brand for no reason, and the app's own name rendered as "Canopy …".
+   * `flex: 0 1 auto` takes exactly what the text needs and no more.
+   */
+  .status-pill { flex: 0 1 auto; max-width: none; height: 40px; padding: 0 12px; }
+  .status-pill .pill-gps { display: none; }
+}
+
+/* Below this the launcher is the only thing on screen, so the search field can
+   carry the whole width without a side margin competing with the map. */
+@media (max-width: 380px) {
+  .home-search { left: 8px; right: 8px; }
+  .quick-grid { gap: 12px; }
 }
