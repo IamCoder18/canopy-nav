@@ -25,7 +25,15 @@ function zigzag(v) {
   return v < 0 ? -2 * v - 1 : 2 * v;
 }
 
-const toNd = (deg) => Math.round(deg * 1e9);
+/**
+ * Degrees -> nanodegrees, per the OSM PBF spec: 1e-7, not 1e-9.
+ *
+ * This encoder used 1e9 to match a parser that also used 1e9, so the round trip
+ * agreed and every fixture test passed while real Geofabrik extracts decoded
+ * 100x too small. The two constants have to be written to the *spec*, not to each
+ * other, or they can both be wrong in the same direction.
+ */
+const toNd = (deg) => Math.round(deg * 1e7);
 
 class Writer {
   out = [];

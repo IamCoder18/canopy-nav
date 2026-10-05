@@ -39,9 +39,16 @@ function zigzag(v: number): number {
   return v < 0 ? -2 * v - 1 : 2 * v;
 }
 
-/** Degrees -> nanodegrees, the way a real writer does it. */
+/**
+ * Degrees -> nanodegrees, as the OSM PBF spec defines them: 1e-7.
+ *
+ * These tests previously encoded with 1e9 to match a parser that also used 1e9,
+ * so the round trip agreed with itself and the suite was green while real
+ * Geofabrik extracts decoded 100x too small. The constant is now written to the
+ * spec rather than to the other half of the round trip.
+ */
 function toNd(deg: number): number {
-  return Math.round(deg * 1e9);
+  return Math.round(deg * 1e7);
 }
 
 /**
@@ -327,7 +334,7 @@ function concat(parts: Uint8Array[]): Uint8Array {
  * grid — the finest precision the format can express — while ids, refs and
  * tags are compared exactly.
  */
-const atNano = (deg: number): number => Math.round(deg * 1e9) / 1e9;
+const atNano = (deg: number): number => Math.round(deg * 1e7) / 1e7;
 
 /** Order-independent view of parse output, to compare against the XML path. */
 function shape(nodes: Map<number, RawNode>, ways: RawWay[]) {

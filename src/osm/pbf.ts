@@ -263,10 +263,19 @@ function parseNode(r: Reader, st: StringTable, out: ParseOutput): void {
       default: r.skipField(wire); break; // info / version / future fields
     }
   }
-  // Divide by 1e9 rather than multiplying by 1e-9: 1e9 is exactly representable,
-  // so the quotient is correctly rounded to the same double the XML parser
-  // gets from `+"51.5074"` — the two parsers stay bit-for-bit comparable.
-  const node: TaggedNode = { id, lat: lat / 1e9, lon: lon / 1e9 };
+  // OSM PBF stores coordinates as **nanodegrees**: 1e-7 degrees, not 1e-9.
+  //
+  // This was wrong for a long time and nothing caught it, because `tools/osm2pbf.mjs`
+  // -- the encoder that builds the fixtures -- divided by the same 1e9, so the
+  // round trip was self-consistent and every test passed. A real Geofabrik
+  // extract, which uses the spec's 1e7, decoded 100x too small: Andorra's
+  // 42.42 N arrived as 0.4242, putting the whole country in the Gulf of Guinea
+  // and making every cross-region distance and every route wrong.
+  //
+  // Divided rather than multiplied by 1e-7: both powers of ten are exactly
+  // representable, and division by 1e7 is the form the spec's integer-to-degrees
+  // step is usually written in.
+  const node: TaggedNode = { id, lat: lat / 1e7, lon: lon / 1e7 };
   const tags = readTags(keys, vals, st);
   if (tags) node.tags = tags;
   out.nodes.set(id, node);
@@ -308,7 +317,7 @@ function parseDenseNodes(r: Reader, st: StringTable, out: ParseOutput): void {
 
   const kv = kvBuf ? new Reader(kvBuf) : null;
   for (let i = 0; i < n; i++) {
-    const node: TaggedNode = { id: ids[i]!, lat: lats[i]! / 1e9, lon: lons[i]! / 1e9 };
+    const node: TaggedNode = { id: ids[i]!, lat: lats[i]! / 1e7, lon: lons[i]! / 1e7 };
     if (kv) {
       let tags: Record<string, string> | null = null;
       for (;;) {
