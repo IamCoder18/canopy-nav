@@ -1163,15 +1163,28 @@ function HomeScreen(p: HomeProps) {
         </div>
 
         {p.route && (
-          <button className="continue-card" onClick={p.onContinue}>
-            <div className="continue-left">
-              <div style={T.body3m}>Continue navigation</div>
-              <div style={{ ...T.sub3, color: ink.secondary }}>
-                {p.route.summary ? `${formatDuration(p.route.summary.time)} · ${formatDistance(p.route.summary.length, 'metric')}` : ''}
+          // A row of two, not a single button: "Continue" navigates, "Clear"
+          // discards. Wrapping a button inside a button is invalid, and the
+          // alternative — clearing elsewhere — meant a destination, once set,
+          // could never be dropped for the life of the session.
+          <div className="continue-row">
+            <button className="continue-card" onClick={p.onContinue}>
+              <div className="continue-left">
+                <div style={T.body3m}>Continue navigation</div>
+                <div style={{ ...T.sub3, color: ink.secondary }}>
+                  {p.route.summary ? `${formatDuration(p.route.summary.time)} · ${formatDistance(p.route.summary.length, 'metric')}` : ''}
+                </div>
               </div>
-            </div>
-            <IconChevronRight size={ICON.primary} />
-          </button>
+              <IconChevronRight size={ICON.primary} />
+            </button>
+            <button
+              className="secondary-btn"
+              onClick={p.onClear}
+              aria-label="Clear the current route and destination"
+            >
+              Clear route
+            </button>
+          </div>
         )}
 
         {p.progress && <ProgressCard progress={p.progress} />}
@@ -1607,9 +1620,17 @@ function PreviewCard(props: {
   );
 }
 
-function PreviewRow({ label, value }: { label: string; value: string; icon?: React.ReactNode }) {
+/**
+ * A label/value row on the preview card.
+ *
+ * `icon` was declared here and passed by a caller, but never destructured and so
+ * never rendered -- the glyph the caller paid for was silently dropped. Now it
+ * renders, and it is optional, so the rows that pass nothing are unaffected.
+ */
+function PreviewRow({ label, value, icon }: { label: string; value: string; icon?: React.ReactNode }) {
   return (
     <div className="preview-row">
+      {icon ? <span className="preview-row-icon">{icon}</span> : null}
       <span style={{ ...T.body3, color: ink.secondary }}>{label}</span>
       <span style={T.body3m}>{value}</span>
     </div>

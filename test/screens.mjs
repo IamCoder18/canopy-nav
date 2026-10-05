@@ -152,8 +152,89 @@ for (const vp of VIEWPORTS) {
     (await page.evaluate(() => document.body.innerText)).match(/[\d,]+ routable ways/)?.[0] ?? '');
   await visit('home (map loaded)', 'home-loaded');
 
+  // The nav control stack and the layers popover. These had *zero* browser
+  // coverage, which is how a `pointer-events` regression in `.nav-panel` shipped
+  // unnoticed: nothing ever opened the panel. Opening it here is the cheapest
+  // way to stop that recurring.
+  await page.click('.search-field').catch(() => {});
+  await page.waitForTimeout(500);
+  await page.fill('.inline-search input', 'Elbow');
+  await page.waitForTimeout(1200);
+  const firstHit = await page.$('.result-row');
+  if (firstHit) {
+    await firstHit.click();
+    await page.waitForTimeout(2200);
+    const start = await page.$('button.primary-btn');
+    if (start) {
+      await start.click();
+      await page.waitForTimeout(1500);
+      await visit('navigating', 'navigating');
+
+      // Open the layers panel and assert it is actually operable: reachable,
+      // sized, and clicking a row does not fall through to the map.
+      const layerBtn = await page.$('.nav-controls button:nth-child(4)');
+      if (layerBtn) {
+        await layerBtn.click();
+        await page.waitForTimeout(800);
+        const panel = await page.evaluate(() => {
+          const el = document.querySelector('.nav-panel');
+          if (!el) return { present: false };
+          const cs = getComputedStyle(el);
+          const r = el.getBoundingClientRect();
+          const row = el.querySelector('.layer-row');
+          const rs = row ? getComputedStyle(row) : null;
+          return {
+            present: true,
+            width: Math.round(r.width),
+            height: Math.round(r.height),
+            pointerEvents: cs.pointerEvents,
+            zIndex: cs.zIndex,
+            display: cs.display,
+            rows: el.querySelectorAll('.layer-row').length,
+            rowClickable: rs ? rs.pointerEvents : null,
+          };
+        });
+        check('layers panel opens', panel.present);
+        // These four are the regression: a rule split in two lost its sizing and
+        // its `pointer-events: auto`, leaving the panel click-through to the map.
+        check('layers panel is sized', (panel.width ?? 0) > 100 && (panel.height ?? 0) > 40,
+          `${panel.width}x${panel.height}`);
+        check('layers panel is clickable', panel.pointerEvents === 'auto' && panel.rowClickable === 'auto',
+          `panel ${panel.pointerEvents} / row ${panel.rowClickable}`);
+        check('layers panel is stacked above the map', Number(panel.zIndex) >= 1,
+          `z-index ${panel.zIndex}, display ${panel.display}`);
+        check('layers panel lists its options', (panel.rows ?? 0) >= 2, `${panel.rows} rows`);
+        await visit('layers panel', 'layers-panel');
+
+        // And the mute control, which claims an audio capability the app does not
+        // have — see the honesty note in STATUS.md.
+        const mute = await page.$('button[aria-label="Mute"], button[aria-label="Unmute"]');
+        check('the audio control states whether it is on', !!mute,
+          mute ? await mute.getAttribute('aria-label') : 'absent');
+        const closeBtn = await page.$('button[aria-label="Close map layers"]');
+        if (closeBtn) {
+          await closeBtn.click();
+          await page.waitForTimeout(500);
+          const closed = await page.evaluate(() => !document.querySelector('.nav-panel'));
+          check('the layers panel closes', closed);
+        }
+      }
+    }
+  }
+
+  // Back out to home for the settings and engines visits.
+  for (let i = 0; i < 5; i++) {
+    if (await page.$('button[aria-label="Settings"]')) break;
+    const exit = await page.$('button[aria-label="Exit navigation"]');
+    const back = await page.$('button[aria-label="Back"]');
+    if (exit) await exit.click();
+    else if (back) await back.click();
+    else break;
+    await page.waitForTimeout(600);
+  }
+
   // settings
-  await page.click('button[aria-label="Settings"]');
+  await page.click('button[aria-label="Settings"]').catch(() => {});
   await visit('settings', 'settings');
 
   // engines -- the longest list of labelled rows in the app, so the most likely

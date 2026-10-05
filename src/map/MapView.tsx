@@ -65,6 +65,22 @@ export function MapView(props: MapViewProps) {
   const styleMode = useRef<'tiles' | 'offline'>('tiles');
 
   /* ------------------------- initialise map ------------------------- */
+
+  /**
+   * Current map-tap handlers, held in refs.
+   *
+   * The registration effect below runs once with `[]`, so its closures would
+   * capture the *mount-time* props forever — a trap for anyone who later passes a
+   * handler, since the function arrives after mount and would never be seen. The
+   * refs keep the registration one-shot while the callbacks stay live. Declared
+   * out here rather than inside the effect: hooks called in an effect body are not
+   * hooks, and doing that crashes the whole app with a blank screen.
+   */
+  const clickRef = useRef(props.onMapClick);
+  const longPressRef = useRef(props.onMapLongPress);
+  clickRef.current = props.onMapClick;
+  longPressRef.current = props.onMapLongPress;
+
   useEffect(() => {
     if (!container.current || map.current) return;
 
@@ -84,10 +100,10 @@ export function MapView(props: MapViewProps) {
     map.current = m;
     mapRef.current = m;
 
-    m.on('click', (e) => props.onMapClick?.([e.lngLat.lng, e.lngLat.lat]));
+    m.on('click', (e) => clickRef.current?.([e.lngLat.lng, e.lngLat.lat]));
     let pressTimer: ReturnType<typeof setTimeout> | null = null;
     m.on('mousedown', (e) => {
-      pressTimer = setTimeout(() => props.onMapLongPress?.([e.lngLat.lng, e.lngLat.lat]), 550);
+      pressTimer = setTimeout(() => longPressRef.current?.([e.lngLat.lng, e.lngLat.lat]), 550);
     });
     m.on('mouseup', () => { if (pressTimer) clearTimeout(pressTimer); });
 

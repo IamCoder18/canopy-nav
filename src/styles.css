@@ -194,6 +194,15 @@ code {
 }
 .continue-left { display: flex; flex-direction: column; gap: 4px; flex: 1; }
 
+/* Continue + Clear side by side. Stacks on a phone: at 412dp the two buttons
+   cannot share a line without the "Clear route" label wrapping. */
+.continue-row { display: flex; gap: 16px; align-items: stretch; }
+.continue-row .continue-card { flex: 1; }
+.continue-row .secondary-btn { flex-shrink: 0; }
+@media (max-width: 500px) {
+  .continue-row { flex-direction: column; }
+}
+
 .hint-card, .error-card, .progress-card {
   padding: 24px;
   border-radius: 8px;
@@ -458,7 +467,19 @@ code {
 }
 .preview-dest { margin-bottom: 24px; }
 .preview-rows { display: flex; flex-direction: column; gap: 12px; margin-bottom: 32px; }
-.preview-row { display: flex; justify-content: space-between; align-items: center; }
+/* Label left, value right, and an optional leading glyph. The glyph slot was
+   styled as part of this rule's markup but had no style of its own, so a caller
+   passing an icon got nothing rendered. */
+.preview-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+}
+.preview-row-icon {
+  display: grid; place-items: center;
+  width: 40px; height: 40px;
+  flex-shrink: 0;
+  font-size: 24px;
+  color: ink.secondary;
+}
 .preview-actions { display: flex; gap: 16px; justify-content: flex-end; }
 
 .primary-btn, .secondary-btn {
