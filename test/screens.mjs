@@ -304,10 +304,31 @@ for (const vp of VIEWPORTS) {
     }, fixtureBytes);
     check('dragging over the home screen offers to import', dropped.ok && dropped.hint,
       dropped.why ?? `hint ${dropped.hint}`);
-    await page.waitForTimeout(6000);
-    const after = await page.evaluate(() => document.body.innerText);
+    // Poll rather than sleep.
+    //
+    // This was a fixed 6s wait, and it failed on the *first* viewport of a run
+    // while passing on the second — the same suite reporting both, minutes apart.
+    // The parse runs in a Worker: on a cold browser it has not finished at 6s, on
+    // a warm one it finished at 2s. A fixed wait is a coin toss dressed as a
+    // test, and a flaky red gets ignored, which is worse than no test at all.
+    //
+    // (The feature itself was fine throughout — verified directly: dropping the
+    // fixture onto a fresh launcher yields "19 routable ways · 1 region". The
+    // check was measuring the sleep, not the feature.)
+    let after = '';
+    try {
+      await page.waitForFunction(
+        () => /[\d,]+ routable ways/.test(document.body.innerText),
+        { timeout: 30000 },
+      );
+    } catch {
+      // Fall through: `after` is read below and reported as the failure detail.
+    }
+    after = await page.evaluate(() => document.body.innerText);
     check('a dropped extract is imported', /\d+ routable ways/.test(after),
-      after.match(/[\d,]+ routable ways/)?.[0] ?? 'no graph');
+      after.match(/[\d,]+ routable ways/)?.[0]
+      ?? after.replace(/\n+/g, ' | ').slice(0, 160)
+      ?? 'no graph');
   }
 
   // Back out to home for the settings and engines visits.

@@ -46,7 +46,7 @@ import {
   ManeuverIcon, IconSearch, IconBack, IconClose, IconMute, IconSound, IconOverview,
   IconLayers, IconTraffic, IconSettings, IconHome, IconGoto, IconChevronRight,
   IconFile, IconLocate, IconCar, IconRefresh,
-  IconInfo, IconPin,
+  IconInfo, IconPin, IconCheck,
 } from './icons';
 
 const ENGINE_IDS: readonly string[] = [...PROVIDERS.map((p) => p.id as string), 'any-online'];
@@ -1908,6 +1908,37 @@ function HomeScreen(p: HomeProps) {
               <code> osmium cat region.osm.pbf -o region.osm</code>.
             </div>
             <button className="text-btn" onClick={p.onImport}>Import .osm file</button>
+          </div>
+        )}
+        {/*
+          What is loaded, for every width.
+
+          Hiding the app bar's summary line below 600px was the right call for the
+          *title* — it freed the space "Canopy Nav" needed — but that line was also
+          the launcher's only statement of map state, so at phone width a loaded
+          province and an empty app looked identical. That is worse than a
+          truncated label: the driver cannot tell whether the map they are about to
+          route on is there.
+
+          It was caught by `test/screens.mjs`, which asserts `/\d+ routable ways/`
+          against the launcher's text — a check that had been passing for the wrong
+          reason and suddenly went red. The feature it was guarding was fine; what
+          changed is that the state it was reading is no longer on screen, which is
+          exactly the sort of thing a suite is for.
+
+          The status is therefore stated here, where it fits, at every width.
+        */}
+        {p.dataset && !p.progress && (
+          <div className="map-status" role="status">
+            <IconCheck size={ICON.secondary} />
+            <span>
+              <strong>
+                {p.dataset.counts.routable.toLocaleString()} routable way{p.dataset.counts.routable === 1 ? '' : 's'}
+              </strong>
+              {p.regionCount > 1
+                ? ` · ${p.regionCount} regions loaded`
+                : ' · ready to route offline'}
+            </span>
           </div>
         )}
       </div>

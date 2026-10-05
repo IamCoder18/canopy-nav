@@ -438,30 +438,49 @@ try {
         provinces: document.body.innerText.includes('Alberta') && document.body.innerText.includes('British Columbia'),
         states: document.body.innerText.includes('California'),
         downloadButtons: rows.filter((t) => /^(Download|Unavailable|Downloading)/.test(t)).length,
-        disabled: [...document.querySelectorAll('.pill-btn[disabled]')].length,
         // textContent concatenates an icon's text, so match the whole trimmed
         // string rather than a prefix.
         rows: [...document.querySelectorAll('.pill-btn')]
-          .map((b) => ({ label: b.textContent.trim(), disabled: b.disabled }))
+          .map((b) => ({
+            label: b.textContent.trim(),
+            // `aria-disabled`, not `disabled`. A `disabled` button is removed from
+            // the tab order, so the row's explanation — which is the only thing
+            // it has to say — could never be reached by a keyboard user or read
+            // aloud. The label below carries that reason, and it is only useful
+            // if the control is reachable.
+            disabled: b.getAttribute('aria-disabled') === 'true',
+            nativeDisabled: b.disabled,
+            name: b.getAttribute('aria-label') ?? '',
+            focusable: b.tabIndex >= 0,
+          }))
           .filter((r) => r.label === 'Download' || r.label === 'Unavailable'
                       || r.label === 'Downloading…'),
       };
     });
+    // The label and the affordance have to agree, whatever the network is doing.
     catalogue.consistent = catalogue.rows.every(
       (r) => (r.label === 'Unavailable') === r.disabled);
+    catalogue.allFocusable = catalogue.rows.every((r) => r.focusable && !r.nativeDisabled);
+    catalogue.allExplain = catalogue.rows
+      .filter((r) => r.disabled)
+      .every((r) => r.name.length > r.label.length);
     catalogue.detail = catalogue.rows
       .filter((r) => r.label === 'Unavailable' || r.disabled)
-      .slice(0, 3).map((r) => `${r.label}${r.disabled ? '/disabled' : '/enabled'}`)
+      .slice(0, 3).map((r) => `${r.label}/${r.disabled ? 'aria-disabled' : 'enabled'}`)
       .join(', ') || 'all downloadable';
     check('catalogue lists Canadian provinces', catalogue.provinces);
     check('catalogue lists US states', catalogue.states);
     check('every catalogue row has a download control', catalogue.downloadButtons >= 16,
       `${catalogue.downloadButtons} controls`);
-    // A row labelled "Unavailable" must be disabled, and a downloadable row must
-    // not be -- the label and the affordance have to agree, whatever the network
+    // A row labelled "Unavailable" must not be activatable, and a downloadable row
+    // must be -- the label and the affordance have to agree, whatever the network
     // happens to be doing.
-    check('unavailable rows are disabled and available rows are not', catalogue.consistent,
+    check('unavailable rows are inert and available rows are not', catalogue.consistent,
       catalogue.detail);
+    // And the reason must be reachable: an inert row is useless if the sentence
+    // explaining why cannot be read.
+    check('unavailable rows stay focusable and carry their reason', catalogue.allFocusable && catalogue.allExplain,
+      `${catalogue.rows.filter((r) => r.disabled).length} inert rows, all focusable: ${catalogue.allFocusable}, all explained: ${catalogue.allExplain}`);
     await page.screenshot({ path: join(SHOTS, '8-regions-offline.png') });
   }
 

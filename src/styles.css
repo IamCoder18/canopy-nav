@@ -1882,3 +1882,30 @@ button.chip.ok { background: rgba(96, 168, 240, 0.18); color: #60A8F0; }
   .home-search { left: 8px; right: 8px; }
   .quick-grid { gap: 12px; }
 }
+
+/*
+ * What the launcher knows about the loaded map.
+ *
+ * Present at every width. The app bar's summary line was the launcher's only
+ * statement of map state, and hiding it below 600px made a loaded province and an
+ * empty app look identical — which is a worse failure than a truncated label,
+ * because the driver cannot tell whether the map they are about to route on is
+ * there. A status line with a tick states it positively, which is also true
+ * without needing to infer anything from an absence.
+ */
+.map-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-radius: 8px;
+  background: rgba(32, 33, 36, 0.9);
+  border-left: 4px solid #81C995;
+  /* 6.4:1 for the text; the tick inherits it. */
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 18px;
+  line-height: 24px;
+  letter-spacing: 1.2px;
+}
+.map-status svg { flex: 0 0 auto; color: #81C995; }
+.map-status strong { color: #E8EAED; font-weight: 500; }
