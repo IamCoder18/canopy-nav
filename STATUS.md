@@ -5,7 +5,7 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v0.11.2 — CI and Release both green, APK attached. Requirement
+**Latest release:** v0.11.3 (APK attached); main is ahead with §3.11.1 and §4.6–4.8. Requirement
 #10 is corrected from "Done" to "Not done" in this revision — see §3.5.2.
 
 ---
@@ -49,7 +49,7 @@ stands. **Bold** = fully working and verified.
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
 | 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 527 unit tests across 19 files, plus 2 browser suites | `test/` |
-| 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (35 checks each, 105 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
+| 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what two 6-hour budgets covered, including what they did not | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
 | 21 | Update STATUS.md continuously | **This document** | — |
@@ -63,8 +63,8 @@ stands. **Bold** = fully working and verified.
 | Types | `npx tsc --noEmit` | clean |
 | Unit tests | `npm test` | **527 passing**, 19 files |
 | End-to-end | `npm run e2e` | **39 checks** against the built bundle |
-| Screen coverage | `node test/screens.mjs` | **35 checks × 3 viewports = 105** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
-| Release | v0.11.2 tag | **CI green, Release green**, APK attached (`canopy-nav-v0.11.2.apk`) |
+| Screen coverage | `node test/screens.mjs` | **50 checks × 3 viewports = 150** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
+| Release | v0.11.3 tag | **CI green, Release green**, APK attached |
 | APK | `npm run apk` | debug APK, `com.canopy.nav`, minSdk 23, targetSdk 35 |
 | Device | Android 14 emulator, API 34, 2340×1080 | installs, runs, **zero console output**, real GPS confirmed |
 
@@ -77,8 +77,9 @@ number written down once and never re-read.
 - The screen-coverage figure was recorded as "29 checks × 3 = 87", which no
   configuration could produce. `screens.mjs` calls `visit()` 11 times per
   viewport, and each visit emits 3 checks, plus 2 standalone ones: 35 per
-  viewport, 105 on the all-pass path.
-- **The screen suite was running at 42 checks, not 105**, for a month of
+  viewport, 105 on the all-pass path at the time; it now runs 50 per viewport, 150
+  in total, after the navigation controls gained coverage (§4.8).
+- **The screen suite was running at 42 checks, not 105**, across a month of
   commits, because of a regression described in §9. It reported "all checks
   passed" the entire time. This is the same failure mode as §3.16's red CI runs:
   a green result nobody re-derived is not a green result.
@@ -539,6 +540,52 @@ caught by the tests:
   caller reasoning about when a reroute is allowed. Exported as
   `CONFIRM_WINDOW_MS`.
 
+### 3.11.1 The frozen-position loop, and three banner defects
+
+**What.** A stuck GPS fix rerouted every 30 seconds, forever. Found by an audit,
+not by a test — the tests were all green while it was happening.
+
+**How.** `watchPosition` keeps its last value when a signal drops (tunnel,
+revoked permission, cold GNSS), and the error callback never invalidated it. The
+reroute effect fed that frozen position to the policy as though it were live, so
+the deviation from the line never changed, never cleared, and re-confirmed after
+every settle window. **Measured before the fix: 20 requests in ten minutes,
+exactly 30 s apart, with `failures` pinned at zero** — because every attempt
+*succeeded* and reset the counter. Neither the busy latch nor the backoff could
+help; both guard against repeated *failure*, and this was repeated success.
+
+Closed at two levels:
+
+1. `LocationState.stale` is a first-class signal, set when no fix has arrived for
+   20 s. The reroute effect refuses to act on a stale position.
+2. `madeProgress` requires a candidate reroute to actually move the driver nearer
+   the destination. A reroute that does not is evidence of a stale fix, not of a
+   driver who is lost.
+
+The second guard is deliberately *evidence-based* rather than time-based, which is
+what makes it survive a freeze of any duration: it asks "has anything changed?"
+rather than "how long has it been?".
+
+**Also fixed in the same pass, all found by the same audits:**
+
+- **The maneuver banner's distance was wrong.** `distToNext` multiplied a
+  shape-index *ratio* between two maneuvers — which carries no distance
+  information — by the remaining distance. The headline number therefore shrank
+  with the length of the *trip* rather than the next leg: a turn two streets away
+  read as half the remaining journey, and the imminent-turn dimming below 40 m
+  never fired at all. Now measured along the road.
+- **Offline routes showed "0 m / Continue" for the whole trip.** The offline
+  engine emits no maneuvers, so `guidance` is null and the banner read
+  `localGuidance` for exactly one field — the remaining distance — while ignoring
+  the turns it had already derived from bearing change. Since the offline engine
+  is the *default*, the largest number on the navigation screen was meaningless
+  for most users. It now falls through to the derived turn, and says "Arriving at
+  your destination" when there is none.
+- **A failure reason survived about one second.** `observeFix` rebuilds `message`
+  on every fix, so "API key required" was replaced a second later by a bare
+  "retrying in 29 s" and stayed that way for the full wait. `RerouteState.reason`
+  now holds it and the countdown folds it in.
+
 ### 3.12 Streaming the OSM parse
 
 **What.** Importing a 900 MB province no longer requires holding it in memory
@@ -792,7 +839,58 @@ full detail including engines that were never reached.
 - **Invisible nav icons** were the same *kind* of bug as above: a hardcoded
   default colour rather than one inherited from context.
 
-### 4.6 Found by an audit of things that were not working
+### 4.4 Device-only
+
+Both found by booting an Android 14 emulator and installing the APK — neither was
+reachable from browser testing.
+
+- **Geolocation was broken on device** (`Geolocation.then() is not implemented on
+  android`). See §3.10.
+- **System bars overlapped the app bar.** Android 15 draws edge-to-edge and the
+  WebView reports no safe-area insets, so `env()` stayed 0. The activity is now
+  immersive — which is what Android Auto does anyway.
+
+  *Found later, by reading the two files against each other:*
+  `capacitor.config.ts` also set `adjustMarginsForEdgeToEdge: 'force'`, which
+  contradicts the immersive activity. Forcing Capacitor to inset the WebView for
+  system bars that `applyImmersiveMode()` has just hidden means padding the app by
+  the height of chrome that is not on screen, and the config comment described the
+  margin handling as the solution — so it documented a mechanism the app does not
+  use. Now `'auto'`. This is the same shape as §3.6.1's status pill: two places
+  each believed they owned a decision, and the UI was the only thing that could
+  say which one was lying.
+
+### 4.5 Build hygiene
+
+**`npx cap sync` never prunes removed files**, so stale JS chunks were packaged
+into the APK and served at runtime — which made a fix look like it had not
+landed, and sent me chasing a "still broken" error twice. `npm run sync` now
+clears the asset directory first.
+
+### 4.6 Four controls the user could not reach
+
+Every one declared, wired to real work, and never invoked. Same class as
+`offroute.ts` (§3.11) and found by an audit of props declared-but-unread rather
+than by any failing test.
+
+- **No way to clear the route.** `HomeScreen` accepted `onClear`, bound to real
+  state-clearing work, and never called it. A destination, once set, was held for
+  the life of the session: the red pin stayed on the map and the Continue card
+  never went away. The only other clearing paths were importing a file or
+  computing a new route. Now a Clear button sits beside Continue.
+- **The preview card's Time icon never rendered.** `PreviewRow` declared an
+  optional `icon` prop, a caller passed one, and the component neither
+  destructured nor rendered it. It also had no styling, so rendering it alone
+  would not have lined up.
+- **Map taps were a guaranteed no-op.** `MapView` registers a real MapLibre click
+  handler and a 550 ms long-press timer; `App` passed neither. Wiring it exposed a
+  second defect: the registration effect runs once with `[]`, so its closures
+  capture mount-time props and any handler passed later would never be seen.
+  Fixed with refs.
+- **Dragging a file onto the home screen did nothing.** `onImportFile` was the
+  fourth dead prop in this class.
+
+### 4.7 The corrupt CSS rule and a green gate over 4 screens
 
 Four bugs, none of which any test had been in a position to catch, and three of
 which were behind a broken gate.
@@ -830,33 +928,22 @@ of them were found by auditing rather than by running anything. The `.nav-panel`
 corruption is the sharpest: it had been committed, it broke a control, and the
 screens suite had not visited that screen for a month.
 
-### 4.4 Device-only
+### 4.8 The screen suite had zero coverage of the navigation controls
 
-Both found by booting an Android 14 emulator and installing the APK — neither was
-reachable from browser testing.
+Added in the same pass as §4.7, because the reason these survived is that
+nothing ever opened the panels they live in. `test/screens.mjs` now drives the
+navigation screen, opens the layers popover, and asserts it is **sized, clickable,
+stacked above the map, populated, and closes**.
 
-- **Geolocation was broken on device** (`Geolocation.then() is not implemented on
-  android`). See §3.10.
-- **System bars overlapped the app bar.** Android 15 draws edge-to-edge and the
-  WebView reports no safe-area insets, so `env()` stayed 0. The activity is now
-  immersive — which is what Android Auto does anyway.
+Verified as a real test rather than a decorative one: deleting
+`pointer-events: auto` from `.nav-panel` — the exact shipped regression — turns
+three viewports red with "panel none / row auto".
 
-  *Found later, by reading the two files against each other:*
-  `capacitor.config.ts` also set `adjustMarginsForEdgeToEdge: 'force'`, which
-  contradicts the immersive activity. Forcing Capacitor to inset the WebView for
-  system bars that `applyImmersiveMode()` has just hidden means padding the app by
-  the height of chrome that is not on screen, and the config comment described the
-  margin handling as the solution — so it documented a mechanism the app does not
-  use. Now `'auto'`. This is the same shape as §3.6.1's status pill: two places
-  each believed they owned a decision, and the UI was the only thing that could
-  say which one was lying.
-
-### 4.5 Build hygiene
-
-**`npx cap sync` never prunes removed files**, so stale JS chunks were packaged
-into the APK and served at runtime — which made a fix look like it had not
-landed, and sent me chasing a "still broken" error twice. `npm run sync` now
-clears the asset directory first.
+A note on the process, because the mistake is the useful part: the first attempt
+to wire `onMapClick` put a `useRef` **inside** the effect body. A hook called in
+an effect is not a hook, and the app rendered a blank screen with React error
+#321. Only the screen suite noticed, because a blank home screen is exactly what
+"home renders content" checks for.
 
 ---
 
@@ -954,7 +1041,7 @@ src/
 
 test/            527 unit tests, 19 files
 test/e2e.mjs           39 browser checks, built bundle
-test/screens.mjs        35 checks x 3 viewports (105 total)
+test/screens.mjs        50 checks x 3 viewports (150 total)
 tools/osm2pbf.mjs        XML -> PBF encoder (builds the test fixtures;
                             extract slicing is done by osmium on a desktop)
 tools/serve.mjs         LAN static server for on-device manual testing
@@ -1045,7 +1132,7 @@ to JDK 21.
 
 ```bash
 npm test && npm run e2e && npm run screens
-git commit -am "..." && git tag -a v0.11.2 -m "..." && git push origin main --tags
+git commit -am "..." && git tag -a v0.11.4 -m "..." && git push origin main --tags
 ```
 
 **Then read the CI run.** Per §3.16, that is the only thing that makes "CI runs
