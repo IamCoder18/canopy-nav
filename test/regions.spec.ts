@@ -99,6 +99,58 @@ const EAST_XML = `<osm>
   <way id="11"><nd ref="2"/><nd ref="3"/><tag k="highway" v="residential"/><tag k="name" v="Main"/></way>
 </osm>`;
 
+/**
+ * A pair of extracts where stitching and merging genuinely disagree.
+ *
+ * The existing `WEST_XML`/`EAST_XML` pair above cannot tell the two apart, and
+ * the reason is worth recording, because it is the reason this bug survived: the
+ * two bboxes touch along a shared edge, so `boundaryPoint` returns the centre of
+ * their overlap — which for a straight road at lat 0 *is* the shared OSM node 2.
+ * The stitched route and the merged route are then byte-identical, so any test
+ * built on it passes whether the merge is wired in or not.
+ *
+ * So this pair is built to defeat that. The real through-road is 1–2–3, a
+ * straight run along lat 0.005. The bboxes overlap in a rectangle centred on
+ * (0.0075, 0.1025) — about 11 km north of that road — and each extract carries a
+ * `Loop` way reaching up to exactly that point. Stitching therefore hands the
+ * driver from a node on one `Loop` to a node on the other, a 4× detour through a
+ * junction that exists only as box arithmetic; the merged graph has the real
+ * through-road and takes it.
+ */
+const LOOP_WEST_XML = `<osm>
+  <node id="1" lat="0.005" lon="-0.02"/>
+  <node id="2" lat="0.005" lon="0.005"/>
+  <node id="8" lat="0.1025" lon="0.0075"/>
+  <way id="10"><nd ref="1"/><nd ref="2"/><tag k="highway" v="residential"/><tag k="name" v="Main"/></way>
+  <way id="12"><nd ref="1"/><nd ref="8"/><tag k="highway" v="residential"/><tag k="name" v="Loop"/></way>
+</osm>`;
+const LOOP_EAST_XML = `<osm>
+  <node id="2" lat="0.005" lon="0.005"/>
+  <node id="3" lat="0.005" lon="0.03"/>
+  <node id="9" lat="0.1025" lon="0.0075"/>
+  <way id="11"><nd ref="2"/><nd ref="3"/><tag k="highway" v="residential"/><tag k="name" v="Main"/></way>
+  <way id="13"><nd ref="9"/><nd ref="3"/><tag k="highway" v="residential"/><tag k="name" v="Loop"/></way>
+</osm>`;
+
+/** A library over the loop pair, with bboxes that overlap in a rectangle. */
+function loopLib(): RegionLibrary {
+  const l = new RegionLibrary();
+  const west = datasetFromXml(LOOP_WEST_XML);
+  const east = datasetFromXml(LOOP_EAST_XML);
+  addRegion(l, {
+    id: 'west', name: 'West', code: 'w', bbox: [-0.02, 0, 0.01, 0.2],
+    loadedAt: 0, bytes: 0, counts: west.counts, gazetteerSize: west.gaz.length, dataset: west,
+  });
+  addRegion(l, {
+    id: 'east', name: 'East', code: 'e', bbox: [0.005, 0.005, 0.03, 0.25],
+    loadedAt: 0, bytes: 0, counts: east.counts, gazetteerSize: east.gaz.length, dataset: east,
+  });
+  return l;
+}
+
+/** The point the old implementation would have stitched through: ~11 km off the road. */
+const STITCH_POINT: LatLng = [0.0075, 0.1025];
+
 describe('bboxContains', () => {
   const b: [number, number, number, number] = [-10, 40, 10, 50]; // [w, s, e, n]
 
@@ -413,10 +465,12 @@ describe('route', () => {
     expect(r!.result.metres).toBeGreaterThan(100);
   });
 
-  it('routes across regions and joins the legs without duplicating the seam node', () => {
+  it('routes across regions on one merged graph, not two stitched legs', () => {
     const r = lib().route([0, 0], [0.02, 0]);
     expect(r).not.toBeNull();
-    expect(r!.stitched).toBe(true);
+    // Not stitched: the two extracts share OSM node 2, so they are merged and the
+    // route is one A* over the merged graph. This used to be `true`.
+    expect(r!.stitched).toBe(false);
     expect(r!.regions).toEqual(['west', 'east']);
     expect(r!.result.geometry.map((p) => p[0])).toEqual([0, 0.01, 0.02]);
     expect(r!.result.metres).toBeGreaterThan(2000);
@@ -424,10 +478,72 @@ describe('route', () => {
     expect(r!.result.engine).toBe('osm-local');
   });
 
-  it('concatenates the per-leg steps', () => {
+  it('produces the same steps a single A* over the merged graph would', () => {
+    // The old implementation concatenated one step per leg, so a two-region
+    // route always had two. One A* over a merged graph names the roads it
+    // actually drives, which here is the single `Main` way end to end.
     const r = lib().route([0, 0], [0.02, 0]);
-    expect(r!.result.steps).toHaveLength(2);
-    expect(r!.result.steps.every((s) => s.name === 'Main')).toBe(true);
+    expect(r!.result.steps).toHaveLength(1);
+    expect(r!.result.steps[0].name).toBe('Main');
+  });
+
+  it('does not route through a point chosen by bounding-box arithmetic', () => {
+    // The actual requirement behind requirement #10, stated as a test.
+    //
+    // On the loop fixture the two bboxes overlap in a rectangle centred on
+    // (0.0075, 0.0125), ~900 m from the shared node. The old implementation
+    // handed the route over at that point, so it detoured via the `Loop` ways.
+    // The merged graph has the real through-road (1-2-3) available and takes it.
+    const r = loopLib().route([-0.02, 0.005], [0.03, 0.005]);
+    expect(r).not.toBeNull();
+    expect(r!.stitched).toBe(false);
+
+    const lons = r!.result.geometry.map((p) => p[0]);
+    // The through-road is a straight run along lat 0.005 from -0.02 to 0.03, and
+    // the merged route must stay on it.
+    expect(lons).toEqual([-0.02, 0.005, 0.03]);
+    expect(r!.result.geometry.every((p) => Math.abs(p[1] - 0.005) < 1e-9)).toBe(true);
+    // The stitch point is nowhere on the route the driver is given.
+    for (const p of r!.result.geometry) {
+      expect(Math.hypot(p[0] - STITCH_POINT[0], p[1] - STITCH_POINT[1])).toBeGreaterThan(0.09);
+    }
+  });
+
+  it('is materially shorter than the route stitching would have produced', () => {
+    // Quantified rather than asserted as a shape, because the harm was never a
+    // visible seam: both routes are continuous lines. It is the distance that is
+    // wrong — on this fixture, fourfold.
+    const merged = loopLib().route([-0.02, 0.005], [0.03, 0.005]);
+    expect(merged).not.toBeNull();
+
+    // Recompute the old answer directly, from the two regions on their own.
+    const l = loopLib();
+    const west = l.get('west')!;
+    const east = l.get('east')!;
+    const legA = l.routeIn(west, [-0.02, 0.005], STITCH_POINT);
+    const legB = l.routeIn(east, STITCH_POINT, [0.03, 0.005]);
+    expect(legA).not.toBeNull();
+    expect(legB).not.toBeNull();
+    const stitchedMetres = legA!.metres + legB!.metres;
+
+    expect(stitchedMetres).toBeGreaterThan(merged!.result.metres * 3);
+  });
+
+  it('caches the merge instead of rebuilding it per query', () => {
+    const l = loopLib();
+    const first = l.route([-0.02, 0.005], [0.03, 0.005]);
+    const second = l.route([-0.019, 0.005], [0.029, 0.005]);
+    expect(first!.result.geometry).toEqual(second!.result.geometry);
+    // Re-adding a region must invalidate the cache, or a stale merge would keep
+    // answering routes for a graph that is no longer loaded.
+    const west = l.get('west')!;
+    l.add(
+      { id: 'west', name: 'West', code: 'w', bbox: west.bbox, loadedAt: 0, bytes: 0,
+        counts: west.counts, gazetteerSize: west.gazetteerSize },
+      datasetFromXml(LOOP_WEST_XML),
+    );
+    const third = l.route([-0.02, 0.005], [0.03, 0.005]);
+    expect(third!.result.geometry).toEqual(first!.result.geometry);
   });
 
   it('returns null when one leg cannot be routed', () => {

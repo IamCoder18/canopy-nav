@@ -364,9 +364,9 @@ export function RegionsScreen(props: RegionsScreenProps) {
               {formatDistance(outcome.result.metres, props.units)} · {formatDuration(outcome.result.time)}
             </div>
             <div style={{ ...T.body3, color: ink.secondary }}>
-              {outcome.stitched
-                ? `Stitched across ${outcome.regions.length} regions`
-                : 'Single region, no stitching needed'}
+              {outcome.regions.length > 1
+                ? `Merged across ${outcome.regions.length} regions`
+                : 'Single region'}
             </div>
             <div style={{ ...T.sub2, color: ink.tertiary, margin: `${DP.P1}px 0 ${DP.P3}px` }}>
               Traversed: {outcome.regions.map((id) => regionLib.get(id)?.name ?? id).join(' → ')}

@@ -707,7 +707,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
       setFitNonce((n) => n + 1);
     } catch (e) {
       // Single-dataset routing can't span extracts. With several regions
-      // downloaded the library picks the region for each end and stitches.
+      // downloaded the library merges them and routes across the seam.
       const multi = regions.length > 1 ? regionLib.route(from, dest.pos) : null;
       if (multi) {
         const next = localToRoute(multi.result, valhallaUnits);
@@ -746,7 +746,13 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         setFitNonce((n) => n + 1);
       } else {
         setRoute(null);
-        setRouteError(e instanceof NoRouteError ? e.message : (e as Error).message);
+        // `route()` is nullable for three unrelated reasons — no region covers
+        // the pair, no path exists, or the merge did not fit in memory — and the
+        // caller cannot tell them apart from the null. Only the third is
+        // actionable, so it is the one the library records: telling a driver
+        // "no route" when the truth is "this device cannot compute this route"
+        // is how a reachable destination becomes an unreachable one.
+        setRouteError(regionLib.lastRefusal ?? (e instanceof NoRouteError ? e.message : (e as Error).message));
         resetTraffic(null);
         setScreen('preview');
         // Clear the trace: leaving the previous route's provenance on screen
@@ -759,6 +765,40 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   }, [dataset, origin, location, enginePlan, selection.allowFallback, valhallaUnits, apiKey, endpoint, regions.length, resetTraffic]);
 
   /* ------------------------- guidance model ----------------------- */
+
+  /**
+   * How far along the route the car is, in metres, monotonic.
+   *
+   * Declared *before* the guidance memos on purpose. A `useMemo` callback runs
+   * during render, so anything it closes over has to be initialised by then — a
+   * ref declared further down is in its temporal dead zone and throws
+   * "Cannot access before initialization", which the error boundary turns into a
+   * recovery card. 747 unit tests did not see it, because none of them render
+   * `App`; only the browser suite could, and it did.
+   *
+   * It is a ref rather than state because it is updated on every GPS fix (about
+   * 1 Hz) and nothing else needs to re-render from it: the readouts derive from
+   * `progressAlong`, which is state and already re-renders on the same fixes.
+   * The policy lives in `nav/progress.ts` so the three properties it guarantees
+   * are testable without React.
+   */
+  const routePos = useRef<RoutePosition>({ along: 0, remaining: 0, deviation: 0, onRoute: true });
+
+  /**
+   * Start progress over — for a new route, or when leaving navigation.
+   *
+   * The placement in metres has to be cleared *with* the fraction, not instead of
+   * it. Metres measured along the previous route would immediately clamp the new
+   * route's progress to wherever the old trip ended, and because the clamp is
+   * monotonic that is unrecoverable for the rest of the drive: the new ETA would
+   * open reading a distance belonging to a road the driver is not on, and would
+   * never come down. Resetting the fraction alone would have reintroduced
+   * exactly the bug this ref exists to remove.
+   */
+  const beginRouteProgress = (geometry: LatLng[]) => {
+    setProgressAlong(0);
+    routePos.current = startPosition(geometry);
+  };
 
   const guidance = useMemo(() => {
     if (!route || route.engine === 'osm-local') return null;
@@ -909,32 +949,6 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
    */
   const positionDrives = useRef(false);
   const rerouteState = useRef<RerouteState>(createRerouteState());
-  /**
-   * How far along the route the car is, in metres, monotonic.
-   *
-   * Held in a ref rather than state because it is updated on every GPS fix
-   * (roughly 1 Hz) and nothing else needs to re-render from it: the readouts
-   * derive from `progressAlong`, which is state and already re-renders on the
-   * same fixes. The policy lives in `nav/progress.ts` so the three properties
-   * it guarantees are testable without React.
-   */
-  const routePos = useRef<RoutePosition>({ along: 0, remaining: 0, deviation: 0, onRoute: true });
-
-  /**
-   * Start progress over — for a new route, or when leaving navigation.
-   *
-   * The placement in metres has to be cleared *with* the fraction, not instead of
-   * it. Metres measured along the previous route would immediately clamp the new
-   * route's progress to wherever the old trip ended, and because the clamp is
-   * monotonic that is unrecoverable for the rest of the drive: the new ETA would
-   * open reading a distance belonging to a road the driver is not on, and would
-   * never come down. Resetting the fraction alone would have reintroduced
-   * exactly the bug this ref exists to remove.
-   */
-  const beginRouteProgress = (geometry: LatLng[]) => {
-    setProgressAlong(0);
-    routePos.current = startPosition(geometry);
-  };
   const [rerouteNotice, setRerouteNotice] = useState<string | null>(null);
 
   /**

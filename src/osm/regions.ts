@@ -10,6 +10,8 @@
 import type { LatLng } from '../geo';
 import type { OsmDataset, RouteResult } from './engine.worker';
 import { routeOnGraph } from './engine.worker';
+import { mergeRegions, type MergeReport } from './merge';
+import { canMerge } from './mergeguard';
 
 export interface RegionMeta {
   /** Stable id, e.g. 'ca-ab'. */
@@ -181,6 +183,19 @@ export type CrossRegionPlan = SinglePlan | CrossPlan;
 export class RegionLibrary {
   private regions = new Map<string, Region>();
   private listeners = new Set<() => void>();
+  /**
+   * Merged graphs, keyed by the participating region ids.
+   *
+   * A merge costs seconds and hundreds of megabytes for provinces, so it cannot
+   * be redone per query. Held on the library rather than registered as a region
+   * of its own: `add()` fires `emit()`, which would make a phantom entry appear
+   * in the region list with a Remove button that deletes nothing.
+   *
+   * Invalidated in `add` and `remove`, because a merge is only valid for the
+   * exact graphs it was built from — re-importing a region must not leave a
+   * stale merge answering routes.
+   */
+  private merges = new Map<string, MergeReport>();
 
   get all(): Region[] { return [...this.regions.values()]; }
   get count() { return this.regions.size; }
@@ -195,6 +210,9 @@ export class RegionLibrary {
   add(meta: RegionMeta, dataset: OsmDataset): Region {
     const region: Region = { ...meta, dataset };
     this.regions.set(meta.id, region);
+    // A merge holds a copy of the old graph's nodes and edges; replacing a
+    // region invalidates every merge that included it.
+    this.merges.clear();
     this.emit();
     return region;
   }
@@ -202,7 +220,10 @@ export class RegionLibrary {
   remove(id: string) {
     // Only notify on a real change; a no-op delete would otherwise re-render
     // every subscribed screen for nothing.
-    if (this.regions.delete(id)) this.emit();
+    if (this.regions.delete(id)) {
+      this.merges.clear();
+      this.emit();
+    }
   }
 
   get(id: string) { return this.regions.get(id); }
@@ -287,8 +308,42 @@ export class RegionLibrary {
   }
 
   /**
-   * Route across the library, stitching region legs together.
-   * Off-road gaps between regions are flagged so the UI can warn the driver.
+   * The merged graph for a set of regions, or why there isn't one.
+   *
+   * This is the only place a merge is built, so the cache and the memory guard
+   * live with it. `plan()` still decides *which* regions a query needs — that
+   * part was never the bug — but from here on the route is computed on one
+   * graph spanning all of them.
+   */
+  private merged(parts: Region[]): { report: MergeReport } | { refusal: string } {
+    // Keyed on the sorted ids, so the same pair merges once regardless of the
+    // order `plan()` happened to hand them over in.
+    const key = parts.map((r) => r.id).sort().join(' ');
+    const hit = this.merges.get(key);
+    if (hit) return { report: hit };
+
+    const verdict = canMerge(parts.map((p) => p.dataset.graph));
+    if (!verdict.ok) return { refusal: verdict.reason };
+
+    const report = mergeRegions(parts);
+    this.merges.set(key, report);
+    return { report };
+  }
+
+  /**
+   * Route across the library.
+   *
+   * Cross-region routes used to be built by routing two legs and concatenating
+   * them at a point derived from the two bounding *boxes*, each leg snapping that
+   * point to the nearest node inside its own extract. The result was a
+   * continuous line, so nothing looked broken — it was simply not the route a
+   * driver would take, because a box midpoint has no relationship to the road
+   * network. For Calgary to Vancouver it put the handover in the Rockies, at the
+   * closest point between two rectangles.
+   *
+   * Geofabrik cuts extracts from one database, so a border road carries the same
+   * OSM node ids on both sides. Merging on those ids is what makes the road
+   * continuous, and A\\* over the merged graph finds the real crossing.
    */
   route(from: LatLng, to: LatLng): { result: RouteResult; regions: string[]; stitched: boolean } | null {
     // `plan` throws when no downloaded region covers the pair. Callers expect a
@@ -306,26 +361,33 @@ export class RegionLibrary {
       return r ? { result: r, regions: [plan.region.id], stitched: false } : null;
     }
 
-    const legs: RouteResult[] = [];
-    const regions: string[] = [];
-    for (const leg of plan.legs) {
-      const r = this.routeIn(leg.region, leg.from, leg.to);
-      if (!r) return null;
-      legs.push(r);
-      regions.push(leg.region.id);
+    const parts = plan.legs.map((l) => l.region);
+    const merge = this.merged(parts);
+    // Refusing is the correct outcome here, not a degraded one. A route across a
+    // boundary that we cannot afford to merge has no honest approximation: the
+    // stitched line it would replace is wrong, and wrong-but-continuous is the
+    // worst thing to hand a driver.
+    if ('refusal' in merge) {
+      this.lastRefusal = merge.refusal;
+      return null;
     }
+    this.lastRefusal = null;
 
-    const geometry: LatLng[] = [];
-    for (const [i, l] of legs.entries()) {
-      const seg = i === 0 ? l.geometry : l.geometry.slice(1);
-      geometry.push(...seg);
-    }
-    const metres = legs.reduce((s, l) => s + l.metres, 0);
-    const time = legs.reduce((s, l) => s + l.time, 0);
-    const steps = legs.flatMap((l) => l.steps);
-
-    return { result: { geometry, metres, time, steps, engine: 'osm-local' }, regions, stitched: true };
+    const r = routeOnGraph(merge.report.graph, from, to);
+    if (!r) return null;
+    return { result: r, regions: [...plan.order], stitched: false };
   }
+
+  /**
+   * Why the last cross-region route returned nothing, if it refused.
+   *
+   * `route()` is nullable for three unrelated reasons — no region covers the
+   * pair, no path exists, or a merge did not fit — and the caller cannot tell
+   * them apart from a null. Only the third is actionable, and a driver who is
+   * told "no route" when the truth is "this device cannot compute this route"
+   * will conclude the destination is unreachable.
+   */
+  lastRefusal: string | null = null;
 }
 
 function area(b: [number, number, number, number]) {
