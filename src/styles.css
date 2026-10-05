@@ -1416,6 +1416,13 @@ code {
 
 /* The app bar is absolutely positioned, so it overlays the top of these
    scroll containers — pad past it or the first heading is hidden. */
+/*
+ * `<ol>` carries a marker and an indent the browser adds by default; the rows
+ * are cards with their own icon and text, so both are removed here rather than
+ * fought with a counter. The list semantics stay, which is the point.
+ */
+ol.search-results { list-style: none; margin: 0; padding-left: 12%; padding-right: 12%; }
+
 .search-results, .settings-body { flex: 1; overflow-y: auto; padding: calc(var(--app-bar, 96px) + var(--inset-top)) 12% calc(32px + var(--inset-bottom)); }
 
 .result-row, .provider-row {

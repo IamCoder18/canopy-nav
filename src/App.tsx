@@ -3297,7 +3297,15 @@ function StepsScreen({
         <button className="icon-btn" onClick={onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
         <h1 ref={headingRef} tabIndex={-1} className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Route steps</h1>
       </div>
-      <div className="search-results">
+      {/*
+        An ordered list, so the count and the position are reported. These rows
+        were bare `<div>`s in a `<div>`, so a screen-reader user heard an
+        unnumbered run of instructions with no way to ask "how many are left?" or
+        jump to the fourth — which is the entire way a turn list is navigated.
+        A real `<ol>`/`<li>` is used rather than `role="list"`, because it is what
+        a browser's own list-navigation keys act on.
+      */}
+      <ol className="search-results" aria-label="Turn-by-turn instructions">
         {/*
           The empty-state copy used to say "Import an .osm file or use a Valhalla
           provider" — advice for a user who had just imported a map and was
@@ -3336,7 +3344,7 @@ function StepsScreen({
           </div>
         )}
         {steps.map((s, i) => (
-          <div key={i} className="result-row">
+          <li key={i} className="result-row">
             <span className="result-icon"><ManeuverIcon kind={s.icon} size={ICON.secondary} /></span>
             <span className="result-text">
               <span style={T.body3m}>{s.title}</span>
@@ -3344,7 +3352,7 @@ function StepsScreen({
                 {s.shield ? `Exit ${s.shield} · ` : ''}{s.distanceLabel}
               </span>
             </span>
-          </div>
+          </li>
         ))}
         {/*
           * The trip's end, as a row.
@@ -3357,15 +3365,15 @@ function StepsScreen({
           * free and it is the row a driver scans for.
         */}
         {destination && steps.length > 0 && (
-          <div className="result-row arrival-row">
+          <li className="result-row arrival-row">
             <span className="result-icon"><IconPin size={ICON.secondary} /></span>
             <span className="result-text">
               <span style={T.body3m}>Arrive at {destination.label}</span>
               <span style={{ ...T.sub3, color: ink.secondary }}>Destination</span>
             </span>
-          </div>
+          </li>
         )}
-      </div>
+      </ol>
     </div>
   );
 }

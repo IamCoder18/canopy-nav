@@ -2111,22 +2111,32 @@ and string literals before matching, because several of these files quote the ol
 code in the note explaining the fix — a test that fails on a correct file trains
 people to delete the explanation.
 
-### 11.8 Still open from this pass
+### 11.8 Closed from this pass
 
-1. **No `main` landmark on the map itself.** It is the first tab stop on every
-   screen and has no accessible name. Decorative `tabIndex={-1}` would remove the
-   confusion; a composed description ("Route to X. Traffic. Offline basemap")
-   would make it useful.
-2. **The turn list has no list semantics**, so a screen reader cannot report
-   "item 3 of 24" — which is how a driver scans a turn list.
-3. **The navigation screen cannot reflow.** `overflow: hidden` on `html`/`body`
+- **The map had no accessible name and was the first tab stop on every screen**,
+  before the app bar that is visually at the top. It is a `role="img"` now, with a
+  name composed from live state — the route, the basemap's actual source, and the
+  traffic state. Those are the three facts a sighted driver gets for free and no
+  one else gets at all.
+- **The turn list had no list semantics**, so a screen reader could not report
+  "item 3 of 24" or jump to the fourth — which is the entire way a turn list is
+  navigated. It is an `<ol>` now.
+
+### 11.9 Still open from this pass
+
+1. **The navigation screen cannot reflow.** `overflow: hidden` on `html`/`body`
    and `position: fixed` on `.app` mean nothing scrolls, and every part of that
    screen is absolutely positioned. At 200% text zoom the banner and the control
-   stack overlap.
-4. **Confirming a region removal loses focus**, because the Remove button is
-   unmounted when the confirm state appears.
+   stack overlap. This needs a layout change, not a media query, and it is the
+   largest single piece of work left.
+2. **Confirming a region removal loses focus**, because the Remove button is
+   unmounted when the confirm state appears — so a keyboard user who activates it
+   cannot reach Confirm or Cancel without tabbing into a Download button, which
+   starts a 380 MB transfer.
+3. **Search results and catalogue rows are still not lists**, so the same "item 3
+   of 24" gap remains on the two screens with the most rows.
 
-None of these blocks use. All four are recorded so they are not lost.
+None of these blocks ordinary use. All three are recorded so they are not lost.
 
 ---
 

@@ -429,9 +429,38 @@ try {
   const regionTile2 = await page.$('.quick-tile:has-text("Regions")');
   if (regionTile2) {
     await regionTile2.click();
-    // The availability probe fires a HEAD per catalogue entry and follows
-    // redirects; give it time to settle rather than racing it.
-    await page.waitForTimeout(12000);
+    // Wait for the probe to settle, rather than sleeping — and poll for the
+    // *presence* of a settled state, not its absence.
+    //
+    // The probe used to be one `Promise.all` over every province and state at
+    // once, so a fixed 12s happened to be enough. It is now four at a time with a
+    // 10s deadline each, which is the right trade — the screen no longer fires
+    // dozens of parallel requests every time it opens — and the wall-clock is
+    // now "however long the slow ones take".
+    //
+    // The first version of this polled `!/Checking…/.test(innerText)`, which
+    // matched *immediately*: `RegionsScreen` is `React.lazy`, so for the first
+    // few hundred milliseconds the body contains no catalogue at all and the
+    // string is absent for the wrong reason. The suite then counted zero
+    // download controls and reported the catalogue as empty.
+    //
+    // So the condition is positive and structural: a settled number of rows whose
+    // labels are decided. Absence is not evidence that nothing is there yet.
+    try {
+      await page.waitForFunction(() => {
+        const rows = [...document.querySelectorAll('.pill-btn')]
+          .map((b) => b.textContent.trim())
+          .filter((t) => /^(Download|Unavailable|Downloading)/.test(t));
+        return rows.length >= 16;
+      },
+      // `polling: 500`, not the default animation-frame polling: with the OSM
+      // worker and MapLibre both busy, rAF ticks are irregular enough to make a
+      // 60s timeout behave unpredictably. And 120s, because with no network every
+      // one of the ~20 probes burns its full 10s deadline at 4 concurrent.
+      { timeout: 120000, polling: 500 });
+    } catch {
+      // Reported below by the row count, which is the more useful detail.
+    }
     const catalogue = await page.evaluate(() => {
       const rows = [...document.querySelectorAll('.pill-btn')].map((b) => b.textContent.trim());
       return {

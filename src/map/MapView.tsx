@@ -280,8 +280,35 @@ export function MapView(props: MapViewProps) {
    * wrapper we own, which the library has no opinion about, cannot be reordered
    * out from under us.
    */
+  /*
+   * The map, as something assistive technology can name.
+   *
+   * MapLibre's canvas is focusable — which is good, because a keyboard user can
+   * pan it — but it arrived here unnamed, so it was the *first tab stop on every
+   * screen*, before the app bar that is visually at the top, announcing an
+   * unnamed graphic. There was also no text alternative for what it displays: the
+   * route, the destination pin, the traffic tint and the maneuver dots are all
+   * conveyed visually and nowhere else.
+   *
+   * `role="img"` with a name composed from live state is the honest description
+   * of a canvas — it conveys information and is not itself operable markup. The
+   * name says what the map is *showing*, which is the information a sighted
+   * driver gets for free, so it is composed rather than written once:
+   *
+   *     Map. Route to Elbow St. Offline basemap. No traffic data.
+   *
+   * A route, the basemap's actual source, and the traffic state are the three
+   * facts a driver cannot get any other way.
+   */
+  const described = [
+    'Map',
+    props.destination ? `Route to ${props.destination.join(', ')}` : null,
+    props.useTiles ? 'Online basemap' : 'Offline basemap, drawn from your imported extract',
+    props.traffic && props.traffic.length ? 'Traffic overlay shown' : null,
+  ].filter(Boolean).join('. ');
+
   return (
-    <div className="map-host">
+    <div className="map-host" role="img" aria-label={described}>
       <div ref={container} className={props.className ?? 'map'} />
     </div>
   );
