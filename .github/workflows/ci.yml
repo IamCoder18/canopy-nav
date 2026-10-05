@@ -8,7 +8,7 @@ on:
 
 jobs:
   check:
-    name: Typecheck, test, build
+    name: Typecheck, lint, test, build
     runs-on: ubuntu-latest
 
     steps:
@@ -21,6 +21,10 @@ jobs:
 
       - run: npm ci
       - run: npm run typecheck
+      # Ratcheted at 27 warnings, all `no-explicit-any` at the MapLibre style
+      # boundary. Raising the number is a deliberate act; leaving it to drift is
+      # not, which is the same failure shape as a green result nobody re-derives.
+      - run: npm run lint
       - run: npm test
       - run: npx vite build
 

@@ -50,7 +50,6 @@ const fixture = (name: string): string =>
  */
 async function parseViaEncoder(xmlName: string): Promise<OsmDataset> {
   const xmlFile = fixture(xmlName);
-  const xml = parseOsmXml(readFileSync(xmlFile, 'utf8'));
   // A unique path per run so parallel workers cannot collide, and inside the OS
   // temp dir rather than a hardcoded one -- `/tmp/opencode/...` exists only on
   // the machine that wrote it, which is why CI failed with ENOENT.

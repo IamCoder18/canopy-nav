@@ -11,7 +11,7 @@
  * Requires `npm run build` first and the preview server running on E2E_PORT.
  */
 
-import { readFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';

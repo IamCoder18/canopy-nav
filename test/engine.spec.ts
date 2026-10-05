@@ -155,7 +155,7 @@ describe('routing (A*)', () => {
     expect(along).not.toBeNull();
     // whatever route it picks, it must not use the one-way in the forbidden
     // direction: check the geometry stays on the grid.
-    for (const [lon, lat] of along!.geometry) {
+    for (const [lon] of along!.geometry) {
       expect(lon).toBeGreaterThan(-1.41);
       expect(lon).toBeLessThan(-1.31);
     }

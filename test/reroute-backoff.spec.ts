@@ -300,7 +300,7 @@ describe('a frozen position', () => {
     // leaves 0 and `MIN_BACKOFF_MS`/`MAX_BACKOFF_MS` are never reached.
     const STUCK: LatLng = [-114.0650, 51.0461];
     let s = createRerouteState();
-    let clock = 0;
+    const clock = 0;
     let attempts = 0;
     const tenMinutes = 10 * 60 * 1_000;
 
@@ -330,7 +330,7 @@ describe('a frozen position', () => {
     const moving: LatLng[] = [
       [-114.0650, 51.0461], [-114.0651, 51.0463], [-114.0652, 51.0466],
     ];
-    let clock = 0;
+    const clock = 0;
     let attempts = 0;
     for (let t = 0; t <= 10 * 60 * 1_000; t += 1_000) {
       const fix = moving[Math.floor(t / 30_000) % moving.length];

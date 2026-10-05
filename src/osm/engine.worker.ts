@@ -291,7 +291,7 @@ export async function parseOsmXmlStream(
   for await (const chunk of chunks as AsyncIterable<string>) {
     carry += chunk;
     seen += chunk.length;
-    let cut = elementBoundary(carry);
+    const cut = elementBoundary(carry);
     if (cut > 0) {
       flush(carry.slice(0, cut), false);
       carry = carry.slice(cut);

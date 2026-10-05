@@ -111,8 +111,16 @@ export function MapView(props: MapViewProps) {
     });
     m.on('mouseup', () => { if (pressTimer) clearTimeout(pressTimer); });
 
-    return () => { m.remove(); map.current = null; mapRef.current = null; ready.current = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      // `m.remove()` detaches the map's own listeners but leaves a pending
+      // press timer armed, which would then call into refs of a component that
+      // is already gone.
+      if (pressTimer) clearTimeout(pressTimer);
+      m.remove();
+      map.current = null;
+      mapRef.current = null;
+      ready.current = false;
+    };
   }, []);
 
   /* ------------------------- swap data source ------------------------ */
@@ -123,7 +131,16 @@ export function MapView(props: MapViewProps) {
     const want: 'tiles' | 'offline' = props.useTiles ? 'tiles' : 'offline';
     if (styleMode.current === want && ready.current) return;
 
+    // Captured now, not after the await. The map instance is created once by the
+    // effect above, and that effect's cleanup nulls `map.current` before this
+    // one runs — so reading it in the cleanup would find null and skip the
+    // listener removal it exists to do.
+    const current = map.current;
+    if (!current) return;
+
     let cancelled = false;
+    /** Removers for the `once` handlers this effect has attached so far. */
+    const listeners: Array<() => void> = [];
     const boot = async () => {
       let style: StyleSpecification;
       let mode: 'tiles' | 'offline' = want;
@@ -138,8 +155,12 @@ export function MapView(props: MapViewProps) {
       } else {
         style = offlineStyle();
       }
-      if (cancelled || !map.current) return;
-      const current = map.current;
+      // `buildStyle()` is a network round-trip. If the user loses connectivity
+      // and regains it while it is in flight, or toggles the mode twice, two
+      // boots race and the loser used to land last: `styleMode.current` would
+      // then claim a mode the style does not match, and the guard at the top of
+      // this effect would skip the update that would have fixed it.
+      if (cancelled) return;
       styleMode.current = mode;
       ready.current = false;
       current.setStyle(style);
@@ -149,8 +170,21 @@ export function MapView(props: MapViewProps) {
       };
       current.once('styledata', onReady);
       current.once('idle', onReady);
+      listeners.push(
+        () => {
+          current.off('styledata', onReady);
+          current.off('idle', onReady);
+        },
+      );
     };
     void boot();
+
+    return () => {
+      // Without this, `cancelled` could never become true and the two `once`
+      // handlers above outlived a removed map.
+      cancelled = true;
+      for (const off of listeners.splice(0)) off();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.useTiles]);
 

@@ -100,10 +100,6 @@ function streaming(chunks: readonly Uint8Array[], init: ResponseInit = {}): Resp
   return new Response(stream as unknown as BodyInit, init);
 }
 
-function bytesResponse(data: Uint8Array, init: ResponseInit = {}): Response {
-  return new Response(data as unknown as BodyInit, init);
-}
-
 interface FetchLog {
   (input: string, init?: RequestInit): Promise<Response>;
   calls: { url: string; headers: Record<string, string> }[];

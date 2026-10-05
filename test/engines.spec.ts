@@ -42,7 +42,6 @@ const XML = `<osm>
 
 const FROM: LatLng = [0, 0];
 const TO: LatLng = [0.01, 0];
-const FAR_AWAY: LatLng = [80, 40];
 
 let fetchMock: ReturnType<typeof vi.fn>;
 

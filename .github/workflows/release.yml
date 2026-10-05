@@ -35,6 +35,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Same ratchet as CI. An APK is the artifact users install, so a lint
+      # regression should stop the release, not just the main-branch build.
+      - name: Lint
+        run: npm run lint
+
       - name: Test
         run: npm test
 
