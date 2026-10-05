@@ -731,6 +731,19 @@ button.chip:hover { background: rgba(255, 255, 255, 0.14); }
 button.chip:active { background: rgba(255, 255, 255, 0.2); }
 button.chip.ok { background: rgba(96, 168, 240, 0.18); color: #60A8F0; }
 
+/* Home screen with a file dragged over it. The highlight is inset rather than a
+   border so the layout does not shift under the pointer mid-drag. */
+.home-root { position: relative; height: 100%; }
+.home-root.dropping { box-shadow: inset 0 0 0 4px #60A8F0; }
+.drop-hint {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  background: rgba(11, 12, 16, 0.82);
+  color: #F1F3F4;
+  pointer-events: none;
+  z-index: 5;
+}
+
 /* Startup notice while cached regions are rehydrated from IndexedDB. */
 .restoring-bar {
   position: absolute;

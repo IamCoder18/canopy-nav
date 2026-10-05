@@ -222,6 +222,45 @@ for (const vp of VIEWPORTS) {
     }
   }
 
+  // Drag an extract onto the home screen. `HomeScreen.onImportFile` was declared
+  // and wired to real work and never called; this proves it is now reachable by
+  // the gesture it exists for.
+  //
+  // Reset the page rather than unwinding: at this point the app is several
+  // screens deep and the only Back control may be navigation's, which exits to
+  // home but through a path that skips the app bar this needs.
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(2200);
+  if (await page.$('.home-root')) {
+    const fixtureBytes = Array.from(
+      (await import('node:fs')).readFileSync(join(__dirname, FIXTURE)),
+    );
+    const dropped = await page.evaluate(async (bytes) => {
+      const root = document.querySelector('.home-root');
+      if (!root) return { ok: false, why: 'no .home-root' };
+      const dt = new DataTransfer();
+      dt.items.add(new File([new Uint8Array(bytes)], 'dropped.osm', { type: 'application/xml' }));
+      root.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      // `dropping` is React state, so the hint is not in the DOM until React has
+      // committed. One animation frame is not always enough; polling is.
+      const hint = await (async () => {
+        for (let i = 0; i < 20; i++) {
+          if (document.querySelector('.drop-hint')) return true;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        return false;
+      })();
+      root.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      return { ok: true, hint };
+    }, fixtureBytes);
+    check('dragging over the home screen offers to import', dropped.ok && dropped.hint,
+      dropped.why ?? `hint ${dropped.hint}`);
+    await page.waitForTimeout(6000);
+    const after = await page.evaluate(() => document.body.innerText);
+    check('a dropped extract is imported', /\d+ routable ways/.test(after),
+      after.match(/[\d,]+ routable ways/)?.[0] ?? 'no graph');
+  }
+
   // Back out to home for the settings and engines visits.
   for (let i = 0; i < 5; i++) {
     if (await page.$('button[aria-label="Settings"]')) break;

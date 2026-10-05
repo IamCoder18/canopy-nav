@@ -1105,6 +1105,14 @@ interface HomeProps {
   error: string | null;
   route: Route | null;
   onImport: () => void;
+  /**
+   * Import straight from a drop or file choice on this screen.
+   *
+   * Unused before: `ImportScreen` has its own picker, so the two routes to the
+   * same work both existed. Rather than leave a dead prop, the home screen now
+   * accepts a dropped file directly -- a drag onto the home screen is the most
+   * natural gesture available there, and it needs no navigation.
+   */
   onImportFile: (f: File) => void;
   onRegions: () => void;
   onSearch: () => void;
@@ -1115,8 +1123,27 @@ interface HomeProps {
 }
 
 function HomeScreen(p: HomeProps) {
+  // Drop an .osm straight onto the home screen. `dragover` must be prevented or
+  // the browser navigates to the file instead of handing it over.
+  const [dropping, setDropping] = useState(false);
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDropping(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) p.onImportFile(f);
+  };
+
   return (
-    <>
+    <div
+      className={`home-root ${dropping ? 'dropping' : ''}`}
+      onDragOver={(e) => { e.preventDefault(); setDropping(true); }}
+      onDragLeave={(e) => {
+        // Only clear when the pointer actually left the subtree, or moving over
+        // a child flickers the highlight off.
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropping(false);
+      }}
+      onDrop={onDrop}
+    >
       {p.restoring && (
         <div className="restoring-bar" role="status">
           <span style={T.sub3}>Restoring saved maps…</span>
@@ -1201,7 +1228,12 @@ function HomeScreen(p: HomeProps) {
           </div>
         )}
       </div>
-    </>
+      {dropping && (
+        <div className="drop-hint" role="status">
+          <div style={T.body1m}>Drop the .osm extract to import it</div>
+        </div>
+      )}
+    </div>
   );
 }
 
