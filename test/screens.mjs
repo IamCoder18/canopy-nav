@@ -44,6 +44,40 @@ const check = (name, ok, detail = '') => {
 };
 
 /**
+ * Screens this suite is supposed to look at, and proof that it did.
+ *
+ * ## Why this exists
+ *
+ * Every block below is guarded by an `if (await page.$(...))`. That is correct
+ * defensive style for a browser suite — a missing element should not throw and
+ * lose the rest of the run — and it is also how this suite spent a month
+ * reporting "all checks passed" while visiting four screens instead of eleven.
+ * The unwind was broken (this app navigates by React state, not history, so
+ * `page.goBack()` leaves the app entirely for `about:blank`), every subsequent
+ * `page.$` returned null, every guard fell through, and the only symptom was a
+ * shorter log. Restoring it immediately failed and exposed three real 412dp
+ * overflow bugs, which is the argument for taking the suite seriously.
+ *
+ * So the suite now records which screens it actually reached and fails if any
+ * expected one is missing. The count is asserted, not inferred: a suite that
+ * cannot tell you it visited less than it meant to is a suite whose green result
+ * is not evidence, and that is the same failure in a different costume.
+ *
+ * This is the fifth such guard in the project (§3.16, §4.1, §4.6, §3.5.2, §3.19)
+ * and the pattern is worth stating once: **a gate that has never been seen to
+ * fail has not been tested.**
+ */
+const visited = new Set();
+// Twelve, not ten. The first draft of this list was written from memory and
+// omitted `home-loaded` and `layers-panel`; the undeclared-screens check below
+// caught it on the first run, which is the check earning its place.
+const EXPECTED_SCREENS = [
+  'home', 'home-loaded', 'settings', 'engines', 'regions', 'import',
+  'search-empty', 'search-results', 'preview', 'navigating', 'steps',
+  'layers-panel',
+];
+
+/**
  * Structural problems that a screenshot alone would not reveal.
  * Runs in the page.
  */
@@ -112,6 +146,9 @@ for (const vp of VIEWPORTS) {
 
   /** Visit a screen, audit it, screenshot it. */
   const visit = async (label, name) => {
+    // Recorded before the checks, so a screen that renders and then throws is
+    // still counted as reached — the point is coverage, not health.
+    visited.add(name);
     await page.waitForTimeout(650);
     const text = await page.evaluate(() => document.body.innerText.trim());
     check(`${label} renders content`, text.length > 0, `${text.length} chars`);
@@ -361,6 +398,30 @@ for (const vp of VIEWPORTS) {
   }
 
   check('no uncaught page errors', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));
+
+  /**
+   * Did this run actually cover the app?
+   *
+   * The check above it can only report on screens that were reached. This one
+   * reports on the screens that were not, which is the question a reader of the
+   * log actually needs answered and the one nothing in the suite used to ask.
+   */
+  const missing = EXPECTED_SCREENS.filter((s) => !visited.has(s));
+  check(
+    `all ${EXPECTED_SCREENS.length} screens were visited`,
+    missing.length === 0,
+    missing.length ? `skipped: ${missing.join(', ')}` : `${visited.size} reached`,
+  );
+  // An unexpected extra is worth knowing about too: it means a screen was renamed
+  // or a visit was added without updating the list, and in both cases the list has
+  // stopped describing reality.
+  const unexpected = [...visited].filter((s) => !EXPECTED_SCREENS.includes(s));
+  check(
+    'no undeclared screens were visited',
+    unexpected.length === 0,
+    unexpected.length ? `undeclared: ${unexpected.join(', ')}` : '',
+  );
+
   await context.close();
 }
 
