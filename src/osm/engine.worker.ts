@@ -94,8 +94,14 @@ const RANK: Record<string, number> = {
   unclassified: 60, residential: 55, living_street: 50, service: 45, road: 45,
 };
 
-/** Lines are too thin to see below this zoom, so drop them while rendering. */
-const RENDER_MIN_ZOOM: Record<string, number> = {
+/**
+ * Minimum zoom at which each class is worth drawing.
+ *
+ * Lines thinner than a pixel are noise, and on a provincial extract every one of
+ * them is still a GeoJSON feature to build and serialise. `roadsToGeoJSON` in
+ * `osm/engine.ts` filters on this table, which is why it is exported.
+ */
+export const RENDER_MIN_ZOOM: Record<string, number> = {
   motorway: 0, trunk: 0, primary: 8, secondary: 10, tertiary: 12,
   unclassified: 13, residential: 13, living_street: 14, service: 15, road: 13, track: 15,
 };

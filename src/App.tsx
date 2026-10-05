@@ -56,7 +56,12 @@ interface RouteProvenance {
   used: ProviderId;
   fellBack: boolean;
   attempts: EngineAttempt[];
-  /** Wall-clock for the whole request, engine time included. */
+  /**
+   * Wall-clock for the whole request, engine time included.
+   *
+   * `when` is a fact about when this was recorded, not a clock the UI reads, so
+   * it is not a `Date` — a `Date` in state invites rendering it.
+   */
   totalMs: number;
   when: number;
 }
@@ -238,7 +243,7 @@ export default function App() {
   const valhallaUnits: 'km' | 'miles' = units === 'imperial' ? 'miles' : 'km';
 
   // Real GPS on device, Geolocation API in a browser, simulated as a last resort.
-  const { fix, mode: locationMode, error: locationError } = useLocation(true);
+  const { fix, mode: locationMode, error: locationError, stale: fixStale } = useLocation(true);
   const location = fix.pos;
 
   /* ------------------------ layers and traffic ------------------------ */
@@ -629,10 +634,23 @@ export default function App() {
     const active = legs[activeIdx];
     const next = legs.slice(activeIdx + 1).find((m) => m.type !== 4) ?? active;
 
+    /**
+     * Distance from where the driver is to the point the next turn happens.
+     *
+     * This has to be measured along the road, because the alternative is wrong in
+     * a way that is hard to spot: a shape-index *ratio* between two maneuvers
+     * carries no distance information, so scaling `remainingM` by it produces a
+     * number that shrinks with the remaining trip rather than with the length of
+     * the next leg. On a 20-minute route that rendered "10 min" as the distance
+     * to a turn two streets away, and the imminent-turn dimming (below 40 m)
+     * never fired at all.
+     */
     const distToNext = (() => {
-      const frac = (next.begin_shape_index - active.begin_shape_index) /
-        Math.max(1, next.end_shape_index - active.begin_shape_index);
-      return Math.max(0, remainingM - remainingM * frac);
+      // `remaining` begins at the last point already driven, which is where the
+      // driver effectively is.
+      const here = travelled.length - 1;
+      const leg = geometry.slice(here, Math.max(here, next.begin_shape_index) + 1);
+      return lineLength(leg);
     })();
 
     const steps: LegStep[] = legs.map((m) => ({
@@ -664,7 +682,17 @@ export default function App() {
     const totalM = lineLength(geometry);
     const remainingM = lineLength(geometry.slice(here));
 
-    // Derive turn instructions from bearing change at each vertex.
+    /**
+     * Derive turn instructions from bearing change at each vertex.
+     *
+     * The offline engine produces no maneuvers, so this is what the maneuver
+     * banner has to work from. It previously computed the steps and then only
+     * ever used them on the Steps screen: the banner itself showed a literal
+     * "0 m" and "Continue" for the whole trip, because it read `guidance` (null
+     * for `osm-local`) and touched `localGuidance` only for the remaining
+     * distance. Since the offline engine is the *default*, that made the largest
+     * number on the navigation screen meaningless for most users.
+     */
     const steps: LegStep[] = [];
     for (let i = 8; i < geometry.length - 8; i += 8) {
       const inB = bearingBetween(geometry[i - 8], geometry[i]);
@@ -674,13 +702,27 @@ export default function App() {
       while (turn < -180) turn += 360;
       const kind = turnKind(turn);
       if (!kind) continue;
+      const legM = lineLength(geometry.slice(i, i + 9));
       steps.push({
         icon: kind, major: Math.abs(turn) > 120,
         title: `${kind.replace('-', ' ')} onto unnamed road`,
-        distanceLabel: '', distanceMeters: 0, shapeIndex: i,
+        // A real distance, so the Steps screen is not a column of bare names.
+        distanceLabel: formatDistance(legM, units), distanceMeters: legM, shapeIndex: i,
       });
     }
-    return { snap, remainingM, totalM, steps, travelled: geometry.slice(0, here + 1), idx };
+
+    // The next turn ahead of the driver, and how far along the line to it.
+    const nextIdx = steps.findIndex((s) => s.shapeIndex > here);
+    const nextStep = nextIdx === -1 ? null : steps[nextIdx];
+    const distToNext = nextStep
+      ? lineLength(geometry.slice(here, nextStep.shapeIndex + 1))
+      : 0;
+
+    return {
+      snap, remainingM, totalM, steps, idx,
+      nextStep, distToNext,
+      travelled: geometry.slice(0, here + 1),
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route, dataset, progressAlong, location]);
 
@@ -726,13 +768,24 @@ export default function App() {
       return;
     }
     const geometry = route.geometry;
-    const { state, trigger, origin } = observeFix(
-      rerouteState.current,
-      geometry,
-      location,
-      fix.speed,
-      Date.now(),
-    );
+    // A stale position is not evidence of a deviation. `watchPosition` keeps its
+    // last value when signal drops, so without this a frozen fix re-confirms
+    // after every settle window and the app requests a new route every 30 s for
+    // as long as the driver is stuck. The reroute guard also checks progress
+    // (see `madeProgress`); this is the cheaper, earlier signal.
+    const { state, trigger, origin } = fixStale
+      ? { state: rerouteState.current, trigger: false, origin: null }
+      : observeFix(
+          rerouteState.current,
+          geometry,
+          location,
+          fix.speed,
+          Date.now(),
+          // Needed by the stale-position guard: a reroute that does not move the
+          // driver nearer the destination is evidence of a frozen fix, not of a
+          // driver who is lost, and must not issue a request.
+          destination?.pos,
+        );
     rerouteState.current = state;
     setRerouteNotice(rerouteBanner(state, geometry, units));
 
@@ -774,7 +827,9 @@ export default function App() {
       } catch (e) {
         reason = e instanceof NoRouteError ? e.message : (e as Error).message;
       } finally {
-        rerouteState.current = finishReroute(rerouteState.current, ok, Date.now(), reason);
+        rerouteState.current = finishReroute(
+          rerouteState.current, ok, Date.now(), reason, origin,
+        );
         setRerouteNotice(
           rerouteBanner(rerouteState.current, geometry, units),
         );
@@ -1249,12 +1304,31 @@ function NavOverlay(props: {
   const g = props.guidance;
   const lg = props.localGuidance;
 
-  const distToTurn = g ? g.distToNext : 0;
+  /**
+ * The banner's next turn, whichever engine produced it.
+ *
+ * The offline engine emits no maneuvers, so for an `.osm` route this comes from
+ * the bearing-derived `localGuidance` instead. Falling through to it is what
+ * stops the largest number on this screen reading "0 m" for an entire offline
+ * trip — which it did, because the offline engine is the default.
+ */
+  const distToTurn = g ? g.distToNext : (lg?.distToNext ?? 0);
   const nextManeuver = g ? g.next : null;
-  const icon: LegStep['icon'] = nextManeuver ? maneuverIcon(nextManeuver.type) : 'continue';
-  const major = nextManeuver ? isMajorManeuver(nextManeuver.type) : false;
+  const localTurn = g ? null : (lg?.nextStep ?? null);
+
+  const icon: LegStep['icon'] = nextManeuver
+    ? maneuverIcon(nextManeuver.type)
+    : localTurn
+      ? localTurn.icon
+      : 'continue';
+  const major = nextManeuver
+    ? isMajorManeuver(nextManeuver.type)
+    : (localTurn?.major ?? false);
 
   const remainingM = g?.remainingM ?? lg?.remainingM ?? 0;
+
+  /** True once the driver has passed the last turn, i.e. is arriving. */
+  const arriving = !nextManeuver && !localTurn && remainingM > 0;
   const remainingSec = remainingM > 0 ? (route.summary.time || 0) * (remainingM / Math.max(1, lineLength(route.geometry))) : 0;
 
   // Google Maps dims the instruction once you're within ~30 m.
@@ -1311,7 +1385,9 @@ function NavOverlay(props: {
             <div className="shield">{nextManeuver.sign.exit_number_elements.map((e) => e.text).join('')}</div>
           ) : null}
           <div className="maneuver-instr" style={T.body1}>
-            {nextManeuver?.instruction ?? 'Continue'}
+            {nextManeuver?.instruction
+              ?? localTurn?.title
+              ?? (arriving ? 'Arriving at your destination' : 'Continue')}
           </div>
         </div>
       </div>
@@ -1414,6 +1490,15 @@ export interface LocalGuidanceModel {
   steps: LegStep[];
   travelled: LatLng[];
   idx: number;
+  /**
+   * The turn ahead of the driver, and how far along the line to it.
+   *
+   * Present so the maneuver banner has something real to show on an offline
+   * route. `null` at the end of the route, which is correct: there is no next
+   * turn, and "arriving" is what the banner should say.
+   */
+  nextStep: LegStep | null;
+  distToNext: number;
 }
 
 /* ----------------------------- NavPanel ---------------------------- */

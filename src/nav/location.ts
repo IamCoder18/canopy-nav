@@ -30,10 +30,27 @@ export interface LocationState {
   fix: Fix;
   mode: LocationMode;
   error: string | null;
+  /**
+   * No position has arrived for `STALE_AFTER_MS`.
+   *
+   * Distinct from `error`: the watch is still open and nothing has gone wrong as
+   * far as the API is concerned, but the fix in hand is not current. Acting on it
+   * as though it were is how a frozen position turns into a reroute every 30 s.
+   */
+  stale: boolean;
 }
 
 /** Somewhere recognisable while there is no real fix. */
 const FALLBACK: [number, number] = [-114.0719, 51.0447]; // Calgary, AB
+
+/**
+ * Age at which a fix is treated as not current.
+ *
+ * Comfortably longer than the app's 1 s fallback tick and the 6 s confirmation
+ * window, so a fix that is merely infrequent on a head unit is not flagged, and
+ * short enough to catch a genuine loss of signal promptly.
+ */
+export const STALE_AFTER_MS = 20_000;
 
 function simulatedFix(): Fix {
   return { pos: FALLBACK, speed: 0, heading: 0, accuracy: 12, ts: Date.now() };
@@ -91,11 +108,14 @@ export function useLocation(enabled = true): LocationState {
     fix: simulatedFix(),
     mode: 'simulated',
     error: null,
+    stale: false,
   });
   const onFix = useRef<(f: Fix) => void>(() => {});
   const onError = useRef<(e: string) => void>(() => {});
 
-  onFix.current = (f) => setState((s) => ({ ...s, fix: f }));
+  // A fresh fix clears the error and the staleness together: the position is
+  // current again, so neither condition applies.
+  onFix.current = (f) => setState((s) => ({ ...s, fix: f, stale: false }));
   onError.current = (e) => setState((s) => ({ ...s, error: e }));
 
   useEffect(() => {
@@ -132,6 +152,35 @@ export function useLocation(enabled = true): LocationState {
       cancelled = true;
       cleanup?.();
     };
+  }, [enabled]);
+
+  /**
+   * Mark the fix stale once no new position has arrived for `STALE_AFTER_MS`.
+   *
+   * A `watchPosition` that stops delivering — a tunnel, a revoked permission,
+   * cold GNSS — leaves `pos` frozen at its last value while the app keeps
+   * consuming it as though it were live. Downstream that matters most for
+   * rerouting: the deviation from a frozen fix never changes, so it re-confirms
+   * after every settle window and the app issues a request every 30 s forever.
+   * (Measured before the reroute guard existed: 20 requests in ten minutes.)
+   *
+   * Consumers can check `stale` and refuse to act on a position they know is not
+   * current. The fix itself is deliberately *not* moved or cleared — a stale
+   * position is still the last known good one, and dropping it would put the car
+   * at the origin.
+   */
+  useEffect(() => {
+    if (!enabled) return;
+    const id = setInterval(() => {
+      setState((s) => {
+        const age = Date.now() - s.fix.ts;
+        if (s.fix.ts === 0 || age <= STALE_AFTER_MS) {
+          return s.stale ? { ...s, stale: false } : s;
+        }
+        return s.stale ? s : { ...s, stale: true };
+      });
+    }, 1_000);
+    return () => clearInterval(id);
   }, [enabled]);
 
   return state;

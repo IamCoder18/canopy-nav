@@ -29,7 +29,7 @@
  *      seconds drains the battery and will not start working on its own.
  */
 
-import { formatDistance, type LatLng } from '../geo';
+import { formatDistance, haversine, type LatLng } from '../geo';
 import {
   createTracker,
   distanceToRouteAhead,
@@ -37,20 +37,6 @@ import {
   updateTracker,
   type OffRouteTracker,
 } from './offroute';
-
-/** Quiet period after a *successful* reroute, so the new line can be driven. */
-const SETTLE_MS = 30_000;
-
-/**
- * First backoff after a failed attempt; doubles up to MAX_BACKOFF_MS.
- *
- * Not lower than SETTLE_MS on purpose. A failed attempt must never be retried
- * *sooner* than a successful one was — an earlier version used 15 s here, which
- * made the first failure shorten the wait. Retrying a dead engine faster than
- * you would settle a fresh route is exactly backwards.
- */
-const MIN_BACKOFF_MS = 30_000;
-const MAX_BACKOFF_MS = 120_000;
 
 export type RerouteStatus =
   /** On the route, nothing to do. */
@@ -71,6 +57,22 @@ export interface RerouteState {
   failures: number;
   /** When the last attempt finished, for the cooldown. */
   lastFinished: number | null;
+  /**
+   * Where the last successful reroute started.
+   *
+   * Compared against the next candidate reroute's origin by `madeProgress`, so a
+   * position that has stopped moving cannot keep triggering requests.
+   */
+  lastOrigin: LatLng | null;
+  /**
+   * Why the last attempt failed, kept separately from `message`.
+   *
+   * `message` is rebuilt on every fix, so it becomes "retrying in 29 s" a second
+   * after a failure. That deleted the one actionable line — a dead API key, no
+   * offline map — for the whole 30-to-120-second wait. Holding the reason makes
+   * it survive, and lets the banner name the cause and the countdown together.
+   */
+  reason: string | null;
   /** One line for the driver, or null when there is nothing to say. */
   message: string | null;
 }
@@ -82,11 +84,54 @@ export function createRerouteState(): RerouteState {
     busy: false,
     failures: 0,
     lastFinished: null,
+    lastOrigin: null,
+    reason: null,
     message: null,
   };
 }
 
+/** Quiet period after a *successful* reroute, so the new line can be driven. */
+export const SETTLE_MS = 30_000;
+
+/**
+ * First backoff after a failed attempt; doubles up to MAX_BACKOFF_MS.
+ *
+ * Not lower than SETTLE_MS on purpose. A failed attempt must never be retried
+ * *sooner* than a successful one was — an earlier version used 15 s here, which
+ * made the first failure shorten the wait. Retrying a dead engine faster than
+ * you would settle a fresh route is exactly backwards.
+ */
+export const MIN_BACKOFF_MS = 30_000;
+export const MAX_BACKOFF_MS = 120_000;
+
 /** How long to wait after the last attempt before trying again. */
+/**
+ * Did the last reroute actually move the driver toward the destination?
+ *
+ * This is what stops the frozen-position loop. A `watchPosition` that stops
+ * delivering — a tunnel, revoked permission, cold GNSS — leaves `location` at its
+ * last value while `App` keeps feeding it to `observeFix` as though it were live.
+ * The first reroute succeeds, the map reframes, and the same stale fix is still
+ * off the *new* line, so the confirmation window elapses again and another
+ * request goes out. Measured before this check existed: 20 requests in ten
+ * minutes, exactly 30 s apart, with `failures` stuck at zero — so neither the
+ * busy latch nor the backoff could help, because every attempt *succeeded* and
+ * reset the counter.
+ *
+ * Requiring forward progress closes it. A reroute whose start is not nearer the
+ * destination than the previous start's is not evidence the driver is lost; it is
+ * evidence the fix is stale. Measured in metres rather than shape index, because
+ * a stale fix sits at the same snapped index indefinitely.
+ */
+export function madeProgress(
+  before: LatLng,
+  after: LatLng,
+  destination: LatLng,
+  minGain = 10,
+): boolean {
+  return haversine(after, destination) <= haversine(before, destination) - minGain;
+}
+
 export function backoffMs(state: RerouteState): number {
   if (state.failures === 0) return SETTLE_MS;
   return Math.min(MAX_BACKOFF_MS, MIN_BACKOFF_MS * 2 ** (state.failures - 1));
@@ -132,6 +177,7 @@ export function observeFix(
   fix: LatLng,
   speed: number,
   now: number,
+  destination?: LatLng,
 ): ObserveResult {
   // No route, or a degenerate one: detection is meaningless.
   if (route.length < 2) {
@@ -171,16 +217,44 @@ export function observeFix(
   }
 
   // Confirmed. Decide whether it is time to act.
+  //
+  // The settle/backoff window gates the *policy*; the stale-position guard below
+  // gates the *evidence*. They are checked in that order so each has one job:
+  // the window is about not hammering an engine, the guard is about not
+  // believing a position that has stopped moving.
   const wait = backoffMs(state);
   const elapsed = state.lastFinished === null ? Infinity : now - state.lastFinished;
+
+  // A position that has not advanced since the last successful reroute cannot be
+  // evidence of a new deviation, however long ago that reroute was. Checked
+  // *before* the settle window so the driver is told the real reason immediately
+  // rather than being told "settling" for another half-minute.
+  if (state.lastOrigin && destination) {
+    const candidate = rerouteOrigin(tracker, route);
+    if (!madeProgress(state.lastOrigin, candidate, destination)) {
+      return {
+        state: {
+          ...state,
+          tracker,
+          status: 'suspect',
+          message: 'Off route — waiting for a position update',
+        },
+        trigger: false,
+        origin: null,
+      };
+    }
+  }
+
   if (elapsed < wait) {
     return {
       state: {
         ...state,
         tracker,
         status: state.failures > 0 ? 'failed' : 'suspect',
+        // Keep the cause beside the countdown: "API key required · retrying in
+        // 28 s" is actionable, where either half alone is not.
         message: state.failures > 0
-          ? `Off route — retrying in ${Math.ceil((wait - elapsed) / 1000)} s`
+          ? `Off route — ${state.reason ?? 'no new route'} · retrying in ${Math.ceil((wait - elapsed) / 1000)} s`
           : 'Off route — settling',
       },
       trigger: false,
@@ -222,6 +296,7 @@ export function finishReroute(
   ok: boolean,
   now: number,
   reason?: string,
+  origin?: LatLng,
 ): RerouteState {
   return {
     ...state,
@@ -230,9 +305,14 @@ export function finishReroute(
     status: ok ? 'idle' : 'failed',
     failures: ok ? 0 : state.failures + 1,
     lastFinished: now,
-    message: ok
-      ? null
-      : `Off route — ${reason ?? 'no new route found'}`,
+    // The reason outlives the next fix: `message` alone is rebuilt every fix and
+    // becomes a bare countdown a second later.
+    // Only a *successful* reroute advances the stale-position baseline. A failed
+    // one left the driver where they were, so there is no new origin to compare
+    // against and the next check must not fire.
+    lastOrigin: ok ? (origin ?? state.lastOrigin) : state.lastOrigin,
+    reason: ok ? null : (reason ?? 'no new route found'),
+    message: ok ? null : `Off route — ${reason ?? 'no new route found'}`,
   };
 }
 

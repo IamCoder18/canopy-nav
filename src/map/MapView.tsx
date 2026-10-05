@@ -171,7 +171,11 @@ function applyOverlays(m: MLMap, p: MapViewProps) {
 
   // Offline base layers only exist in the offline style.
   if (p.dataset) {
-    set('canopy-osm-roads', roadsToGeoJSON(p.dataset));
+    // The current zoom decides how much road is worth sending. Rebuilding every
+    // way in a provincial extract to draw sub-pixel lines is the expensive part,
+    // and the GeoJSON is rebuilt on every position update otherwise.
+    const zoom = Math.round(m.getZoom());
+    set('canopy-osm-roads', roadsToGeoJSON(p.dataset, zoom));
     set('canopy-osm-water', waterToGeoJSON(p.dataset));
     set('canopy-osm-green', greenToGeoJSON(p.dataset));
   }

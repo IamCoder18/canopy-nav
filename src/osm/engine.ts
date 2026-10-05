@@ -7,7 +7,7 @@
 
 import type { LatLng } from '../geo';
 import type { OsmDataset, GazEntry, RouteResult } from './engine.worker';
-import { searchGazetteer } from './engine.worker';
+import { searchGazetteer, RENDER_MIN_ZOOM } from './engine.worker';
 
 type Handler = (ev: MessageEvent) => void;
 
@@ -166,16 +166,31 @@ function routeSync(ds: OsmDataset, from: LatLng, to: LatLng): RouteResult | null
 
 /* ------------------------- GeoJSON for the map ------------------------- */
 
+/**
+ * Mirror the dataset's roads into GeoJSON for the offline map.
+ *
+ * `minClassZoom` drops classes whose minimum legibility zoom is above the
+ * current view, because a residential street drawn at zoom 6 is sub-pixel noise
+ * and, on a provincial extract, costs a great deal of GeoJSON to build and
+ * serialise. The thresholds live in `RENDER_MIN_ZOOM` in the worker, which is
+ * where the graph is built; this re-reads that same table so the two cannot
+ * disagree about which class is which.
+ *
+ * Default 0 means "no filtering" — the map layer supplies the current zoom.
+ */
 export function roadsToGeoJSON(ds: OsmDataset, minClassZoom = 0): GeoJSON.FeatureCollection {
   const feats: GeoJSON.Feature[] = [];
   for (const r of ds.roads) {
+    const min = RENDER_MIN_ZOOM[r.class];
+    // An unknown class is kept: new OSM tags appear, and dropping them silently
+    // would make roads vanish rather than render untidily.
+    if (min !== undefined && min > minClassZoom) continue;
     feats.push({
       type: 'Feature',
       properties: { class: r.class },
       geometry: { type: 'LineString', coordinates: r.pts },
     });
   }
-  void minClassZoom;
   return { type: 'FeatureCollection', features: feats };
 }
 
