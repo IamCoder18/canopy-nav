@@ -67,9 +67,9 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **755 passing**, 34 files |
+| Unit tests | `npm test` | **792 passing**, 36 files |
 | End-to-end | `npm run e2e` | **44 checks** against the built bundle |
-| Screen coverage | `node test/screens.mjs` | **51 checks × 3 viewports = 153** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
+| Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Bundle budget | `npm run bundle` | entry 105.8 kB / 130, initial 110.3 / 150, largest 281.6 / 300, total JS 412.3 / 460 (gzip) |
 | Offline cold start | verified in-browser | reload with the network off renders the app: 5 tiles, map sized, 0 console errors |
 | Release | v0.11.3 tag | **CI green, Release green**, APK attached |
@@ -897,7 +897,7 @@ ones. Merging two real provinces on a real phone is still unverified (§7).
 ### 3.19 Two gates for render-time failures
 
 **The problem.** This project tests pure logic under node, with no DOM. That is a
-good trade — it is why 755 tests run in four seconds — and it has a blind spot with
+good trade — it is why 792 tests run in eight seconds — and it has a blind spot with
 a demonstrated cost.
 
 A `useMemo` callback runs *during render*, so anything it closes over must already
@@ -1277,9 +1277,9 @@ src/
     persist.ts            615  IndexedDB caching of parsed datasets
     download.ts          1317  streaming downloader
 
-test/            755 unit tests, 34 files
+test/            792 unit tests, 36 files
 test/e2e.mjs           44 browser checks, built bundle
-test/screens.mjs        51 checks x 3 viewports (153 total)
+test/screens.mjs        53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        XML -> PBF encoder (builds the test fixtures;
                             extract slicing is done by osmium on a desktop)
 tools/serve.mjs         LAN static server for on-device manual testing
@@ -1661,8 +1661,8 @@ flip an 11 m gap, so the test was decorative. Both are recorded because the temp
 ship a green test that proves nothing is the strongest one in this project, and it has now
 been resisted four separate times.
 
-**Counts, re-derived rather than remembered:** 702 → 755 unit tests across 30 → 34 files;
-e2e 44; screens 51 × 3 = 153; total JS 410.4 → 412.3 kB gzip. Thirteen line counts in §6
+**Counts, re-derived rather than remembered:** 702 → 792 unit tests across 30 → 36 files;
+e2e 44; screens 53 × 3 = 159; total JS 410.4 → 412.3 kB gzip. Thirteen line counts in §6
 were stale and are now `wc -l` output. Note the direction of that last one: §2 carried the
 correct screen figure (153) while §6 and §9.2 carried 150, so the error was not always a
 number that was too large — which is the least useful thing to know about a class of
