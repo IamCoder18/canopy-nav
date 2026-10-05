@@ -116,6 +116,7 @@ const SCREEN_NAMES: Record<Screen, string> = {
  * helpful. `preventScroll` is not universally supported on older Android
  * WebViews, so the position is restored afterwards rather than trusted.
  */
+/** Exported so `RegionsScreen` can use the same rule for its own focus moves. */
 export function focusQuietly(el: HTMLElement | null | undefined) {
   if (!el) return;
   const x = window.scrollX;
@@ -3228,8 +3229,22 @@ function SearchScreen(props: {
             </div>
           )}
         </div>
+        {/*
+          A real list, for the same reason the turn list is one: these rows were
+          bare buttons, so a screen-reader user heard an unnumbered run of hits
+          and could not ask how many there were or jump to the fifth. Search is
+          the app's primary interaction and this is its result count — the one
+          number a driver reads to decide whether to keep typing.
+
+          It wraps only the rows: the cards above it are status and guidance, not
+          results, and a `<ul>` containing them would report a count that includes
+          them.
+        */}
+        {results.length > 0 && (
+        <ul className="result-list" aria-label={`${results.length} search result${results.length === 1 ? '' : 's'}`}>
         {results.map((r, i) => (
-          <button key={`${r.source}-${r.label}-${i}`} className="result-row" onClick={() => props.onPick(r.pos, r.label)}>
+          <li key={`${r.source}-${r.label}-${i}`}>
+          <button className="result-row" onClick={() => props.onPick(r.pos, r.label)}>
             <span className="result-icon"><IconGoto size={ICON.secondary} /></span>
             <span className="result-text">
               <span style={T.body3m}>{r.label}</span>
@@ -3243,7 +3258,10 @@ function SearchScreen(props: {
             <span className={`source-tag ${r.source}`}>{r.source === 'online' ? 'Online' : 'Offline'}</span>
             <IconChevronRight size={ICON.secondary} color={ink.tertiary} />
           </button>
+          </li>
         ))}
+        </ul>
+        )}
         {!q && !cat && categories.length > 0 && (
           <>
             <div className="section-head" style={{ ...T.body3m, marginTop: DP.P4 }}>Browse</div>

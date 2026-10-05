@@ -1916,3 +1916,17 @@ button.chip.ok { background: rgba(96, 168, 240, 0.18); color: #60A8F0; }
 }
 .map-status svg { flex: 0 0 auto; color: #81C995; }
 .map-status strong { color: #E8EAED; font-weight: 500; }
+
+/*
+ * A list of result rows.
+ *
+ * A `<ul>` so the result *count* is reported — the one number a driver reads to
+ * decide whether to keep typing. The markers and the default indent are removed
+ * because each row draws its own icon; the semantics stay, which is the point.
+ */
+ul.result-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+ul.result-list > li { margin: 0; }

@@ -21,6 +21,7 @@ import type { BuildProgress } from '../osm/engine';
 import type { LatLng } from '../geo';
 import { formatDistance, formatDuration } from '../geo';
 import { ink, type as T, DP, ICON } from '../theme';
+import { focusQuietly } from '../App';
 import {
   IconBack, IconClose, IconFile, IconLayers, IconCompass, IconLocate, IconChevronRight,
   IconTrash, IconWarning, IconCheck,
@@ -72,6 +73,38 @@ export function RegionsScreen(props: RegionsScreenProps) {
   const [progress, setProgress] = useState<BuildProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+
+  /**
+   * Focus follows the confirmation, and comes back from it.
+   *
+   * The confirm state *replaced* the Remove button, which unmounted the element
+   * that had focus — so it fell to `<body>` and Confirm and Cancel sat a few rows
+   * further down. A keyboard user who activated Remove then had to tab through
+   * the rest of the catalogue to reach them, and the next control they reached
+   * was a Download button, which starts a 380 MB transfer. A destructive
+   * confirmation that dumps you into an unrelated control is the worst kind.
+   *
+   * So: the Remove button stays mounted and is hidden instead, focus moves to
+   * Confirm, and cancelling returns focus to the Remove button it came from.
+   * `aria-expanded` carries the state to assistive technology without a second
+   * live region.
+   */
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const removeRef = useRef<HTMLButtonElement | null>(null);
+  /** True only on the render where the confirmation first appears. */
+  const confirmOpened = useRef(false);
+
+  useEffect(() => {
+    if (confirmRemove) {
+      if (!confirmOpened.current) {
+        confirmOpened.current = true;
+        focusQuietly(confirmRef.current);
+      }
+    } else if (confirmOpened.current) {
+      confirmOpened.current = false;
+      focusQuietly(removeRef.current);
+    }
+  }, [confirmRemove]);
   const [fromKey, setFromKey] = useState('');
   const [toKey, setToKey] = useState('');
   const [outcome, setOutcome] = useState<Outcome | null>(null);
@@ -412,18 +445,41 @@ export function RegionsScreen(props: RegionsScreenProps) {
                 >
                   <IconLocate size={ICON.secondary} />
                 </button>
-                {removing ? (
+                {/*
+                  The confirming state says what is about to happen and to what.
+                  A row that swaps "Remove" for "Confirm" alone is a dialog with
+                  no dialog: the region name is absent, and with several regions
+                  on screen the destructive action is unbounded. This is the point
+                  at which a driver should be told they are about to free a few
+                  hundred megabytes.
+
+                  It is a `role="group"` with a label rather than an
+                  `alertdialog`, and that is a correction: `alertdialog` carries an
+                  implicit `aria-live="assertive"` and implies modality, and this
+                  is an inline pair of buttons that was never modal. Claiming both
+                  told a screen reader something untrue about the interaction.
+
+                  The Remove button stays mounted throughout — see the note on
+                  `confirmRemove` above — so cancelling has something to return
+                  focus to. It is hidden with `aria-hidden` rather than
+                  unmounted, which is what put focus on `<body>`.
+                */}
+                <button
+                  ref={removeRef}
+                  className="pill-btn danger"
+                  aria-label={`Remove ${r.name}, ${formatBytes(r.bytes)}`}
+                  aria-expanded={removing}
+                  aria-hidden={removing || undefined}
+                  tabIndex={removing ? -1 : 0}
+                  onClick={() => setConfirmRemove(r.id)}
+                  hidden={removing}
+                >
+                  <IconTrash size={ICON.secondary} />
+                  Remove
+                </button>
+                {removing && (
                   <>
-                    {/*
-                      The confirming state says what is about to happen and to
-                      what. A row that swaps "Remove" for "Confirm" alone is a
-                      dialog with no dialog: a screen reader announces "Confirm,
-                      button", the region name is absent, and with several
-                      regions on screen the destructive action is unbounded.
-                      This is the point at which a driver should be told they are
-                      about to free a few hundred megabytes.
-                    */}
-                    <span className="remove-confirm" role="alertdialog" aria-label={`Confirm removing ${r.name}`}>
+                    <span className="remove-confirm" role="group" aria-label={`Confirm removing ${r.name}`}>
                       <span className="remove-question">
                         <IconWarning size={ICON.secondary} />
                         <span>Remove {r.name}?</span>
@@ -433,6 +489,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
                       </span>
                     </span>
                     <button
+                      ref={confirmRef}
                       className="pill-btn danger"
                       aria-label={`Confirm removing ${r.name}, freeing ${formatBytes(r.bytes)}`}
                       onClick={() => void doRemove(r)}
@@ -447,15 +504,6 @@ export function RegionsScreen(props: RegionsScreenProps) {
                       <IconClose size={ICON.secondary} />
                     </button>
                   </>
-                ) : (
-                  <button
-                    className="pill-btn danger"
-                    aria-label={`Remove ${r.name}, ${formatBytes(r.bytes)}`}
-                    onClick={() => setConfirmRemove(r.id)}
-                  >
-                    <IconTrash size={ICON.secondary} />
-                    Remove
-                  </button>
                 )}
               </span>
             </div>

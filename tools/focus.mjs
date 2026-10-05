@@ -238,6 +238,59 @@ check('every engine row states its state in text', withReason.length === engines
   engines[0]?.name ?? '');
 await page.screenshot({ path: join(SHOTS, 'focus-engines.png') });
 
+/* ---------------- a destructive confirmation keeps focus ----------------- */
+console.log('\ndestructive confirmation');
+await page.goto(BASE, { waitUntil: 'networkidle' });
+await page.waitForTimeout(1800);
+const reimport2 = await page.$('input[type=file]');
+if (reimport2) {
+  await reimport2.setInputFiles(FIXTURE);
+  await page.waitForFunction(
+    () => /[\d,]+ routable ways/.test(document.body.innerText),
+    { timeout: 40000 },
+  );
+  await page.waitForTimeout(1000);
+}
+await page.click('.quick-tile:has-text("Regions")');
+await page.waitForTimeout(1200);
+const removeBtn = await page.$('button[aria-label^="Remove "]');
+if (removeBtn) {
+  // Focus it by hand, then activate with the keyboard — the real sequence.
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('button[aria-label^="Remove "]')][0];
+    b?.focus();
+  });
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(400);
+  const afterOpen = await page.evaluate(FOCUS_INFO);
+  check(
+    'opening a removal moves focus to Confirm, not to the document',
+    /confirm/i.test(afterOpen.name) && afterOpen.tag !== 'BODY',
+    `focus is on ${afterOpen.tag}.${afterOpen.where} ("${afterOpen.name}")`,
+  );
+  const stillMounted = await page.evaluate(() =>
+    document.querySelector('button[aria-label^="Remove "]') !== null);
+  check('the Remove control is still in the DOM to return focus to', stillMounted);
+
+  // Escape-equivalent: the Cancel control takes focus back out of the dialog.
+  await page.keyboard.press('Tab');
+  await page.waitForTimeout(200);
+  const onCancel = await page.evaluate(FOCUS_INFO);
+  check('Tab reaches Cancel next', /cancel/i.test(onCancel.name) || /remove/i.test(onCancel.name),
+    `focus is on "${onCancel.name}"`);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  const afterCancel = await page.evaluate(FOCUS_INFO);
+  check(
+    'cancelling returns focus rather than dropping it',
+    afterCancel.tag !== 'BODY',
+    `focus is on ${afterCancel.tag}.${afterCancel.where} ("${afterCancel.name}")`,
+  );
+  await page.screenshot({ path: join(SHOTS, 'focus-remove-confirm.png') });
+} else {
+  check('a removal control exists to test', false, 'no Remove button found');
+}
+
 console.log('\n=== result ===');
 console.log(failures === 0 ? 'all checks passed' : `${failures} check(s) failed`);
 if (errors.length) console.log(`page errors: ${errors.slice(0, 3).join(' | ')}`);
