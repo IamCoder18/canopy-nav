@@ -24,9 +24,10 @@ import {
   createRerouteState, type RerouteState,
 } from './nav/reroute';
 import {
-  formatDistance, formatDuration, formatClock, haversine, lineLength,
-  snapToPolyline, type LatLng,
+  formatDistance, formatDuration, formatClock, lineLength,
+  snapToPolyline, vertexAt, type LatLng,
 } from './geo';
+import { placeOnRoute, startPosition, type RoutePosition } from './nav/progress';
 import { ink, accentNight, applyThemeTokens, type as T, DP, ICON } from './theme';
 import { useLocation, type LocationMode } from './nav/location';
 import {
@@ -229,23 +230,6 @@ function congestionSpans(route: Route): TrafficOverlay[] {
     }
   }
   return spans;
-}
-
-/**
- * Where on the route a position sits, as a vertex index.
- *
- * `snapToPolyline` reports the index of the *segment* it projected onto, which
- * is what you want for "which leg am I on" but cannot express arrival: a
- * two-point route — what the offline engine returns for a straight hop along one
- * way — has a single segment, so its index is always 0 and the destination can
- * never be reached. With no segment to interpolate, fall back to whichever end
- * of the line the car is actually nearer.
- */
-function snappedIndex(pt: LatLng, line: LatLng[], segmentIndex: number): number {
-  const last = line.length - 1;
-  if (last < 1) return 0;
-  if (last > 1) return Math.min(segmentIndex, last);
-  return haversine(pt, line[0]) <= haversine(pt, line[last]) ? 0 : last;
 }
 
 /* ------------------------------ App ------------------------------ */
@@ -717,7 +701,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         totalMs: Date.now() - t0,
         when: Date.now(),
       });
-      setProgressAlong(0);
+      beginRouteProgress(outcome.route.geometry);
       resetTraffic({ from, to: dest.pos });
       setScreen('preview');
       setFitNonce((n) => n + 1);
@@ -726,7 +710,8 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
       // downloaded the library picks the region for each end and stitches.
       const multi = regions.length > 1 ? regionLib.route(from, dest.pos) : null;
       if (multi) {
-        setRoute(localToRoute(multi.result, valhallaUnits));
+        const next = localToRoute(multi.result, valhallaUnits);
+        setRoute(next);
         setDegraded([`Region library: ${multi.regions.map((id) => regionLib.get(id)?.name ?? id).join(' → ')}`]);
         // This route came from the region library, not from any engine on the
         // plan, so it needs a trace of its own. Without this the status pill
@@ -755,7 +740,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
           totalMs: Date.now() - t0,
           when: Date.now(),
         });
-        setProgressAlong(0);
+        beginRouteProgress(next.geometry);
         resetTraffic({ from, to: dest.pos });
         setScreen('preview');
         setFitNonce((n) => n + 1);
@@ -836,11 +821,25 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
     if (geometry.length < 2) return null;
     const idx = Math.floor(progressAlong * (geometry.length - 1));
     const snap = snapToPolyline(location, geometry);
-    // Where the car actually is on the line, which is what the dimmed portion and
-    // the remaining distance both hang off.
-    const here = snappedIndex(location, geometry, snap.index);
     const totalM = lineLength(geometry);
-    const remainingM = lineLength(geometry.slice(here));
+    /**
+     * Where the car is, from the *monotonic* placement rather than a fresh
+     * projection of this fix.
+     *
+     * This used to be `snappedIndex(location, geometry, snap.index)` — the
+     * closest segment of the whole line to the current fix, with no memory of
+     * where the car already was. That is the single change behind the ETA bar
+     * flipping between `0 m` and `670 m` on a 36 m move, and behind it reading
+     * `0 m` while the driver was 900 m off course: on a route that runs beside
+     * itself the nearest point can be *behind* the car, and a fix too far off
+     * the line to place the driver snapped to wherever on the line it happened
+     * to land — sometimes the end. `routePos` is only ever advanced by fixes
+     * inside the off-route threshold, and never moves backwards; see
+     * `nav/progress.ts`, whose properties are asserted in `test/progress.spec.ts`.
+     */
+    const pos = routePos.current;
+    const here = vertexAt(geometry, pos.along);
+    const remainingM = pos.remaining;
 
     /**
      * Derive turn instructions from bearing change at each vertex.
@@ -881,6 +880,9 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
     return {
       snap, remainingM, totalM, steps, idx,
       nextStep, distToNext,
+      // The dimmed "already driven" portion is derived from the same
+      // placement as the ETA, so the drawn line and the number can no longer
+      // disagree about where the car is.
       travelled: geometry.slice(0, here + 1),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -907,6 +909,32 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
    */
   const positionDrives = useRef(false);
   const rerouteState = useRef<RerouteState>(createRerouteState());
+  /**
+   * How far along the route the car is, in metres, monotonic.
+   *
+   * Held in a ref rather than state because it is updated on every GPS fix
+   * (roughly 1 Hz) and nothing else needs to re-render from it: the readouts
+   * derive from `progressAlong`, which is state and already re-renders on the
+   * same fixes. The policy lives in `nav/progress.ts` so the three properties
+   * it guarantees are testable without React.
+   */
+  const routePos = useRef<RoutePosition>({ along: 0, remaining: 0, deviation: 0, onRoute: true });
+
+  /**
+   * Start progress over — for a new route, or when leaving navigation.
+   *
+   * The placement in metres has to be cleared *with* the fraction, not instead of
+   * it. Metres measured along the previous route would immediately clamp the new
+   * route's progress to wherever the old trip ended, and because the clamp is
+   * monotonic that is unrecoverable for the rest of the drive: the new ETA would
+   * open reading a distance belonging to a road the driver is not on, and would
+   * never come down. Resetting the fraction alone would have reintroduced
+   * exactly the bug this ref exists to remove.
+   */
+  const beginRouteProgress = (geometry: LatLng[]) => {
+    setProgressAlong(0);
+    routePos.current = startPosition(geometry);
+  };
   const [rerouteNotice, setRerouteNotice] = useState<string | null>(null);
 
   /**
@@ -981,7 +1009,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
           totalMs: 0,
           when: Date.now(),
         });
-        setProgressAlong(0);
+        beginRouteProgress(outcome.route.geometry);
         resetTraffic({ from: origin, to: destination.pos });
         setFitNonce((n) => n + 1);
       } catch (e) {
@@ -1011,7 +1039,17 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
       return;
     }
     positionDrives.current = true;
-    setProgressAlong((prev) => Math.max(prev, routeProgress(geometry, snappedIndex(location, geometry, snap.index))));
+    /**
+     * Advance the placement, then progress from *it*.
+     *
+     * Progress used to be clamped independently of the ETA, so the two could
+     * disagree: progress was monotonic but the remaining distance was not,
+     * because the ETA re-projected each fix from scratch. Deriving progress from
+     * the same monotonic placement is what makes the drawn line, the distance to
+     * the next turn and the remaining distance agree with each other.
+     */
+    routePos.current = placeOnRoute(geometry, location, routePos.current, offRouteThreshold(fix.speed));
+    setProgressAlong((prev) => Math.max(prev, routeProgress(geometry, vertexAt(geometry, routePos.current.along))));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navActive, route, location]);
 
@@ -1100,7 +1138,7 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
           trafficStale={trafficStale}
           trafficReason={trafficReason}
           onMute={() => setMuted((m) => !m)}
-          onExit={() => { setScreen('home'); setProgressAlong(0); }}
+          onExit={() => { setScreen('home'); beginRouteProgress(route.geometry); }}
           onOverview={() => setFitNonce((n) => n + 1)}
           onRecenter={() => setFocus({ center: location, zoom: 17 })}
           onSteps={() => setScreen('steps')}
@@ -1238,10 +1276,11 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
           onMapFocus={(center, zoom) => setFocus({ center, zoom })}
           onPreviewRoute={(result, to, label, via) => {
             setDestination({ pos: to, label });
-            setRoute(localToRoute(result, valhallaUnits));
+            const next = localToRoute(result, valhallaUnits);
+            setRoute(next);
             setRouteError(null);
             setDegraded([`Region library: ${via.map((id) => regionLib.get(id)?.name ?? id).join(' → ')}`]);
-            setProgressAlong(0);
+            beginRouteProgress(next.geometry);
             resetTraffic({ from: location, to });
             setScreen('preview');
             setFitNonce((n) => n + 1);
