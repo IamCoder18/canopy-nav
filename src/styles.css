@@ -1973,4 +1973,64 @@ ul.result-list > li { margin: 0; }
  * scale and marks the document, rather than the app silently ignoring a setting
  * whose entire audience is the one AAOS's 24dp minimum type size exists for.
  * Only the layout that responds to it is outstanding.
+ *
+ * ## What does ship, and what it measures
+ *
+ * Just the banner stack's lower bound — the one collision that was actually
+ * measured. `tools/reflow.mjs` reports, with this rule in place:
+ *
+ *     banner-stack: {"overflowY":"auto","bottom":"96px","height":196}
+ *
+ * and the banner stack no longer intersects the bottom bar. A control-column
+ * override was written too, and it was *worse than not having one*: it turned the
+ * column into a row that wrapped inside its own 168px width and grew upward out
+ * of the viewport (`y=-296` in a 412px viewport). With the column left alone the
+ * only remaining intersection is 0px. So it is not here, and `.nav-controls`
+ * needs solving on its own terms rather than as an override of itself.
  */
+
+[data-textsize="large"] {
+  /* The design system's own short-screen rail. A fixed 96px app bar cannot hold
+     two lines of text at 200% — measured, the ETA bar's own text spilled out of
+     it — so it becomes a floor and its content decides. */
+  --app-bar: 76px;
+}
+
+[data-textsize="large"] .eta-bar {
+  height: auto;
+  min-height: 76px;
+  /* The ETA bar's text is nowrap so it ellipsises rather than wrapping
+     mid-number. Right at 24px, wrong at 48px: a clipped "14 m" is worse than a
+     two-line "14 / min". */
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+[data-textsize="large"] .eta-value,
+[data-textsize="large"] .eta-block { white-space: normal; overflow: visible; }
+
+/* A 120px arrow tile beside 48px type is mostly arrow. Shrink the tile, not the
+   type — the type is what the font setting was for. */
+[data-textsize="large"] .maneuver-banner { gap: 16px; padding: 16px 20px; }
+[data-textsize="large"] .maneuver-icon { width: 80px; height: 80px; flex: 0 0 80px; }
+[data-textsize="large"] .maneuver-icon svg { width: 60px; height: 60px; }
+
+/*
+ * The banner stack stops being a top-anchored box and becomes a bounded,
+ * scrolling one.
+ *
+ * This is the collision `tools/reflow.mjs` measures: at 200% the banner grew
+ * downward past the bottom bar, 560x20px of intersection, because the stack had
+ * no lower bound and the screen cannot scroll. Bounding it against the bottom bar
+ * and letting it scroll means the instruction is always reachable — which is the
+ * one thing that screen must not lose at any text size.
+ */
+[data-textsize="large"] .banner-stack {
+  bottom: calc(var(--navbot, 128px) + var(--inset-bottom));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 8px;
+}
+
+/* Labels wrap instead of being clipped: at 2x "Overview" is wider than the 76dp
+   button, and there is nothing to gain by hiding it. */
+[data-textsize="large"] .nav-bottom-btn span { white-space: normal; line-height: 1.1; }

@@ -103,7 +103,21 @@ function watchDevice(onFix: (f: Fix) => void, onError: (e: string) => void): () 
   }
   let cancelled = false;
 
-  navigator.geolocation.watchPosition(
+  /*
+   * The watch id is captured, so the watch can actually be stopped.
+   *
+   * `cancelled = true` only stops the *callback* firing — the platform location
+   * provider stays active, the GNSS receiver stays hot, and `watchPosition` keeps
+   * running at ~1 Hz into a closure nobody can reach, for the life of the WebView.
+   * On a car head unit that is a measurable battery drain, and it is the reason
+   * `useLocation` takes an `enabled` flag that nothing currently takes advantage
+   * of: a caller who passes `false` on non-navigation screens expects the GPS to
+   * be released, and it is not.
+   *
+   * In a browser dev session a StrictMode double-mount also opened two watches and
+   * cleaned up one.
+   */
+  const watchId = navigator.geolocation.watchPosition(
     (pos) => {
       if (cancelled) return;
       onFix({
@@ -121,7 +135,10 @@ function watchDevice(onFix: (f: Fix) => void, onError: (e: string) => void): () 
     { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
   );
 
-  return () => { cancelled = true; };
+  return () => {
+    cancelled = true;
+    navigator.geolocation.clearWatch(watchId);
+  };
 }
 
 /**

@@ -103,14 +103,63 @@ export class OsmEngine {
   private worker: Worker | null = null;
   private dataset: OsmDataset | null = null;
   private buildPromise: Promise<OsmDataset> | null = null;
-  private onProgress: ((p: BuildProgress) => void) | null = null;
+  /**
+   * `null` is a real value here, not just "no handler": `importRegionFile`
+   * passes a handler whose parameter is `BuildProgress | null`, and `null` is how
+   * the import screen learns to take its progress card down. So the type has to
+   * admit it.
+   */
+  private onProgress: ((p: BuildProgress | null) => void) | null = null;
 
   constructor() {
     this.worker = new Worker(new URL('./engine.worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = this.handle;
+    /*
+     * A worker that dies must settle the build.
+     *
+     * This logged and returned. So every failure that arrives as a worker-level
+     * error rather than as a `postMessage` left `buildPromise` pending forever:
+     *
+     *   - a throw during the worker's module initialisation,
+     *   - an OOM on a 900 MB parse, which in a Worker is an `onerror` and not a
+     *     catchable exception,
+     *   - the worker's own chunk failing to load — the one that happens most often
+     *     in practice, and the one a driver sees as a progress bar that sits at
+     *     "Reading extract, 0%" forever.
+     *
+     * `importRegionFile` awaits `engine.build(file)`, so nothing returned, so
+     * `onError` never fired, `onProgress(null)` never fired, the previous region
+     * was never restored, and the only recourse was force-quitting. An error that
+     * is caught and merely logged is not caught.
+     *
+     * `onmessageerror` is the same story for a message that cannot be
+     * *deserialised* — which is also not a catchable throw in the worker.
+     */
     this.worker.onerror = (e) => {
       console.error('OSM worker error', e);
+      this.failBuild(
+        e.message || 'The map parser stopped unexpectedly. Try importing again.',
+      );
     };
+    this.worker.onmessageerror = (e) => {
+      console.error('OSM worker message could not be read', e);
+      this.failBuild('The map parser sent a message this app could not read.');
+    };
+  }
+
+  /**
+   * Reject an in-flight build and clear its handlers, exactly once.
+   *
+   * Shared by `onerror`, `onmessageerror` and `dispose`, so all three leave the
+   * object in the same state: nothing pending, and the next `build()` starts
+   * clean rather than resolving into a caller that has long since given up.
+   */
+  private failBuild(message: string) {
+    const reject = this.rejectBuild;
+    this.resolveBuild = null;
+    this.rejectBuild = null;
+    this.onProgress?.(null);
+    reject?.(new Error(message));
   }
 
   private handle: Handler = (ev) => {
@@ -135,7 +184,7 @@ export class OsmEngine {
   get ready() { return this.dataset !== null; }
   get data() { return this.dataset; }
 
-  setProgressHandler(fn: ((p: BuildProgress) => void) | null) {
+  setProgressHandler(fn: ((p: BuildProgress | null) => void) | null) {
     this.onProgress = fn;
   }
 
@@ -253,6 +302,13 @@ export class OsmEngine {
   dispose() {
     // Terminating an already-terminated worker is harmless; calling it on one
     // that was never created is not.
+    //
+    // `terminate()` does not fire `onerror`, so without this a build in flight
+    // when the engine is disposed — which is what `importRegionFile`'s catch does
+    // on a failed import, and what replacing a region does — leaves the promise
+    // pending forever and its `await` suspended. Same symptom as the `onerror`
+    // case above, reached a different way.
+    this.failBuild('The map parser was stopped before it finished.');
     this.worker?.terminate();
     this.worker = null;
   }

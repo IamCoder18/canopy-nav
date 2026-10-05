@@ -53,7 +53,17 @@ export const DEFAULT_SELECTION: StoredSelection = { engine: 'local', fallback: '
  * a caller cannot accidentally disable validation by passing nothing.
  */
 export const DEFAULT_ENGINE_IDS: readonly string[] = [
-  'local', 'valhalla', 'simplerouting', 'custom', 'any-online',
+  // These were `'valhalla'`, `'simplerouting'` and `'custom'`, which are not any
+  // of the real ids in `nav/providers.ts` — those are `valhalla-fossgis`,
+  // `valhalla-simplerouting` and `valhalla-custom`.
+  //
+  // So this default list validated *every* saved hosted engine as unknown and
+  // `readSelection` silently rewrote it to `'local'` — a driver who chose a
+  // Valhalla engine came back to the offline one after a restart, with no message
+  // and no way to tell why. `App` passes the live `ENGINE_IDS`, which is why
+  // production was never affected; the default is the trap for the next call site,
+  // and the doc comment above it asserted the ids matched when they did not.
+  'local', 'valhalla-fossgis', 'valhalla-simplerouting', 'valhalla-custom', 'any-online',
 ];
 
 /** Minimal slice of `Storage`, so tests can pass a stub. */
@@ -169,7 +179,14 @@ export function writePlace(
   const current = readPlaces(store);
   if (!value) delete current[slot];
   else if (isFiniteLonLat(value.pos)) {
-    current[slot] = { pos: value.pos, label: value.label.slice(0, 80).trim() || slot };
+    // `|| slot` produced the bare lowercase word, so a place saved with a blank
+    // label round-tripped as "home" and the launcher tile read "home".
+    // `readPlaces` only falls back to a capitalised name when the stored label is
+    // *empty*, and "home" is not empty — so the typo survived the round trip.
+    current[slot] = {
+      pos: value.pos,
+      label: value.label.slice(0, 80).trim() || (slot === 'home' ? 'Home' : 'Work'),
+    };
   } else {
     // Refuse to store a coordinate that is not a coordinate, rather than
     // writing something that reads back as a place on the ocean.

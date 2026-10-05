@@ -753,39 +753,72 @@ export interface RouteResult {
   engine: 'osm-local';
 }
 
+/**
+ * A binary min-heap over `(node, priority)` **entries**.
+ *
+ * ## Why the priority is per-entry and not per-node
+ *
+ * This stored `p[node] = pri` in a `Float64Array` indexed by node id — one slot
+ * per node, shared by every entry for that node. A\* pushes the same node
+ * repeatedly: once with a tentative cost, again whenever a cheaper path is found.
+ *
+ *     push(X, 100)   // p[X] = 100, heap has (X, 100)
+ *     push(X,  50)   // p[X] =  50, heap has (X, 100) and (X, 50)
+ *
+ * The stale entry at 100 now *compares* as 50, because every comparison in
+ * sift-up and sift-down reads through `p[node]`. So the invariant "the array is
+ * ordered by the priority it will report" is false, `pop()` does not return the
+ * minimum, and A\*'s expansion order is no longer valid.
+ *
+ * That voided the optimality guarantee the heuristic above it is explicitly
+ * built to preserve — and the offline engine is the app's **default**, so this
+ * was the difference between a shortest path and a merely plausible one on any
+ * network where a node gets re-relaxed, which is to say on essentially all of
+ * them. Nothing detected it: a suboptimal route is still a route, still drawn,
+ * still plausible. It is wrong by a few percent and looks correct.
+ *
+ * Two parallel arrays keep each entry's own priority, which is what a heap
+ * actually needs.
+ */
 class MinHeap {
   private a: number[] = [];
-  private p: Float64Array;
-  constructor(n: number) { this.p = new Float64Array(n); }
+  /** `ap[i]` is the priority of `a[i]`, and travels with it through every swap. */
+  private ap: number[] = [];
   get size() { return this.a.length; }
   /** Priority of the next node to pop, without removing it. */
   peekCost(): number {
-    return this.a.length ? this.p[this.a[0]] : Infinity;
+    return this.a.length ? this.ap[0] : Infinity;
   }
   push(node: number, pri: number) {
-    this.p[node] = pri;
     this.a.push(node);
+    this.ap.push(pri);
     let i = this.a.length - 1;
     while (i > 0) {
       const par = (i - 1) >> 1;
-      if (this.p[this.a[par]] <= this.p[this.a[i]]) break;
-      [this.a[par], this.a[i]] = [this.a[i], this.a[par]];
+      if (this.ap[par] <= this.ap[i]) break;
+      const an = this.a[par], apn = this.ap[par];
+      this.a[par] = this.a[i]; this.ap[par] = this.ap[i];
+      this.a[i] = an; this.ap[i] = apn;
       i = par;
     }
   }
   pop(): number {
     const top = this.a[0];
-    const last = this.a.pop()!;
+    const lastNode = this.a.pop()!;
+    const lastPri = this.ap.pop()!;
     if (this.a.length) {
-      this.a[0] = last;
+      this.a[0] = lastNode;
+      this.ap[0] = lastPri;
       let i = 0;
       for (;;) {
         const l = i * 2 + 1, r = l + 1;
         let m = i;
-        if (l < this.a.length && this.p[this.a[l]] < this.p[this.a[m]]) m = l;
-        if (r < this.a.length && this.p[this.a[r]] < this.p[this.a[m]]) m = r;
+        if (l < this.a.length && this.ap[l] < this.ap[m]) m = l;
+        if (r < this.a.length && this.ap[r] < this.ap[m]) m = r;
         if (m === i) break;
-        [this.a[m], this.a[i]] = [this.a[i], this.a[m]];
+        const an = this.a[m], apn = this.ap[m];
+        this.a[m] = this.a[i]; this.ap[m] = this.ap[i];
+        this.a[i] = an; this.ap[i] = apn;
         i = m;
       }
     }
@@ -921,7 +954,9 @@ export function routeOnGraph(g: RoadGraph, from: LatLng, to: LatLng): RouteResul
   const gx = goalPt[0], gy = goalPt[1];
   const heur = (i: number) => haversineM(g.coords[i * 2], g.coords[i * 2 + 1], gx, gy) / OPT_SPEED;
 
-  const open = new MinHeap(n);
+  // The constructor took a node count and sized a per-node priority array.
+  // Priorities are per-entry now, so it takes nothing.
+  const open = new MinHeap();
   gScore[start] = 0;
   open.push(start, heur(start));
 

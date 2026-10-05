@@ -353,6 +353,24 @@ function serializeDataset(ds: OsmDataset): StoredDataset {
   };
 }
 
+/**
+ * Whether a stored `counts` is usable.
+ *
+ * Structural rather than truthy, because a partial object is the realistic case:
+ * a record interrupted mid-write has *some* of the fields. Anything short of all
+ * three finite non-negative numbers is replaced wholesale, so a reader can rely on
+ * the shape.
+ */
+function isCounts(v: unknown): v is OsmDataset['counts'] {
+  if (!v || typeof v !== 'object') return false;
+  const c = v as Record<string, unknown>;
+  for (const k of ['nodes', 'ways', 'routable'] as const) {
+    const n = c[k];
+    if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return false;
+  }
+  return true;
+}
+
 function deserializeDataset(s: StoredDataset, id: string): OsmDataset {
   const g = s?.graph;
   if (!g) throw corrupt(id, 'the stored dataset has no road graph');
@@ -381,7 +399,24 @@ function deserializeDataset(s: StoredDataset, id: string): OsmDataset {
     bbox: Array.isArray(s.bbox) && s.bbox.length === 4
       ? s.bbox
       : [180, 90, -180, -90],
-    counts: s.counts,
+    // Validated, like every sibling above — and unlike until now.
+//
+// `counts` was passed through raw, which made it the single unvalidated field in
+// a record where everything else is defensively defaulted. It is also the one
+// field read *unguarded*, by `counts.routable.toLocaleString()` on the launcher
+// and `counts.ways` on Settings, both during render.
+//
+// So a record written by an older build, or truncated by a crash mid-`put`,
+// deserialised with `counts === undefined`, and the app opened on the top-level
+// ErrorBoundary crash card — on launch, with the message naming `counts`, and no
+// Settings screen to recover from. The crash card's own reassurance that "your
+// imported maps are still saved" was true and useless.
+//
+// `toMeta` in this same file already defaults it, which is the tell: the meta
+// mirror and the dataset disagreed about whether the field was trustworthy.
+counts: isCounts(s.counts)
+      ? s.counts
+      : { nodes: 0, ways: 0, routable: 0 },
   };
 }
 

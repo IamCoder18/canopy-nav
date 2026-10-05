@@ -1018,7 +1018,31 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
       if (progressAlong >= legs[i].begin_shape_index / (geometry.length - 1)) activeIdx = i;
     }
     const active = legs[activeIdx];
-    const next = legs.slice(activeIdx + 1).find((m) => m.type !== 4) ?? active;
+    /*
+     * The next turn, falling back to the *last* leg and only then to the active
+     * one.
+     *
+     * This was `?? active`, and `active` is behind the driver. Valhalla's last
+     * maneuver before the destination is not the destination maneuver — it is the
+     * final turn onto the destination road — so on any route whose last leg is
+     * real (a river crossing, a motorway, "continue for 30 km") `find` returns
+     * `undefined`, `next` became a maneuver already taken, and:
+     *
+     *   - `Math.max(here, next.begin_shape_index)` collapsed to `here`, so `leg`
+     *     was a single point and `distToNext` was **0**;
+     *   - which made `imminent` true, dimming the instruction as if a turn were
+     *     40 m away; and
+     *   - which made the voice effect say "In 0 m, turn left onto <a road already
+     *     turned onto>", assertively, for the whole final leg.
+     *
+     * A live region fix for arrival (§10 of the audit) addressed the announcement
+     * but left this. Falling back to the last leg measures to the destination
+     * vertex, which is the honest answer: there are no more turns, there is the
+     * rest of the drive.
+     */
+    const next = legs.slice(activeIdx + 1).find((m) => m.type !== 4)
+      ?? legs[legs.length - 1]
+      ?? active;
 
     /**
      * Distance from where the driver is to the point the next turn happens.
@@ -1035,8 +1059,13 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
       // `remaining` begins at the last point already driven, which is where the
       // driver effectively is.
       const here = travelled.length - 1;
-      const leg = geometry.slice(here, Math.max(here, next.begin_shape_index) + 1);
-      return lineLength(leg);
+      // Clamped to the geometry's end: a maneuver index from a malformed response
+      // would otherwise silently measure from a point that does not exist.
+      const turn = Math.min(
+        Math.max(here, next.begin_shape_index),
+        Math.max(here, geometry.length - 1),
+      );
+      return lineLength(geometry.slice(here, turn + 1));
     })();
 
     const steps: LegStep[] = legs.map((m) => ({

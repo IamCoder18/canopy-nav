@@ -59,6 +59,39 @@ function parsed(): OsmDataset {
   return buildDataset(nodes, ways, () => {});
 }
 
+/**
+ * Reach past the module's API and rewrite a stored record in place.
+ *
+ * Needed because the defect under test is a *record* that is missing a field, and
+ * every public writer here writes a complete one. The stores are opened directly
+ * rather than through `persist.ts`, which is the point: a test that goes through
+ * the same code it is testing cannot produce malformed input for it.
+ */
+async function corruptRecord(id: string, mutate: (rec: unknown) => void) {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const req = indexedDB.open('canopy-regions', 1);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  try {
+    const existing = await new Promise<unknown>((resolve, reject) => {
+      const tx = db.transaction('regions', 'readwrite');
+      const get = tx.objectStore('regions').get(id);
+      get.onsuccess = () => resolve(get.result);
+      get.onerror = () => reject(get.error);
+    });
+    mutate(existing);
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('regions', 'readwrite');
+      tx.objectStore('regions').put(existing);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
 function metaFor(id: string, name: string, ds: OsmDataset): RegionMeta {
   return {
     id,
@@ -169,6 +202,40 @@ describe('persistence availability', () => {
 const ARRAYS = ['coords', 'osmIds', 'edgeStart', 'edgeTo', 'edgeCost', 'edgeFlags'] as const;
 
 describe('dataset round trip', () => {
+  /**
+   * A record whose `counts` did not survive.
+   *
+   * `counts` was the one field in the stored record that was not validated, and
+   * also the one field read without a guard: `counts.routable.toLocaleString()`
+   * on the launcher, during render. A record from an older build, or one
+   * truncated by a crash mid-`put`, deserialised with `counts === undefined` and
+   * the app opened on the top-level crash card — on launch, with no Settings
+   * screen to recover from.
+   *
+   * `toMeta` already defaulted it, which is the tell that the two paths disagreed
+   * about whether the field was trustworthy.
+   */
+  it('substitutes usable counts for a record missing them, rather than crashing on launch', async () => {
+    const ds = parsed();
+    const meta = metaFor('ca-ab', 'Alberta', ds);
+    await saveRegion(meta, ds);
+
+    // Corrupt the stored record the way a partial write would: reach past the
+    // module's own API and drop the field from the record on disk.
+    // `counts` lives inside the record's `dataset`, not at its root.
+    await corruptRecord('ca-ab', (rec) => {
+      const ds = (rec as { dataset?: Record<string, unknown> }).dataset;
+      if (ds) delete ds.counts;
+    });
+
+    const loaded = await loadRegion('ca-ab');
+    expect(loaded).not.toBeNull();
+    // The shape the render path depends on: three finite numbers.
+    expect(loaded!.dataset.counts).toEqual({ nodes: 0, ways: 0, routable: 0 });
+    // And the exact expression the launcher evaluates, which used to throw.
+    expect(() => loaded!.dataset.counts.routable.toLocaleString()).not.toThrow();
+  });
+
   it('restores a parsed dataset unchanged', async () => {
     const ds = parsed();
     const meta = metaFor('ca-ab', 'Alberta', ds);
