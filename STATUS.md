@@ -942,6 +942,35 @@ could not distinguish two implementations, and now this. The general form is tha
 **a green result nobody re-derives is not a green result**, and the corollary that
 matters more: a suite that has never been seen to fail has not been tested.
 
+**The audit pass that followed.** With the gates in, three browser audits drove the
+app at 412×915 / 892×412 / 1280×720 with geolocation pinned to the on-disk fixture
+east of Edinburgh. They returned a ranked set of defects, most of which are closed
+in the "Close the defects the browser audits found, measured in Chromium" commit:
+preview-actions clipped at 412dp, the home-bar brand truncated to "Ca…",
+`nav-controls` overlapping `nav-bottom` by 20dp, `pill-gps` at 4.27:1, the
+attribution dark-theme rule being dead against the lazily-loaded MapLibre CSS, an
+invalid `color: ink.secondary` inside a stylesheet plus a tofu `⏱` glyph, the
+imminent-turn dimming that was computed and never consumed (the same shape as the
+§4.6 dead affordances), and the catalogue button whose accessible name read as a
+single word. All verified in a live probe before they were declared fixed.
+
+Deferred by name, so they are not lost:
+
+- The offline **inferred guidance is unreachable on the fixture**, because the
+  local engine returns a 2–3 point geometry for a short route and the step
+  inference loop needs at least seventeen. The honest "No turn-by-turn" empty
+  state is correct behaviour for data that has no turns; a route whose geometry
+  is too sparse to infer from should either produce steps some other way or say
+  so more plainly.
+- The primary CTAs and the bottom search controls have no pressed state yet. A
+  focus ring exists on every control; the press-down visual is the first thing an
+  AAOS designer adds and is the first thing a screen reader assistant does not.
+- The Regions catalogue repeats an unavailable entry's reason as a multi-line red
+  paragraph that balloons the row to ~365dp at 412dp; row height is nominally
+  116dp. Fold the reason into one line and expand on demand.
+- The off-route notice touches the maneuver banner's edge at 1280×720. A 0-gap
+  border-to-border look, on a surface that has a 12–16dp radius elsewhere.
+
 ---
 
 ## 4. Bugs found and fixed
