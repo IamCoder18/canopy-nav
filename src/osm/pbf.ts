@@ -275,7 +275,14 @@ function parseNode(r: Reader, st: StringTable, out: ParseOutput): void {
   // Divided rather than multiplied by 1e-7: both powers of ten are exactly
   // representable, and division by 1e7 is the form the spec's integer-to-degrees
   // step is usually written in.
-  const node: TaggedNode = { id, lat: lat / 1e7, lon: lon / 1e7 };
+  const dLat = lat / 1e7;
+  const dLon = lon / 1e7;
+  // Same bound the XML reader applies, for the same reason: a coordinate outside
+  // the valid range is a corrupt or hostile element, and accepting it puts
+  // invented places into the gazetteer and nonsense into the bounding box.
+  if (!Number.isFinite(dLat) || !Number.isFinite(dLon)) return;
+  if (dLat < -90 || dLat > 90 || dLon < -180 || dLon > 180) return;
+  const node: TaggedNode = { id, lat: dLat, lon: dLon };
   const tags = readTags(keys, vals, st);
   if (tags) node.tags = tags;
   out.nodes.set(id, node);
@@ -317,7 +324,13 @@ function parseDenseNodes(r: Reader, st: StringTable, out: ParseOutput): void {
 
   const kv = kvBuf ? new Reader(kvBuf) : null;
   for (let i = 0; i < n; i++) {
-    const node: TaggedNode = { id: ids[i]!, lat: lats[i]! / 1e7, lon: lons[i]! / 1e7 };
+    const lat = lats[i]! / 1e7;
+    const lon = lons[i]! / 1e7;
+    // Same range check as the single-node path: a corrupt delta run must not be
+    // able to inject off-Earth coordinates into the gazetteer.
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) continue;
+    const node: TaggedNode = { id: ids[i]!, lat, lon };
     if (kv) {
       let tags: Record<string, string> | null = null;
       for (;;) {

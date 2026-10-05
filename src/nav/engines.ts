@@ -20,6 +20,7 @@
  * reverse) so the routing core stays free of selection policy.
  */
 
+import { validateEndpoint, isEndpointUsable } from '../settings';
 import {
   PROVIDERS,
   isOnline,
@@ -120,7 +121,9 @@ function statusFor(
   if (id === ANY_ONLINE) {
     if (!isOnline()) return { ...base, ready: false, reason: 'No network connection' };
     const usable = PROVIDERS.filter(
-      (p) => p.online && (p.id === 'valhalla-custom' ? !!state.endpoint : true) && (!p.requiresKey || !!state.apiKey),
+      (p) => p.online
+        && (p.id === 'valhalla-custom' ? isEndpointUsable(state.endpoint ?? '') : true)
+        && (!p.requiresKey || !!state.apiKey),
     );
     return usable.length
       ? { ...base, ready: true, reason: null, resolved: usable[0].id }
@@ -132,7 +135,17 @@ function statusFor(
   if (provider.online) {
     if (!isOnline()) return { ...base, ready: false, reason: 'No network connection' };
     const endpoint = provider.id === 'valhalla-custom' ? state.endpoint : provider.endpoint;
-    if (!endpoint) return { ...base, ready: false, reason: 'No endpoint configured' };
+    // Trimmed before the emptiness check: a field containing only spaces is not
+    // configured, and `!endpoint` does not see that, so it fell through to
+    // validation (which trims) and was reported ready.
+    const trimmedEndpoint = (endpoint ?? '').trim();
+    if (!trimmedEndpoint) return { ...base, ready: false, reason: 'No endpoint configured' };
+    // A present-but-unusable address is not a configured endpoint. `not a url`
+    // and `htp:/broken` used to report "Ready" because readiness only asked
+    // whether a string existed, so the failure surfaced at the first route
+    // request instead of where it could still be fixed.
+    const endpointProblem = validateEndpoint(trimmedEndpoint);
+    if (endpointProblem) return { ...base, ready: false, reason: 'Endpoint address is not valid' };
     if (provider.requiresKey && !state.apiKey) return { ...base, ready: false, reason: 'API key required' };
     return { ...base, ready: true, reason: null };
   }

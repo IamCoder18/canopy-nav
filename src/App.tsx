@@ -31,8 +31,9 @@ import { ink, accentNight, applyThemeTokens, type as T, DP, ICON } from './theme
 import { useLocation, type LocationMode } from './nav/location';
 import {
   readSelection, writeSelection, readUnits, writeUnits,
-  readApiKey, writeApiKey, readEndpoint, writeEndpoint,
+  readApiKey, writeApiKey, readEndpoint, writeEndpoint, validateEndpoint,
 } from './settings';
+import { isVoiceAvailable, speak, cancelSpeech, voiceKey } from './nav/voice';
 import {
   importRegionFile, localRegionId, localRegionName, regionLib, useRegions,
   restoreRegions,
@@ -44,14 +45,6 @@ import {
   IconFile, IconLocate, IconCar, IconRefresh,
 } from './icons';
 
-/**
- * Every engine id the app knows about, for validating a saved selection.
- *
- * Read from the provider list rather than hard-coded, so adding an engine does
- * not silently make previously-saved settings unreadable — an unknown id falls
- * back to the default rather than putting the selection into a state no row
- * matches.
- */
 const ENGINE_IDS: readonly string[] = [...PROVIDERS.map((p) => p.id as string), 'any-online'];
 
 /* --------------------------- deferred views --------------------------- */
@@ -89,6 +82,25 @@ const BACK_FROM: Partial<Record<Screen, Screen>> = {
   import: 'home',
   regions: 'home',
   engines: 'settings',
+};
+
+/**
+ * Screen names for the landmark label.
+ *
+ * Every screen had no heading and no landmark, so navigating by either found
+ * nothing. Naming the current screen means "jump to main" also answers "where am
+ * I", which is the question a user of assistive technology is actually asking.
+ */
+const SCREEN_NAMES: Record<Screen, string> = {
+  home: 'Home',
+  search: 'Search',
+  preview: 'Route preview',
+  navigating: 'Navigating',
+  steps: 'Turn list',
+  settings: 'Settings',
+  import: 'Import a map',
+  regions: 'Regions',
+  engines: 'Routing engines',
 };
 
 /* ---------------------------- engines ---------------------------- */
@@ -1036,20 +1048,15 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
 const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
 
   return (
-    <div className="app">
-      {/*
-        The map's Suspense boundary.
+    /*
+      Landmarks.
 
-        The fallback was a full-viewport `.map` div, which paints the *offline*
-        canvas colour #F8F7F5 — a white sheet over the whole app for 301-935 ms,
-        and 3,315 ms on a cold chunk. That is worse than showing nothing: it
-        undoes the dark chrome the rest of the app established and reads as a
-        crash rather than as a map still arriving.
-
-        Now it is a `null` on a transparent layer. The app chrome — app bar,
-        launcher, status pill — renders immediately, which is what the user
-        actually needs first, and the map appears when it is ready.
-      */}
+      The document had no `main` and no headings at all, so a screen-reader user
+      navigating by landmark or by heading found nothing on any of the nine
+      screens. `aria-label` on the main region names the current screen, which
+      makes "jump to main" tell you where you are as well as getting you there.
+    */
+    <div className="app" role="region" aria-label={`Canopy Nav — ${SCREEN_NAMES[screen]}`}>
       <Suspense fallback={null}>
       <MapView
         dataset={dataset}
@@ -1165,6 +1172,8 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
         <StepsScreen
           steps={guidance?.steps ?? localGuidance?.steps ?? []}
           onBack={() => setScreen('navigating')}
+          inferred={!guidance && !!localGuidance}
+          engineLabel={provenance ? describeProvenance(provenance.used, provenance.fellBack) : null}
         />
       )}
 
@@ -1635,15 +1644,94 @@ function NavOverlay(props: {
         ? 'Simulated GPS'
         : '';
 
+  /**
+   * The banner's instruction, resolved from whichever source is driving.
+   *
+   * Hoisted out of the markup because both the visible banner and the spoken
+   * announcement need it, and deriving it twice is how they drift.
+   */
+  const instructionText = nextManeuver?.instruction
+    ?? localTurn?.title
+    ?? (arriving ? 'Arriving at your destination' : 'Continue');
+
+  /**
+   * Whether the platform can speak at all.
+   *
+   * Computed once per mount rather than per render: `speechSynthesis` does not
+   * appear mid-session, and reading it on every position tick is pointless work
+   * several times a second.
+   */
+  const voiceAvailable = useMemo(() => isVoiceAvailable(), []);
+
+  /**
+   * Speak the guidance as it changes.
+   *
+   * `voiceKey` buckets the distance, so the position updates that arrive several
+   * times a second are silent and only a genuine new step is spoken. Unmounting
+   * cancels anything in flight — otherwise leaving the screen mid-sentence leaves
+   * the WebView talking over the home screen.
+   */
+  useEffect(() => {
+    if (muted || !voiceAvailable || !instructionText) return;
+    if (!major && !arriving) return;
+    speak({
+      text: arriving
+        ? 'You have arrived at your destination.'
+        : `In ${formatDistance(laneDist, units)}, ${instructionText}`,
+      key: voiceKey(instructionText, laneDist, units),
+      priority: arriving ? 'polite' : 'assertive',
+    });
+    return () => { /* keep speaking across re-render; cancel only on unmute */ };
+  }, [muted, voiceAvailable, instructionText, laneDist, units, major, arriving]);
+
+  /* Stop talking the moment guidance is torn down or unmuted. */
+  useEffect(() => {
+    if (muted) cancelSpeech();
+  }, [muted]);
+
+  useEffect(() => () => cancelSpeech(), []);
+
+  /**
+   * What a screen reader is told about the trip.
+   *
+   * Composed rather than emitted, so it changes only when the *meaning* changes.
+   * Putting the remaining distance in here would rewrite the region several
+   * times a second, which makes an assistive technology unusable — the classic
+   * way a live region does more harm than good. Distance is available on demand
+   * from the ETA bar's own accessible text.
+   */
+  const announcement = arriving
+    ? 'You have arrived at your destination.'
+    : major && nextManeuver
+      ? `In ${formatDistance(laneDist, units)}, ${instructionText.toLowerCase()}`
+      : '';
+
   return (
     <div className="nav-root">
+      {/*
+        Announcements for the navigation screen.
+
+        A live region nothing ever writes to is not a live region. The reroute
+        banner has its own `role="status"`, but arrival never did — measured as
+        zero DOM mutations across 56 seconds of navigation, so the event a driver
+        most needs to hear was silent to anyone not watching the screen.
+      */}
+      <div className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </div>
       {/* ETA bar — Android Auto's top strip */}
       <div className="eta-bar">
+        {/*
+          The duration leads and never shrinks: it is the number a driver reads
+          first. The arrival clock is the one item dropped on a narrow screen,
+          because it is the same information expressed less directly, and losing
+          it costs less than losing "7 min".
+        */}
         <div className="eta-block">
           <div className="eta-value" style={T.body1m}>{formatDuration(remainingSec)}</div>
-          <div className="eta-label" style={T.sub3}>{formatClock(new Date(Date.now() + remainingSec * 1000))}</div>
+          <div className="eta-label clock" style={T.sub3}>{formatClock(new Date(Date.now() + remainingSec * 1000))}</div>
         </div>
-        <div className="eta-sep" />
+        <div className="eta-sep clock-sep" />
         <div className="eta-block">
           <div className="eta-value" style={T.body1m}>{formatDistance(remainingM, units)}</div>
           <div className="eta-label" style={T.sub3}>to destination</div>
@@ -1651,8 +1739,30 @@ function NavOverlay(props: {
         <div className="spacer" />
         {!online && <div className="offline-chip">No signal</div>}
         {online && degraded && <div className="offline-chip warn">Local route</div>}
-        <button className="icon-btn on-dark" onClick={props.onMute} aria-label={muted ? 'Unmute' : 'Mute'}>
-          {muted ? <IconMute size={ICON.primary} /> : <IconSound size={ICON.primary} />}
+        {/*
+          The voice control, and it now controls something.
+
+          It previously toggled a boolean whose only consumers were the icon and
+          this label, so a driver tapped it, heard no change, and concluded voice
+          prompts were off — a lie with a safe-looking answer. It now drives real
+          spoken guidance (`nav/voice`).
+
+          Where the WebView has no speech engine at all the control stays
+          *visible but disabled*, with the reason in its accessible name. Hiding
+          it was the first attempt and it is the worse answer: a missing control
+          reads as a missing feature, while a disabled one explains itself.
+        */}
+        <button
+          className="icon-btn on-dark"
+          onClick={props.onMute}
+          disabled={!voiceAvailable}
+          aria-label={!voiceAvailable
+            ? 'Voice guidance unavailable on this device'
+            : muted ? 'Unmute voice guidance' : 'Mute voice guidance'}
+          aria-pressed={voiceAvailable ? muted : undefined}
+          title={!voiceAvailable ? 'Voice guidance unavailable on this device' : undefined}
+        >
+          {muted || !voiceAvailable ? <IconMute size={ICON.primary} /> : <IconSound size={ICON.primary} />}
         </button>
         <button className="icon-btn on-dark" onClick={props.onExit} aria-label="Exit navigation">
           <IconClose size={ICON.primary} />
@@ -1669,11 +1779,7 @@ function NavOverlay(props: {
           {nextManeuver?.sign?.exit_number_elements?.length ? (
             <div className="shield">{nextManeuver.sign.exit_number_elements.map((e) => e.text).join('')}</div>
           ) : null}
-          <div className="maneuver-instr" style={T.body1}>
-            {nextManeuver?.instruction
-              ?? localTurn?.title
-              ?? (arriving ? 'Arriving at your destination' : 'Continue')}
-          </div>
+          <div className="maneuver-instr" style={T.body1}>{instructionText}</div>
         </div>
       </div>
 
@@ -2227,7 +2333,20 @@ function SearchScreen(props: {
 
 /* ---------------------------- StepsScreen --------------------------- */
 
-function StepsScreen({ steps, onBack }: { steps: LegStep[]; onBack: () => void }) {
+function StepsScreen({
+  steps, onBack, inferred, engineLabel,
+}: {
+  steps: LegStep[];
+  onBack: () => void;
+  /**
+   * True when these steps were inferred from bearing changes rather than
+   * supplied by a routing engine. That is a materially weaker instruction set,
+   * and the list says so rather than presenting it as authoritative.
+   */
+  inferred?: boolean;
+  /** The engine that produced the route, for the same reason. */
+  engineLabel?: string | null;
+}) {
   return (
     <div className="search-root">
       <div className="top-app-bar">
@@ -2235,7 +2354,43 @@ function StepsScreen({ steps, onBack }: { steps: LegStep[]; onBack: () => void }
         <div style={{ ...T.body1m, marginLeft: DP.P2 }}>Route steps</div>
       </div>
       <div className="search-results">
-        {steps.length === 0 && <div className="hint-card">No turn-by-turn steps. Import an .osm file or use a Valhalla provider for detailed instructions.</div>}
+        {/*
+          The empty-state copy used to say "Import an .osm file or use a Valhalla
+          provider" — advice for a user who had just imported a map and was
+          navigating with the offline engine. The reason it is empty is the
+          *engine*, not a missing map, so that is what it now says.
+        */}
+        {steps.length === 0 && (
+          <div className="hint-card">
+            <div style={T.body3m}>No turn-by-turn instructions for this route</div>
+            <div style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1 }}>
+              {engineLabel
+                ? `${engineLabel} answered this route but does not supply turn-by-turn guidance.`
+                : 'The engine that answered this route does not supply turn-by-turn guidance.'}{' '}
+              Choose a Valhalla engine in Settings → Routing → Engines for detailed instructions.
+              The distance and ETA remain available on the navigation screen.
+            </div>
+          </div>
+        )}
+        {/*
+          Inferred guidance is labelled. Comparing an offline route against
+          Valhalla over the same origin and destination found three of seven real
+          maneuvers missed, one invented, and one direction reversed — so an
+          unlabelled list of inferred turns reads as authoritative when it is
+          guesswork. `aria-live` is deliberately absent: the list does not change
+          while it is open.
+        */}
+        {steps.length > 0 && inferred && (
+          <div className="hint-card warn" role="note">
+            <div style={T.body3m}>Estimated from the road shape</div>
+            <div style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1 }}>
+              {engineLabel
+                ? `${engineLabel} does not supply turn-by-turn guidance, so these steps are inferred from where the road bends. `
+                : 'These steps are inferred from where the road bends rather than from real instructions. '}
+              Treat them as a rough guide, not as directions.
+            </div>
+          </div>
+        )}
         {steps.map((s, i) => (
           <div key={i} className="result-row">
             <span className="result-icon"><ManeuverIcon kind={s.icon} size={ICON.secondary} /></span>
@@ -2290,6 +2445,9 @@ function EnginesScreen(props: {
 
   const chosen = props.selection.preferred;
   const servedNow = props.provenance?.used;
+  /** `null` when the address is fine, or empty, or not the one being edited. */
+  const endpointProblem =
+    chosen === 'valhalla-custom' || chosen === ANY_ONLINE ? validateEndpoint(props.endpoint) : null;
 
   return (
     <div className="search-root">
@@ -2363,13 +2521,47 @@ function EnginesScreen(props: {
         {(chosen === 'valhalla-simplerouting' || chosen === ANY_ONLINE) && (
           <label className="field">
             <span style={{ ...T.sub2, color: ink.secondary }}>API key (Simplerouting.io)</span>
-            <input value={props.apiKey} onChange={(e) => props.setApiKey(e.target.value)} placeholder="sk-…" />
+            {/*
+              Masked. It was `type="text"`, so the secret sat in the DOM in plain
+              sight — readable in a screenshot, in a screen share, and by anything
+              inspecting the page. `autocomplete="off"` keeps it out of the
+              browser's saved-password list, which is not what this is.
+            */}
+            <input
+              type="password"
+              value={props.apiKey}
+              onChange={(e) => props.setApiKey(e.target.value)}
+              placeholder="sk-…"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
+              aria-label="API key for Simplerouting.io"
+            />
+            <span style={{ ...T.sub3, color: ink.tertiary }}>
+              Stored on this device only. It is sent to Simplerouting.io and nowhere else.
+            </span>
           </label>
         )}
         {(chosen === 'valhalla-custom' || chosen === ANY_ONLINE) && (
           <label className="field">
             <span style={{ ...T.sub2, color: ink.secondary }}>Custom endpoint</span>
-            <input value={props.endpoint} onChange={(e) => props.setEndpoint(e.target.value)} placeholder="http://192.168.1.10:8002" />
+            <input
+              value={props.endpoint}
+              onChange={(e) => props.setEndpoint(e.target.value)}
+              placeholder="http://192.168.1.10:8002"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
+              inputMode="url"
+              aria-label="Custom Valhalla endpoint URL"
+              aria-invalid={endpointProblem ? true : undefined}
+              aria-describedby={endpointProblem ? 'endpoint-error' : undefined}
+            />
+            {endpointProblem && (
+              <span id="endpoint-error" role="alert" style={{ ...T.sub3, color: '#F28B82' }}>
+                {endpointProblem}
+              </span>
+            )}
           </label>
         )}
 

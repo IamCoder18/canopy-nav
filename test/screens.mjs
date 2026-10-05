@@ -206,11 +206,23 @@ for (const vp of VIEWPORTS) {
         check('layers panel lists its options', (panel.rows ?? 0) >= 2, `${panel.rows} rows`);
         await visit('layers panel', 'layers-panel');
 
-        // And the mute control, which claims an audio capability the app does not
-        // have — see the honesty note in STATUS.md.
-        const mute = await page.$('button[aria-label="Mute"], button[aria-label="Unmute"]');
-        check('the audio control states whether it is on', !!mute,
+        // The voice control. It used to claim an audio capability the app did not
+        // have at all — see the honesty note in STATUS.md. It now drives real
+        // spoken guidance, and where the WebView has no speech engine it is
+        // present but disabled with the reason in its accessible name, so all
+        // three of these are honest states rather than a missing control.
+        const mute = await page.$(
+          'button[aria-label="Mute voice guidance"], button[aria-label="Unmute voice guidance"], ' +
+          'button[aria-label="Voice guidance unavailable on this device"]',
+        );
+        check('the voice control exists and states its state', !!mute,
           mute ? await mute.getAttribute('aria-label') : 'absent');
+        if (mute) {
+          const unavailable = (await mute.getAttribute('aria-label'))?.includes('unavailable');
+          check('the voice control is disabled exactly when voice is unavailable',
+            (await mute.isDisabled()) === !!unavailable,
+            `disabled=${await mute.isDisabled()} labelSaysUnavailable=${!!unavailable}`);
+        }
         const closeBtn = await page.$('button[aria-label="Close map layers"]');
         if (closeBtn) {
           await closeBtn.click();

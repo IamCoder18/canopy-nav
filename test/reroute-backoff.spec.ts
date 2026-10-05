@@ -200,7 +200,7 @@ describe('the retry countdown once the cap is reached', () => {
 
   it('hedges on a fresh outlier that has not been confirmed', () => {
     // Back on the line, a single bad fix during the backoff window is not
-    // evidence of anything: it gets the short "N m off the route" line and no
+    // evidence of anything: it gets the short "left the route" line and no
     // promise about a retry, even though `failures` is still 3.
     const { state } = refuseMany(3);
     const base = state.lastFinished!;
@@ -210,7 +210,7 @@ describe('the retry countdown once the cap is reached', () => {
 
     const outlier = observeFix(home, ROUTE, FAR_OFF, 0, base + 40_000);
     expect(outlier.state.status).toBe('suspect');
-    expect(outlier.state.message).toMatch(/m off the route/);
+    expect(outlier.state.message).toMatch(/left the route/);
     expect(outlier.state.message).not.toMatch(/retrying/);
     expect(outlier.trigger).toBe(false);
   });

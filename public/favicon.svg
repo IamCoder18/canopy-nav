@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Canopy Nav">
+  <!--
+    A navigation chevron inside a rounded square, drawn in the AAOS accent.
+
+    Hand-drawn rather than exported from the icon set because a favicon has to be
+    legible at 16x16, where the stroke weight of the 44px in-app icons turns to
+    mush. A separate asset is the standard answer, not a duplication problem.
+  -->
+  <rect width="64" height="64" rx="14" fill="#0E1013"/>
+  <path d="M32 13 L47 47 L32 38 L17 47 Z" fill="#60A8F0"/>
+</svg>

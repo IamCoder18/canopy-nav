@@ -224,7 +224,10 @@ describe('rerouteBanner', () => {
   it('reports the deviation while merely suspicious', () => {
     const s = observeFix(createRerouteState(), ROUTE, FAR_OFF, 0, 1_000).state;
     const banner = rerouteBanner(s, ROUTE);
-    expect(banner).toMatch(/off the route/);
+    // Qualitative, not a raw metre count: this used to render
+    // `6978332 m off the route` — unformatted, seven digits, always metric.
+    expect(banner).toMatch(/left the route/);
+    expect(banner).not.toMatch(/\d{4,}\s*m\b/);
     expect(banner).not.toMatch(/rejoining/);
   });
 

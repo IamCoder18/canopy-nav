@@ -204,9 +204,14 @@ try {
         await page.waitForTimeout(10000);
 
         const during = await page.evaluate(() => document.body.innerText);
+        // "You have left the route" replaced "6978332 m off the route": the raw
+        // metre count was unformatted, seven digits, and always metric.
         check('going off-route is reported to the driver',
-          /off the route|off route|new way|rejoining/i.test(during),
-          during.match(/[^\n]*(off the route|off route|new way|rejoining)[^\n]*/i)?.[0] ?? '');
+          /left the route|off the route|off route|new way|rejoining/i.test(during),
+          during.match(/[^\n]*(left the route|off the route|off route|new way|rejoining)[^\n]*/i)?.[0] ?? '');
+        check('the deviation is never a raw unrounded metre count',
+          !/\d{4,}\s*m\b/.test(during),
+          during.match(/\d{4,}\s*m\b/)?.[0] ?? '');
         check('guidance survives the reroute attempt',
           /Steps/.test(during) && /Exit/.test(during));
         await page.screenshot({ path: join(SHOTS, '11-offroute.png') });

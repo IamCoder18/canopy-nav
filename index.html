@@ -18,6 +18,10 @@
          shade between the native shell painting and React mounting. -->
     <meta name="theme-color" content="#0E1013" />
     <meta name="description" content="Offline car navigation from OpenStreetMap data, with an Android Auto interface." />
+    <!-- Absent before: every launch logged a 404 for /favicon.ico, which is noise
+         in a WebView logcat and hides real errors. -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <title>Canopy Nav</title>
     <style>
       /* Painted before the stylesheet resolves, so a cold start in a WebView is

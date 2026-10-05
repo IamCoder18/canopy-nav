@@ -191,7 +191,23 @@ function scanSegment(
       }
       tags = bag;
     }
-    nodes.set(id, { id, lat: +a.lat, lon: +a.lon });
+    const lat = +a.lat;
+    const lon = +a.lon;
+    // Reject coordinates that are not on Earth.
+    //
+    // `+a.lat` is `NaN` for a missing attribute, and the old code stored it
+    // regardless. A hand-edited or malformed extract carrying `lat="-200"` then
+    // produced 74,756 gazetteer entries and invented street addresses
+    // ("Neg 1200", "Neg 12300"), labelled `address / Offline` in search results —
+    // confidently wrong data presented as fact, which is worse than no data.
+    //
+    // Longitude is bounded at 180 and latitude at 90, and both must be finite.
+    // Anything else is a malformed element, so it is skipped like a node with no
+    // id rather than poisoning the graph, the bounding box and the gazetteer.
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) continue;
+
+    nodes.set(id, { id, lat, lon });
     if (tags) (nodes.get(id) as RawNode & { tags?: Record<string, string> }).tags = tags;
   }
 
@@ -584,7 +600,18 @@ export function buildDataset(
   /* --------------------- gazetteer + addressing --------------------- */
 
   const gaz: GazEntry[] = [];
-  let west = 180, south = 90, east = -180, north = -90;
+  /**
+ * Bounding box accumulator, starting *inside* the valid range.
+ *
+ * These were seeded at the inverted sentinels `west=180, east=-180,
+ * south=90, north=-90`, which is fine as a "first value wins" trick — but if the
+ * loop body never ran, the sentinel pair survived into the dataset and the
+ * settings screen rendered `Bounds 180.000, 90.000, -180.000, -90.000` as though
+ * it were a real location. Seeding inside the range makes "no nodes" produce
+ * `west > east`, which is detectable, and the UI already has a real path for
+ * "nothing was parsed".
+ */
+let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity;
   for (let i = 0; i < nodeCount2; i++) {
     const lon = coordsList2[i * 2], lat = coordsList2[i * 2 + 1];
     if (lon < west) west = lon; if (lon > east) east = lon;
@@ -695,13 +722,21 @@ export function buildDataset(
   const trimmed = gaz.length > 120_000 ? gaz.slice(0, 120_000) : gaz;
 
   onProgress(1);
+  // `west > east` means no node ever updated the accumulator. Reporting the
+  // inverted sentinels as a bounding box would show the user coordinates for
+  // somewhere that does not exist; a zero box at the origin is a degenerate but
+  // *true* statement, and the import validation rejects an empty parse before a
+  // caller ever sees this.
+  const bbox: [number, number, number, number] = west > east
+    ? [0, 0, 0, 0]
+    : [west, south, east, north];
   return {
     graph,
     gaz: trimmed,
     roads,
     water,
     green,
-    bbox: [west, south, east, north],
+    bbox,
     counts: { nodes: nodes.size, ways: ways.length, routable: routableWays },
   };
 }

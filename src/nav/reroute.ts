@@ -201,15 +201,22 @@ export function observeFix(
 
   if (tracker.state !== 'off-route') {
     const suspect = tracker.state === 'suspect';
-    const metres = suspect ? Math.round(tracker.distance) : null;
     return {
       state: {
         ...state,
         tracker,
         status: suspect ? 'suspect' : 'idle',
-        message: suspect
-          ? `${metres} m off the route`
-          : null,
+        // Qualitatively, not numerically.
+        //
+        // This used to interpolate raw metres with a hard-coded "m", producing
+        // `6978332 m off the route` — an unformatted seven-digit number in a 24px
+        // banner, always in metric, on a screen the user had set to imperial.
+        //
+        // The exact distance is not what a driver acts on; "you have left the
+        // route" is. `rerouteBanner` already appends a properly formatted rejoin
+        // distance in the user's units, so the precise figure is still available
+        // where it is useful and formatted.
+        message: suspect ? 'You have left the route' : null,
       },
       trigger: false,
       origin: null,

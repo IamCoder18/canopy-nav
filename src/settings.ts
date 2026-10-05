@@ -187,3 +187,45 @@ function clear(key: string, store: Store | null): void {
     // Nothing useful to do; the value is already unreadable.
   }
 }
+
+/**
+ * Validate a user-supplied Valhalla endpoint.
+ *
+ * Returns `null` when usable, or a message saying exactly what is wrong.
+ *
+ * Without this, `not a url`, `htp:/broken`, and whitespace-only all produced an
+ * engine row reading "Ready" — because readiness asked whether a string was
+ * *present*, not whether it could ever be fetched. An address that is
+ * syntactically impossible has to be called out where it can still be fixed,
+ * rather than at the first route request.
+ *
+ * Lives here rather than in the screen because `nav/engines.ts` needs it for
+ * readiness, and importing the app from a nav module would be a cycle.
+ *
+ * `http` is allowed deliberately: a self-hosted `valhalla_service` on a home LAN
+ * is the documented use case and `192.168.x.x` has no certificate. Mixed content
+ * is the browser's to report, not something to preempt here.
+ */
+export function validateEndpoint(raw: string): string | null {
+  const value = raw.trim();
+  // Empty means "not configured", which the readiness logic reports separately
+  // and more usefully. Validating it here would duplicate that message.
+  if (!value) return null;
+  if (/\s/.test(value)) return 'An address cannot contain spaces.';
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return `“${value}” is not a valid URL. It needs to start with http:// or https:// — for example http://192.168.1.10:8002`;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return `“${url.protocol.replace(':', '')}” is not supported. Use http:// or https://.`;
+  }
+  if (!url.hostname) return 'That URL has no host name in it.';
+  return null;
+}
+
+/** A custom endpoint is only "configured" if it is also well-formed. */
+export function isEndpointUsable(raw: string): boolean {
+  return raw.trim().length > 0 && validateEndpoint(raw) === null;
+}
