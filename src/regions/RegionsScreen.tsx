@@ -442,14 +442,23 @@ export function RegionsScreen(props: RegionsScreenProps) {
                       title={availability[e.id] === false
                         ? (unavailableReason[e.id] ?? 'This download URL could not be reached')
                         : `Download ${e.name} (${formatBytes(e.approxMb * 1024 * 1024)})`}
+                      /* The two actions were two adjacent expressions with no
+                         whitespace, so the name read as ONE word: the audit
+                         measured "UnavailableImport" / "DownloadReplace". And a
+                         disabled button must say WHY, since its hover title never
+                         reaches a car driver. */
+                      aria-label={
+                        dl?.entry.id === e.id ? 'Downloading' : availability[e.id] === false
+                          ? `Unavailable — ${unavailableReason[e.id] ?? 'This download URL could not be reached'}`
+                          : have ? `Replace the ${e.name} map` : `Download the ${e.name} map`
+                      }
                       onClick={() => void startDownload(e)}
                     >
                       {dl?.entry.id === e.id
                         ? 'Downloading…'
                         : availability[e.id] === false
                           ? 'Unavailable'
-                          : 'Download'}
-                      {have ? 'Replace' : 'Import'}
+                          : have ? 'Replace' : 'Download'}
                     </button>
                   </span>
                 </div>

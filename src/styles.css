@@ -9,6 +9,11 @@
      correctly rather than collapse to `height: auto`. */
   --app-bar: 96px;
   --grid-cell: 158px;
+  /* Height of the bottom navigation rail. The control stack sits directly above
+     it, and both read this variable so they can never disagree about the rail's
+     height — which used to be the `.nav-controls` offset clamping to the 96px
+     app-bar while the rail stayed 128px, a 20px overlap at phone portrait. */
+  --navbot: 128px;
 
   /* System bars. On Android the WebView is laid out edge-to-edge, so the status
      and navigation bars overlap the page and env() reports their size. Every
@@ -131,22 +136,26 @@ code {
  * Deliberately kept small and out of the way: it is legal text, not chrome.
  */
 .maplibregl-ctrl-attrib {
-  background: rgba(14, 16, 19, 0.82);
-  color: #DADCE0;
+  /* `!important` is the honest choice here: MapLibre's own stylesheet is
+     lazily-loaded and lands AFTER this one, and at equal specificity the later
+     rule wins, so the dark-theme override was dead code and the credit rendered
+     light under the map. Matching the focus-ring rule's reasoning. */
+  background: rgba(14, 16, 19, 0.82) !important;
+  color: #DADCE0 !important;
   font: 500 11px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   border-radius: 4px 0 0 0;
   padding: 2px 6px;
 }
-.maplibregl-ctrl-attrib a { color: #BDC1C6; text-decoration: none; }
-.maplibregl-ctrl-attrib a:hover { color: #FFFFFF; text-decoration: underline; }
+.maplibregl-ctrl-attrib a { color: #BDC1C6 !important; text-decoration: none; }
+.maplibregl-ctrl-attrib a:hover { color: #FFFFFF !important; text-decoration: underline; }
 /*
  * The "i" toggle collapses the credit to a lone glyph. At 11px that glyph is
  * too small a target for a car user, so it is given the project's own 44dp
  * icon floor.
  */
 .maplibregl-ctrl-attrib-button {
-  background: rgba(14, 16, 19, 0.82);
-  color: #DADCE0;
+  background: rgba(14, 16, 19, 0.82) !important;
+  color: #DADCE0 !important;
   border-radius: 4px 0 0 0;
 }
 .maplibregl-ctrl-attrib-button span { width: 44px; height: 44px; line-height: 44px; font-size: 14px; }
@@ -210,8 +219,10 @@ code {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  /* Hard ceiling so the brand always has room for its two lines at 412dp. */
-  max-width: 45%;
+  /* At 412dp the 45% cap still let the pill take enough that the brand
+     truncated to "Ca…" — the audit measured its width at 92px. 30% is the one
+     that leaves the brand its two lines. */
+  max-width: 30%;
 }
 /*
  * Disabled rows.
@@ -281,7 +292,7 @@ code {
   height: var(--app-bar, 96px); width: 100%;
   padding: 0 24px;
   border-radius: 16px;
-  background: #1b1c1f;
+  background: #17181B;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   text-align: left;
   /*
@@ -309,7 +320,7 @@ code {
   overflow: hidden;
   padding: 24px;
   border-radius: 8px;
-  background: #1b1c1f;
+  background: #17181B;
   /* AAOS grid tile shadow: black 22%, y-offset 2, blur 2 */
   box-shadow: 0 2px 2px rgba(0, 0, 0, 0.22);
   transition: background 120ms ease, transform 120ms ease;
@@ -354,7 +365,7 @@ code {
 .hint-card, .error-card, .progress-card {
   padding: 24px;
   border-radius: 8px;
-  background: #1b1c1f;
+  background: #17181B;
   display: flex; flex-direction: column;
 }
 .error-card {
@@ -539,7 +550,9 @@ code {
   top: calc(var(--app-bar, 96px) + var(--inset-top) + 24px + 168px);
   max-width: calc(100% - 48px);
   padding: 12px 24px;
-  border-radius: 12px;
+  /* Was a 12px one-off on no radius in the token scale. R2 = 8dp matches the other
+     compact cards (status, hint, error). */
+  border-radius: 8px;
   background: rgba(14, 16, 19, 0.94);
   border-left: 4px solid #E8A33D;
   color: #E8EAED;
@@ -554,6 +567,15 @@ code {
   width: 120px; height: 120px;
   display: grid; place-items: center;
   border-radius: 8px;
+}
+/* Imminent-turn dimming (≤40 m): Google Maps softens the instruction text so
+   the maneuver arrow is the salient thing as the driver makes the turn. The
+   `imminent` flag already existed in App.tsx but nothing consumed it — the same
+   dead-affordance shape as §4.6 (a value computed and never read). */
+.maneuver-instr.is-imminent {
+  opacity: 0.6;
+  transition: opacity 120ms ease;
+}
   background: rgba(255, 255, 255, 0.08);
   color: #F1F3F4;
 }
@@ -613,7 +635,7 @@ code {
     top: auto;
     left: 16px;
     right: 16px;
-    bottom: calc(var(--app-bar, 96px) + var(--inset-bottom) + 12px);
+    bottom: calc(var(--navbot, 128px) + var(--inset-bottom) + 12px);
     /* Defence in depth: whatever the heights work out to, the guidance wins.
        The banner is the one element a driver must be able to read. */
     z-index: 1;
@@ -862,7 +884,7 @@ code {
 
 .nav-bottom {
   position: absolute; bottom: 0; left: 0; right: 0;
-  height: 128px;
+  height: var(--navbot, 128px);
   padding-bottom: var(--inset-bottom);
   display: flex; align-items: center; justify-content: space-around;
   gap: 8px;
@@ -917,10 +939,19 @@ code {
   display: grid; place-items: center;
   width: 40px; height: 40px;
   flex-shrink: 0;
-  font-size: 24px;
-  color: ink.secondary;
+  /* `ink.secondary` here was the *token name*, which is invalid CSS, so the rule
+     was dropped and the glyph inherited full opacity. Use the actual value. */
+  color: rgba(255, 255, 255, 0.6);
 }
 .preview-actions { display: flex; gap: 16px; justify-content: flex-end; }
+
+@media (max-width: 599px) {
+  /* Two 76dp buttons do not fit in a 412dp card (156*2 + 16 = 328px of a ~250px
+     content box, which measured half-clipping the "Options" button onto the map).
+     Stack them, full width, on the sizes where the card is narrow. */
+  .preview-actions { flex-direction: column; align-items: stretch; }
+  .preview-actions .secondary-btn, .preview-actions .primary-btn { width: 100%; }
+}
 
 .primary-btn, .secondary-btn {
   min-width: 156px; height: 76px;
@@ -1051,6 +1082,11 @@ code {
   flex-shrink: 0;
 }
 .radio.on { border-color: #60A8F0; background: #60A8F0; box-shadow: inset 0 0 0 4px #000; }
+/* A selected option whose engine is currently unavailable keeps the checkmark
+   (it IS the configured choice) but must not read as an active, glowing one —
+   it is inert until the blocking reason is resolved. The audit flagged the
+   selected-and-disabled row passing as both "on" and unusable. */
+.provider-row:disabled .radio.on { background: #33506B; border-color: #33506B; box-shadow: inset 0 0 0 4px #202124; }
 
 .section-head { margin: 32px 0 8px; }
 
@@ -1189,6 +1225,7 @@ code {
 
 /* Landscape phones / head units are short — tighten the vertical rhythm. */
 @media (max-height: 520px) {
+  :root { --navbot: var(--app-bar, 96px); }
   .top-app-bar { height: 76px; }
   .search-results, .settings-body { padding-top: calc(76px + var(--inset-top)); }
   .home-search { top: calc(76px + var(--inset-top) + 12px); }

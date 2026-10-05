@@ -1577,7 +1577,7 @@ function StatusPill({
     <div className={`status-pill ${online ? 'on' : 'off'}`} title={`${engineTitle}\n${dotLabel} · ${gpsText}`}>
       <span className="dot" role="img" aria-label={dotLabel} />
       <span className="pill-label" style={T.sub3}>{label}</span>
-      <span className={`pill-gps ${locationError ? 'bad' : ''}`} style={{ ...T.sub3, color: 'rgba(255,255,255,0.5)' }}>
+      <span className={`pill-gps ${locationError ? 'bad' : ''}`} style={{ ...T.sub3, color: ink.secondary }}>
         {gpsText}
       </span>
     </div>
@@ -1867,7 +1867,7 @@ function NavOverlay(props: {
           {nextManeuver?.sign?.exit_number_elements?.length ? (
             <div className="shield">{nextManeuver.sign.exit_number_elements.map((e) => e.text).join('')}</div>
           ) : null}
-          <div className="maneuver-instr" style={T.body1}>{instructionText}</div>
+          <div className={`maneuver-instr ${imminent ? 'is-imminent' : ''}`} style={T.body1}>{instructionText}</div>
         </div>
       </div>
 
@@ -2070,7 +2070,7 @@ function PreviewCard(props: {
           <>
             <div className="preview-dest" style={T.body1m}>{props.destination?.label ?? 'Destination'}</div>
             <div className="preview-rows">
-              <PreviewRow label="Time" value={formatDuration(route.summary.time)} icon={<span>⏱</span>} />
+              <PreviewRow label="Time" value={formatDuration(route.summary.time)} icon={<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>} />
               <PreviewRow label="Distance" value={formatDistance(route.summary.length, units)} />
               <PreviewRow label="Engine" value={route.engine === 'valhalla' ? 'Valhalla' : 'Offline .osm'} />
             </div>
@@ -2399,7 +2399,7 @@ function SearchScreen(props: {
               {categories.map((c) => (
                 <button key={c.key} className="chip" onClick={() => { setCat(cat === c.key ? null : c.key); setQ(''); }}>
                   {c.label}
-                  <span style={{ ...T.sub3, color: 'rgba(255,255,255,0.5)', marginLeft: 8 }}>{c.count}</span>
+                  <span style={{ ...T.sub3, color: ink.secondary, marginLeft: 8 }}>{c.count}</span>
                 </button>
               ))}
             </div>
@@ -2546,9 +2546,15 @@ function EnginesScreen(props: {
 
       <div className="settings-body">
         <div className="section-head" style={T.body3m}>Route with</div>
+        {/* A single-select list, exposed as such. It rendered buttons with a radio
+            circle drawn in CSS and state carried in `aria-pressed`, so a screen
+            reader heard a row of independent toggle-buttons rather than a group of
+            mutually exclusive options. */}
+        <div role="radiogroup" aria-label="Route with">
         {statuses.map((s) => (
           <button
             key={s.id}
+            role="radio"
             className={`provider-row ${chosen === s.id ? 'selected' : ''}`}
             // An engine that cannot route must not be selectable. It was fully
             // live — `disabled=false`, `cursor:pointer`, full opacity — so a row
@@ -2557,7 +2563,7 @@ function EnginesScreen(props: {
             // only the activation is refused.
             disabled={!s.ready}
             aria-disabled={!s.ready}
-            aria-pressed={chosen === s.id}
+            aria-checked={chosen === s.id}
             onClick={() => {
               if (!s.ready) return;
               props.setSelection({ ...props.selection, preferred: s.id });
@@ -2582,16 +2588,21 @@ function EnginesScreen(props: {
             <span className={`radio ${chosen === s.id ? 'on' : ''}`} />
           </button>
         ))}
+        </div>
 
         <div className="section-head" style={T.body3m}>If it cannot route</div>
-        <div className="seg">
+        <div className="seg" role="radiogroup" aria-label="If it cannot route">
           <button
+            role="radio"
+            aria-checked={props.selection.allowFallback}
             className={props.selection.allowFallback ? 'on' : ''}
             onClick={() => props.setSelection({ ...props.selection, allowFallback: true })}
           >
             Use another engine
           </button>
           <button
+            role="radio"
+            aria-checked={!props.selection.allowFallback}
             className={!props.selection.allowFallback ? 'on' : ''}
             onClick={() => props.setSelection({ ...props.selection, allowFallback: false })}
           >
