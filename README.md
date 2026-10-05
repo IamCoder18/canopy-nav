@@ -26,13 +26,17 @@ record, including what is *not* finished.
   until a replacement route exists.
 - **Streams large extracts**, so a province is parsed in a bounded window rather
   than held in memory twice.
+- **Speaks the guidance** through the platform's own text-to-speech engine, once
+  per step rather than on every position update.
+- **Starts with no network at all.** A service worker precaches the app shell, so
+  opening the app in a tunnel works once it has been opened online once.
 
 ## Quick start
 
 ```bash
 npm install
 npm run dev          # dev server
-npm test             # 599 unit tests
+npm test             # 702 unit tests
 npm run build        # typecheck + production build
 npm run serve        # LAN server, so a phone can load the built app
 ```
@@ -93,6 +97,10 @@ recorded per request in the Engines screen.
 
 ```
 src/
+  ErrorBoundary.tsx  crash screen; reports rather than swallows
+  settings.ts        durable settings + endpoint validation
+  sw.ts              offline shell (service worker), built as its own entry
+  voice.ts           spoken guidance, or an honest "unavailable"
   osm/
     engine.worker.ts   OSM parser (whole + streaming), road graph, A*, gazetteer
     pbf.ts             .osm.pbf protobuf reader
@@ -145,11 +153,19 @@ This was previously recorded as done and is now documented as the top open gap.
 ## Testing
 
 ```bash
-npm test             # 599 unit tests
+npm run check        # typecheck + lint + unit tests
+npm test             # 702 unit tests
+npm run lint         # type-aware ESLint, ratcheted at 27 warnings
+npm run bundle       # gzip size budget on the built output; fails on regression
 npm run e2e          # 39 browser checks against the built bundle
 npm run screens      # 150 screen checks across 3 viewports
 npm run serve        # then point the browser suites at it
 ```
+
+`npm run bundle` is a ratchet, not a report: the entry chunk is parsed on a
+phone's main thread before anything is interactive, so its size is asserted on
+every build rather than noted in a document nobody re-reads. Raising a budget is
+a deliberate edit to `tools/bundle-budget.mjs`.
 
 The browser suites import the fixture, route across it, drive the reroute flow by
 moving the simulated GPS fix, and audit every screen for horizontal overflow and
@@ -164,10 +180,17 @@ builds a debug APK and attaches it to a GitHub Release — see
 [STATUS.md](./STATUS.md) is the design record: what is verified, how, and what
 is not.
 
-Two things worth knowing before relying on this:
+Four things worth knowing before relying on this:
 
 - **Cross-region routing is wrong** (§7 gap 1). Single-region routing is
   unaffected and is the common case.
+- **Offline turn-by-turn guidance is inferred, not real.** The offline engine
+  cannot produce instructions, so turns are guessed from where the road bends.
+  Measured against Valhalla it missed three of seven real maneuvers on one 4 km
+  stretch. The app labels inferred guidance as inferred; choose a Valhalla engine
+  for real turn-by-turn.
+- **`geocode.ts` has no request timeout.** A hanging online geocoder can leave
+  "Searching…" on screen indefinitely (§10.5).
 - **It has never run on physical hardware.** Everything is browser-verified plus
   one Android 14 emulator. WebView behaviour, real GPS quality and on-phone
   memory pressure are unproven.

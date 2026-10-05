@@ -22,6 +22,8 @@ with **fully offline OpenStreetMap routing**.
 7. [Known gaps](#7-known-gaps)
 8. [Commands and workflows](#8-commands-and-workflows)
 9. [The plan, and what happened to it](#9-the-plan-and-what-happened-to-it)
+10. [The audit pass](#10-the-audit-pass)
+   — [claims that were false](#101-claims-that-were-false)
 
 ---
 
@@ -48,7 +50,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 599 unit tests across 25 files, plus 2 browser suites | `test/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 702 unit tests across 30 files, plus 2 browser suites | `test/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -61,7 +63,7 @@ stands. **Bold** = fully working and verified.
 | Gate | Command | Result |
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
-| Unit tests | `npm test` | **599 passing**, 25 files |
+| Unit tests | `npm test` | **702 passing**, 30 files |
 | End-to-end | `npm run e2e` | **39 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **50 checks × 3 viewports = 150** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Release | v0.11.3 tag | **CI green, Release green**, APK attached |
@@ -1066,7 +1068,7 @@ src/
     persist.ts             615  IndexedDB caching of parsed datasets
     download.ts           1270  streaming downloader
 
-test/            599 unit tests, 25 files
+test/            702 unit tests, 30 files
 test/e2e.mjs           39 browser checks, built bundle
 test/screens.mjs        50 checks x 3 viewports (150 total)
 tools/osm2pbf.mjs        XML -> PBF encoder (builds the test fixtures;
@@ -1116,7 +1118,10 @@ Ordered by how much they matter.
    feature. Related: `RoadGraph.regionOf` is persisted for every region despite
    only being meaningful for merged graphs.
 8. **Offline turn-by-turn infers turns** from bearing changes. Real instructions
-   need Valhalla.
+   need Valhalla. Measured against Valhalla on one 4 km stretch it missed three of
+   seven real maneuvers, invented one and reversed one direction — so the app now
+   *labels* inferred guidance as inferred (§10.5). The inference itself is still
+   wrong often enough that it should not be relied on for navigation.
 9. **zstd PBF blobs are rejected by name.** Geofabrik still ships zlib, so this
    is future-proofing only.
 10. **Emulator cutout band.** A black band remains where the emulator simulates a
@@ -1140,7 +1145,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 599 unit tests
+npm test             # 702 unit tests
 npm run e2e          # 39 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -1383,6 +1388,154 @@ manual-testing setup. The scripts this replaces:
 
 ```bash
 npm run screens                  # screen coverage at 3 viewports
+```
+
+---
+
+## 10. The audit pass
+
+Ten browser audits were run in parallel, each owning one area of the app and
+instructed to drive the **built bundle** in Chromium and report on UI, UX,
+performance and anything that did not behave as intended. All ten reports are in
+`/tmp/opencode/audits/`. What follows is what they found, what was done about it,
+and — more usefully — what they found that is still not fixed.
+
+The headline is that **auditing found four defects where the app claimed a
+capability it did not have.** Those are worse than a crash, because a crash is
+visible and a claim is believed.
+
+### 10.1 Claims that were false
+
+**The offline promise did not survive a reload.** The app's central claim is
+that it works with no network, and that was true right up until you reloaded the
+page: with no network the browser never reached the app at all and served its own
+`ERR_INTERNET_DISCONNECTED` page. Nothing had cached the bundle, because the app
+lives at a real origin. In a car that is the *common* case — a driver opening the
+app in a tunnel before the WebView has ever cached it — and there was no way
+forward from that screen.
+
+There is now a service worker (`src/sw.ts`), built as its own Vite entry,
+precaching the shell. Getting it to work took four attempts, and each failure
+looked like success, which is the only reason they are written down:
+
+| Attempt | What happened | Why it failed |
+|---|---|---|
+| 1 | `sw-<hash>.ts` emitted | `new URL('./sw.ts', …)` makes Vite treat the worker as a *static asset*; the output was untranspiled TypeScript, which no browser can execute |
+| 2 | Cache held `index.html` and nothing else | JS and CSS filenames are content-hashed, so offline every module script 404'd |
+| 3 | `ERR_FAILED` on the entry script, with the bytes sitting in the cache | `cache.match(req)` honours `Vary`, and module scripts are requested with `crossorigin` |
+| 4 | Favicon still failed | `public/` assets never appear in the bundle |
+
+Verified by reloading under `setOffline(true)`: the app renders, all five
+launcher tiles are present, the map is sized to the viewport, zero console
+errors.
+
+**The Mute button muted nothing.** An exhaustive search of `src/` and the Android
+assets for `AudioContext`, `new Audio`, `speechSynthesis`, `vibrate` and any
+bundled audio returned zero functional hits. The control toggled a boolean whose
+only consumers were its own icon and its own label.
+
+That is the most damaging shape a defect can take here: a driver taps Mute, hears
+nothing change, and concludes voice prompts are off — a wrong conclusion that
+*looks* like the safe one. `src/nav/voice.ts` now drives real spoken guidance
+through the Web Speech API, announcing a step once per *meaning* change rather
+than on every position tick, and interrupting itself for a new maneuver so an
+instruction is never queued behind a stale one. Where the WebView has no speech
+engine the control stays visible but disabled with the reason in its accessible
+name — a missing control reads as a missing feature, a disabled one explains
+itself.
+
+**The parser invented 74,756 places.** `+a.lat` is `NaN` for a missing attribute,
+and the node was stored regardless. A malformed extract carrying `lat="-200"`
+produced a gazetteer full of invented addresses — "Neg 1200", "Neg 12300" —
+presented in search results as `address / Offline`. Coordinates are now bounded in
+both readers. The bounding box also no longer reports its uninitialised sentinel
+as `180.000, 90.000, -180.000, -90.000` when nothing was parsed.
+
+**No map attribution was displayed at all.** `attributionControl: false` at
+construction plus `.maplibregl-ctrl-attrib { display: none }` meant the app showed
+no credit anywhere, in either map mode, while every road, label and POI it draws
+is OpenStreetMap data. That is a breach of the ODbL, not a cosmetic bug. The
+credit is now declared on the map sources and rendered by the library's own
+control.
+
+### 10.2 The audit found a regression this project introduced
+
+The bundle split (§10.4) put MapLibre's stylesheet in a separate lazily-loaded
+chunk, so it arrived *after* the entry CSS. `.maplibregl-map { position: relative }`
+and `.map { position: absolute; inset: 0 }` tie on specificity, so which won came
+down to stylesheet order — and the map's always won. **The map rendered nothing
+at all**: the container collapsed to 0px and the canvas fell back to 412×300.
+
+It passed the e2e suite, because that suite asserts horizontal overflow and text
+visibility, not that a map drew anything. It was caught by an audit that
+screenshotted and counted pixels. The fix sizes a wrapper the library has no
+opinion about, rather than raising specificity — which would work today and break
+silently the next time MapLibre adds a class.
+
+Worth recording as a process point: **the existing gates could not see it.** A new
+check now asserts the map container and canvas fill the viewport and that tiles
+were actually fetched.
+
+### 10.3 What is now enforced rather than written down
+
+| Gate | Command | Enforces |
+|---|---|---|
+| Lint | `npm run lint` | Type-aware rules; ratcheted at 27 warnings, so growth must be deliberate |
+| Bundle budget | `npm run bundle` | Entry 130 kB, initial 150 kB, largest chunk 300 kB, total JS 460 kB (gzip) |
+| Attribution | `test/attribution.spec.ts` | The ODbL credit is present, well-formed, and not re-suppressed |
+| Import safety | `test/import.spec.ts` | A bad file is refused and never replaces a working map |
+| Settings | `test/settings.spec.ts` | Every setting round-trips; a malformed endpoint is not "Ready" |
+| XML safety | `test/xmlentities.spec.ts` | Entity expansion is structurally impossible; hostile documents terminate |
+| Crash safety | `test/errorboundary.spec.ts` | A render throw shows a recovery card rather than a blank screen |
+
+The bundle budget and the lint ratchet are both *ratchets*: raising a number is a
+deliberate edit to a file, not drift. That is the same reasoning as the screen
+suite in §9 — a green result nobody re-derives is not a green result.
+
+### 10.4 Sizes
+
+| | Before | After |
+|---|---|---|
+| Entry JS (gzip) | 398.8 kB | **105.7 kB** (−74%) |
+| Entry CSS (gzip) | 13.1 kB, render-blocking | **4.4 kB**, deferred with the map |
+| Largest chunk | — | 281.6 kB (MapLibre), loaded on first paint |
+| Unit tests | 599 | **702** |
+
+MapLibre and the region manager are `React.lazy`. Neither is needed to render the
+first frame, and the entry chunk is parsed on a phone's main thread before
+anything is interactive.
+
+### 10.5 Still open, from the audits
+
+These were found and are **not** fixed. They are listed here rather than dropped,
+because a finding nobody records is a finding nobody fixes.
+
+1. **Inferred turn-by-turn is unreliable, and now says so.** Comparing an offline
+   route against Valhalla over one 4 km stretch found three of seven real
+   maneuvers missed, one invented, one direction reversed — and the *count* of
+   inferred steps changed with polyline tessellation density rather than with the
+   road. The steps screen now labels inferred guidance as inferred. Fixing the
+   inference itself needs real maneuver data, i.e. gap 8 above.
+2. **The ETA can read `0 m` while route remains**, and flips between `0 m` and
+   `670 m` on a 36 m move. The snapping logic needs a monotonicity property
+   asserted in a unit test; written up, not yet implemented.
+3. **`geocode.ts` has no timeout.** A hanging geocoder leaves "Searching…" on
+   screen indefinitely. The Valhalla client has one (§4); this does not.
+4. **Cross-region routing is still wrong** — the original gap 1, unchanged.
+5. **A tile-host failure can substitute the style silently**, and MapLibre logs
+   exceptions for the offline style's own validation. Harmless to the user, noisy
+   in a log.
+6. **Chrome still totals ~98% of the viewport** at phone portrait. Correct, and
+   the first thing a designer would cut.
+7. **Nothing has run on a physical device** — still gap 2, and no amount of further
+   work here closes it.
+
+### 10.6 Commands added
+
+```bash
+npm run lint      # type-aware ESLint, ratcheted at 27 warnings
+npm run bundle    # gzip size budget on the built output; fails on regression
+npm run check     # typecheck + lint + unit tests
 ```
 
 ---
