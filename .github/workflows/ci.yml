@@ -28,6 +28,12 @@ jobs:
       - run: npm test
       - run: npx vite build
 
+      # The entry chunk is parsed on a phone's main thread before anything is
+      # interactive. It was 399 kB gzipped until it was measured; this is the
+      # number that fails the build if it starts growing back.
+      - name: Bundle budget
+        run: npm run bundle
+
       # End-to-end: drives the real built app in headless Chrome through
       # import -> offline search -> route -> navigate -> regions. This is the
       # only check that exercises the worker, region store, router and screens
