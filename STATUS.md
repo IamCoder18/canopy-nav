@@ -21,7 +21,7 @@ with **fully offline OpenStreetMap routing**.
 6. [Project layout](#6-project-layout)
 7. [Known gaps](#7-known-gaps)
 8. [Commands and workflows](#8-commands-and-workflows)
-9. [The 6-hour plan, and what happened to it](#9-the-6-hour-plan-and-what-happened-to-it)
+9. [The plan, and what happened to it](#9-the-plan-and-what-happened-to-it)
 
 ---
 
@@ -36,11 +36,11 @@ stands. **Bold** = fully working and verified.
 | 2 | Visually mimic an Android Auto screen as closely as possible | **Done.** AAOS design tokens taken from Google's published specs. App bar and grid cell are now real tokens rather than CSS literals (§3.14) | `src/theme.ts` |
 | 3 | Prefer TypeScript | **Done.** ~10,400 lines TS/TSX. Exactly one hand-written Java file on Android (`MainActivity.java`, immersive mode only) plus XML themes; everything else is TypeScript | `android/` |
 | 4 | Other libraries allowed (e.g. Ferrostar) | Considered and rejected — Ferrostar duplicates what the built-in engine does and adds no offline win here | §5.2 |
-| 5 | Support `.osm` files | **Done.** XML parser | `src/osm/engine.worker.ts` |
+| 5 | Support `.osm` files | **Done.** Both formats read natively: XML via a chunked scanner, `.osm.pbf` via a protobuf reader. The PBF coordinate bug (§4.1) meant this was *not* working for real extracts until this revision | `src/osm/engine.worker.ts`, `src/osm/pbf.ts` |
 | 6 | Use Valhalla for car navigation | **Done** as an optional provider; **not** the on-device default (§5.3) | `src/nav/valhalla.ts` |
 | 7 | Use Nominatim for geocoding start/destination | **Done** as an optional online provider | `src/nav/geocode.ts` |
 | 8 | 100% local, no WiFi | **Done.** Offline engine, offline gazetteer, offline map rendering, offline persistence | §3.2–3.4 |
-| 9 | Multi-region: download by city/province (Alberta, BC…), route between them | **Done.** 16-entry catalogue, streaming download, seamless merge | §3.5 |
+| 9 | Multi-region: download by city/province (Alberta, BC…), route between them | **Partly done.** Download, streaming, catalogue and cross-region *search* all work. **Cross-region routing does not route correctly** — it stitches at a bounding-box midpoint rather than merging; see row 10 and §7 gap 1 | §3.5 |
 | 10 | Merging the two regions rather than stitching | **NOT DONE.** The merge algorithm exists, is well built and is tested (~800 lines of tests) — and **the app never calls it.** Cross-region routing stitches two separately-routed legs at a point derived from *bounding-box arithmetic*, which produces a materially wrong route. Corrected in this revision; see §3.5.2 and gap 2 | `src/osm/merge.ts` (unwired) |
 | 11 | Is self-hosting Valhalla on Android unreasonable? | Answered: not unreasonable, but not achievable in the time available (§5.3) | — |
 | 12 | Keep hosted Valhalla as an option | **Done.** Three hosted presets plus a custom endpoint — FOSSGIS, Simplerouting.io, and your own `valhalla_service` — each individually selectable and probeable, alongside the offline engine | §3.6, §3.6.1 |
@@ -50,7 +50,7 @@ stands. **Bold** = fully working and verified.
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
 | 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 599 unit tests across 25 files, plus 2 browser suites | `test/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
-| 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what two 6-hour budgets covered, including what they did not | — |
+| 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
 | 21 | Update STATUS.md continuously | **This document** | — |
 
@@ -421,7 +421,9 @@ more capable than the previous behaviour, which was local-only with no fallback.
 
 **What.** Signal drops halfway through a drive.
 
-**How.** Three mechanisms:
+**How.** Three mechanisms. Note that rerouting is *not* among the things lost with
+signal — the offline engine and the snapshotted geometry are enough to recompute a
+route with no network at all, which §3.11.1 depends on.
 
 1. **Provider chain.** Online engines are tried when a network is believed to
    exist; the local engine is always the fallback, so a route never fails
@@ -436,7 +438,9 @@ more capable than the previous behaviour, which was local-only with no fallback.
    information is worse than showing it with a caveat.
 
 **Why.** A navigation app that loses guidance when a tunnel eats the signal is
-useless. Degrading to the offline engine costs nothing and saves the trip.
+useless. Degrading to the offline engine costs nothing and saves the trip, and
+because that engine needs no network it can also *re-route* — so losing signal
+costs traffic data and nothing else.
 
 ### 3.8 Region persistence
 
@@ -1196,14 +1200,15 @@ map loaded.
 
 ---
 
-## 9. The 6-hour plan, and what happened to it
+## 9. The plan, and what happened to it
 
-A 6-hour budget was proposed, then narrowed to the highest-value blocks, then
-spent across two sessions. This section records it because **the record of the
-estimate is itself the useful part**: the first plan was padded by roughly 5×,
-and the correction changed which gaps looked expensive.
+The work was planned in blocks and then spent across several sessions. This
+section records it because **the record of the estimate is itself the useful
+part**: the first plan was padded by roughly 5×, and correcting it changed which
+gaps looked expensive. Several blocks were then added mid-flight by audits rather
+than by planning, and those found more than the plan did.
 
-### The plan as revised
+### 9.1 The plan
 
 | Block | Work | Closes | Outcome |
 |---|---|---|---|
@@ -1213,25 +1218,42 @@ and the correction changed which gaps looked expensive.
 | 4 | Streaming parse | §7 gap 3 | **Done** (§3.12) |
 | 5 | Emulator: exercise nav + reroute on device | §7 gap 2 | **Partly done** |
 | 6 | Zoomed-out offline density as a style/LOD fix | §7 gap 4 | **Done** (§3.13) |
-| 7 | Tag, read the CI result, update STATUS | req #16, #21 | **Done** — released as v0.11.2, both workflows green |
+| 7 | Tag, read the CI result, update STATUS | req #16, #21 | **Done** — v0.11.2 and v0.11.3 released, both workflows green |
+| 8 | *Added by audit:* dead-code + STATUS reviews | — | §9.3 below |
+| 9 | *Added by audit:* reroute failure paths, frozen-position loop | — | §3.11.1 |
+| 10 | *Added by audit:* PBF coordinate correctness | req #5 | §4.1 |
 
-Block 7 is the one that only completes if someone looks at the result, and it did
-catch a failure: the first Release run died in the test step. That is the second
-time in this project's history that a "green" story turned out to be wrong
-(§3.16's seven red pushes, §4.6's screen-coverage regression), and the third time
-the fix was to go and read the output rather than trust the summary.
+Blocks 8–10 were not planned. They came from asking what was still broken rather
+than what was still missing, and they found the single most consequential bug in
+the project (§4.1) plus a live reroute loop that had been shipping.
+
+### 9.2 Release and CI
+
+Block 7 is the one that only completes if someone looks at the result, and looking
+caught a failure every time: the first Release run died in the test step, and two
+later pushes failed because a spec read a fixture that was never committed and
+then wrote scratch to a machine-local path.
+
+That is four times in this project's history that a "green" local story turned
+out to be wrong — §3.16's seven red pushes, §4.6's screen-coverage regression, and
+these two CI failures. Every one was caught by reading the run output rather than
+trusting the summary, and the last two only appeared *because* the work was
+pushed. Verifying against a clean export of the git index, from a different
+working directory, is now the habit rather than running the suite in place.
 
 The "Closes" column now names §7 gaps as they are numbered *in this revision*.
 The gap list was renumbered twice, and earlier versions of this table pointed at
 the wrong numbers — which is the same class of error as the counts in §2: a
 cross-reference written once and never re-checked after something beneath it moved.
 
-### Third session: what an audit found
+### 9.3 What the audits found
 
-Blocks 1–6 were complete, so the remaining budget went to asking what was still
-wrong rather than adding features. Three subagents were run in parallel against
-non-overlapping ground, and the two that returned findings both found things I
-would not have gone looking for:
+Blocks 1–7 were complete, so the remaining budget went to asking what was still
+*wrong* rather than what was still missing. Eight subagents were run in parallel
+against non-overlapping ground — one returned nothing at all, which is itself worth
+noting, since a subagent that fails silently is indistinguishable from one that
+found nothing until you read its report. The ones that returned findings found
+things I would not have gone looking for:
 
 - A **dead-code audit** found the `.nav-panel` corruption and, more importantly,
   that `src/osm/merge.ts` — 318 lines plus ~800 lines of tests — is unreachable
@@ -1246,14 +1268,26 @@ would not have gone looking for:
   §6 line counts were stale, that §1 row 12 overstated the provider count, and
   that §3.3's "asserted against a hand-computed bound" described an assertion
   that does not exist. All corrected here.
+- A **dead-affordance audit** found four controls declared, wired to real work and
+  never invoked — including no way to clear a route, and map taps that were a
+  guaranteed no-op (§4.6) — and established that the whole navigation control
+  stack had **zero** browser coverage, which is why the `.nav-panel` regression
+  shipped (§4.7).
+- A **reroute test pass** found that a frozen GPS fix rerouted every 30 s forever,
+  measured at 20 requests in ten minutes, and that a failure reason was erased
+  after one second (§3.11.1).
+- A **cross-region investigation**, asked only to quantify how wrong stitching is,
+  reported the PBF coordinate bug on its way past (§4.1). Worth noting the
+  investigation was authorised as documentation-only and the fix was not: the
+  measurement turned out to matter more than the thing it was measuring.
 
-The screen-coverage regression (§4.6) was self-inflicted earlier the same day, and
-it is the most useful thing in this section: I added a screen to the suite,
-broke the unwind with `goBack()`, and the suite kept reporting "all checks
-passed" over a third of its scope for the rest of the session. Had the audit not
-independently re-derived the expected check count, it would still be broken.
+The screen-coverage regression (§4.6) was self-inflicted, and it is the most
+useful thing in this section: I added a screen to the suite, broke the unwind with
+`goBack()`, and the suite kept reporting "all checks passed" over a third of its
+scope for the rest of the session. Had the audit not independently re-derived the
+expected check count, it would still be broken.
 
-### Estimates, second revision
+### 9.4 Estimates, corrected twice
 
 The original plan budgeted 30 minutes for `npx playwright install chromium` (a
 one-line download), 45 minutes to replace 10 CSS literals, and 15 minutes to boot
@@ -1268,7 +1302,7 @@ checking rather than assuming:
   axis on the grounds that there is no phone. `/dev/kvm` and a booted AVD were
   sitting there. The device gap narrowed to *physical* hardware only.
 
-### What actually happened
+### 9.5 What actually happened
 
 **Session one: 38 minutes of wall clock**, covering blocks 1, 2, half of 5, and
 the STATUS half of 7. Then work stopped.
@@ -1314,43 +1348,14 @@ Two process notes, because both cost real time:
 - One subagent's cleanup used a `pkill` pattern broad enough to take down a
   preview server another process was using. The same class of problem as §4.6: a
   tool acting outside the scope it was given, and no error raised.
-### Not in the plan, but owed
+### 9.6 Owed, and then done
 
 Requirement #2's app-bar/grid-cell tokens (~15 min) and requirement #20's
 `serve.mjs` living in `/tmp` (~20 min) were identified but never scheduled. Both
 were dropped by stopping early rather than by a decision to skip them. **Both are
 now done** — see §3.14.
 
-### What actually happened
-
-**Session one: 38 minutes of wall clock**, covering blocks 1, 2, half of 5, and
-the STATUS half of 7. Then work stopped.
-
-The stop was my error and worth recording plainly: after finishing a coherent
-unit of work I ended the turn by *asking whether to continue*, when the plan had
-already specified reroute as the next block and the instruction had been to work.
-That cost roughly nine idle hours against a six-hour budget. The lesson is
-narrower than "ask less": when a plan names the next step and the next step is
-not destructive or ambiguous, continuing is not a decision that needs sign-off.
-
-Two things inside those 38 minutes were not padding, and are the reason the block
-was not faster:
-
-- The first `resolveRoute` rewrite broke 4 provider tests. I fixed the source
-  rather than the tests, which then surfaced a real bug in my own `strict`
-  semantics: it aborted the walk, which would have made "any online engine" a
-  lie, since walking *between* hosted engines is exactly what that option means.
-- The device check produced a negative result worth having — the v0.11.1
-  baseline APK was rebuilt and reinstalled to prove the three launch warnings
-  were pre-existing rather than introduced. That diagnosis took a further session
-  and a subagent to actually find (§3.15); establishing it was *not* a
-  regression was much cheaper than establishing what it was.
-
-**Session two** picked up block 3 and did not stop: rerouting, streaming parse,
-the LOD fix, the two owed requirement items, and the duplicate system-bar
-handling. Unit tests went 380 → 516, e2e checks 23 → 39.
-
-### Carried forward
+### 9.7 Carried forward
 
 **v0.11.2 is released**: 15 commits, CI green, Release green, APK attached. The
 first Release run failed — 511 tests passed and then vitest died with
@@ -1365,7 +1370,7 @@ not a regression — it has always been this way — but it is the thing most li
 to matter to a driver with two provinces loaded, and it is now documented rather
 than claimed.
 
-### Serving for manual testing
+### 9.8 Serving for manual testing
 
 ```bash
 npm run build && npm run apk    # dist/ and the debug APK
