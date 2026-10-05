@@ -640,10 +640,47 @@ code {
     left: 16px;
     z-index: 2;
   }
+  /*
+   * The off-route notice sits directly *below* the maneuver card rather than on
+   * top of it.
+   *
+   * Both were anchored at `app-bar + inset-top + 24px`, so on a narrow screen the
+   * notice was painted across the instruction text — the one thing on the screen
+   * the driver is reading while the app decides whether to reroute.
+   *
+   * `:has()` is the honest way to express "and only when the notice is present":
+   * there is no way to do it in plain CSS sibling selectors, and offsetting the
+   * banner unconditionally would waste the space on every drive.
+   */
+  /*
+   * Directly under the ETA bar, with the maneuver card pushed down to match.
+   *
+   * Anchoring the notice above the control row instead meant positioning it
+   * against a container whose height varies with the status line, and it landed
+   * on top of it. One flow, top-down: bar, notice, maneuver card, controls. No
+   * magic offsets against a variable-height sibling.
+   */
   .offroute-banner {
     left: 16px;
-    max-width: calc(100% - 32px);
-    z-index: 2;
+    right: 16px;
+    max-width: none;
+    z-index: 3;
+    top: calc(var(--app-bar, 96px) + var(--inset-top) + 8px);
+    bottom: auto;
+  }
+  .nav-root:has(.offroute-banner) .maneuver-banner {
+    /* Room for the notice (48px) plus two 8px gaps. */
+    top: calc(var(--app-bar, 96px) + var(--inset-top) + 8px + 64px);
+  }
+  /* The status line returns to the flow here, above the buttons, rather than
+     hanging below the control row — where it landed on the bottom bar's own
+     labels. */
+  .nav-controls > .nav-status {
+    position: static;
+    order: -1;
+    width: auto;
+    max-width: 100%;
+    margin-bottom: 4px;
   }
 }
 
@@ -1301,4 +1338,25 @@ button.chip.ok { background: rgba(96, 168, 240, 0.18); color: #60A8F0; }
   background: rgba(97, 71, 12, 0.9);
   color: #FDD663;
   border-left: 4px solid #FBBC04;
+}
+
+/*
+ * Narrow-screen placement of the navigation status line.
+ *
+ * Deliberately at the *end* of this file. It overrides
+ * `.nav-controls > .nav-status { position: absolute; … }`, which is declared
+ * further up, and a media query adds no specificity — so source order is what
+ * decides. Written next to the rule it overrides, the base rule won and the
+ * status line hung below the control row, on top of the bottom bar's own labels.
+ */
+@media (max-width: 599px) {
+  .nav-controls > .nav-status {
+    position: static;
+    order: -1;
+    width: auto;
+    max-width: 100%;
+    margin-bottom: 4px;
+    align-self: stretch;
+    text-align: left;
+  }
 }
