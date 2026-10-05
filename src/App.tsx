@@ -1152,6 +1152,8 @@ const banner = rerouteNotice ?? routeError ?? degraded[0] ?? null;
           onSettings={() => setScreen('settings')}
           onRoute={(pos, label) => doRoute({ pos, label })}
           onClear={() => { setRoute(null); setDestination(null); setOrigin(null); resetTraffic(null); }}
+          destination={destination}
+          units={units}
         />
       )}
 
@@ -1305,6 +1307,10 @@ interface HomeProps {
   onSettings: () => void;
   onRoute: (pos: LatLng, label: string) => void;
   onClear: () => void;
+  /** Named so the launcher can say where resuming would take you. */
+  destination?: { pos: LatLng; label: string } | null;
+  /** The user's unit choice, so this screen does not hard-code one. */
+  units: 'metric' | 'imperial';
 }
 
 function HomeScreen(p: HomeProps) {
@@ -1341,7 +1347,10 @@ function HomeScreen(p: HomeProps) {
             <div style={T.body3m}>Canopy Nav</div>
             <div style={{ ...T.sub3, color: ink.secondary }}>
               {p.dataset
-                ? `${p.dataset.counts.routable.toLocaleString()} routable ways · ${p.regionCount} region${p.regionCount === 1 ? '' : 's'}`
+                // Pluralised on the count, not assumed. It read "1 routable ways"
+                // for a single-way extract, which is the sort of small wrongness
+                // that makes a status line stop being believed.
+                ? `${p.dataset.counts.routable.toLocaleString()} routable way${p.dataset.counts.routable === 1 ? '' : 's'} · ${p.regionCount} region${p.regionCount === 1 ? '' : 's'}`
                 : 'No map loaded'}
             </div>
           </div>
@@ -1384,7 +1393,19 @@ function HomeScreen(p: HomeProps) {
               <div className="continue-left">
                 <div style={T.body3m}>Continue navigation</div>
                 <div style={{ ...T.sub3, color: ink.secondary }}>
-                  {p.route.summary ? `${formatDuration(p.route.summary.time)} · ${formatDistance(p.route.summary.length, 'metric')}` : ''}
+                  {/*
+                    The destination first, then the duration and distance.
+
+                    It used to lead with a duration and hard-code `'metric'`, so a
+                    user who had chosen imperial units saw "102 km" here and "63 mi"
+                    in the navigation screen at the same moment. And "Continue
+                    navigation" with no destination is not actionable — resuming a
+                    trip to somewhere unnamed is how you end up in the wrong city.
+                  */}
+                  {p.destination?.label ?? 'a saved route'}
+                  {p.route.summary
+                    ? ` · ${formatDuration(p.route.summary.time)} · ${formatDistance(p.route.summary.length, p.units)}`
+                    : ''}
                 </div>
               </div>
               <IconChevronRight size={ICON.primary} />
