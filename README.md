@@ -30,13 +30,23 @@ record, including what is *not* finished.
   per step rather than on every position update.
 - **Starts with no network at all.** A service worker precaches the app shell, so
   opening the app in a tunnel works once it has been opened online once.
+- **Routes across regions as one route**, over a merged graph, behind a memory
+  guard that refuses with a reason instead of being killed mid-journey.
+- **Says what a driver can act on.** A routing server's own error text is
+  translated — "Path distance exceeds the max distance limit: 1500000 meters"
+  became "That trip is longer than the routing server will plan. Pick a closer
+  destination, or use the offline map" — and the raw text is kept in the engine
+  trace for whoever is debugging.
+- **Is operable without sight.** Every screen has a heading, a screen change is
+  announced and takes focus, and a control that cannot be used says why *and*
+  stays reachable so the reason can be read.
 
 ## Quick start
 
 ```bash
 npm install
 npm run dev          # dev server
-npm test             # 702 unit tests
+npm test             # 821 unit tests
 npm run build        # typecheck + production build
 npm run serve        # LAN server, so a phone can load the built app
 ```
@@ -104,7 +114,7 @@ src/
   osm/
     engine.worker.ts   OSM parser (whole + streaming), road graph, A*, gazetteer
     pbf.ts             .osm.pbf protobuf reader
-    merge.ts           union-find merge of adjacent extracts  [not wired in]
+    merge.ts           union-find merge of adjacent extracts
     regions.ts         multi-region library + download catalogue
   nav/
     providers.ts       engine chain, attempt trace, connectivity
@@ -139,26 +149,37 @@ substantial undertaking whose feasibility is not established. So the default
 engine is a self-contained A\* over a graph parsed from `.osm`. Valhalla remains
 available as an engine.
 
-### Cross-region routing is not merged — and that is a known gap
+### Cross-region routing, and the memory guard in front of it
 
-`osm/merge.ts` implements merging correctly (union-find over shared OSM node
-IDs, with direction permissions reconciled) and is well tested, but **the app does
-not call it**. Routing across two downloaded regions instead stitches two
-separately-routed legs at a point derived from their *bounding boxes*, which
-produces a continuous-looking line that is not the route a driver would take.
+Routing across two downloaded regions runs **one A\* over a merged graph**.
+`osm/merge.ts` builds that graph with a union-find over shared OSM node IDs,
+reconciling direction permissions where the extracts disagree, and
+`RegionLibrary.route()` calls it. Previously it stitched two separately-routed
+legs at a point derived from their bounding boxes, which produced a
+continuous-looking line that was not the route a driver would take — the app's
+top open gap for most of its life, and wrong in a way no test could see because
+the line looked plausible.
 
-This was previously recorded as done and is now documented as the top open gap.
-`STATUS.md` §3.5.2 has the analysis, and §7 gap 1 has the decision.
+Merging is not free: two provincial extracts is a large graph. `osm/mergeguard.ts`
+estimates the cost from the declared graph size and **refuses with a specific
+reason** rather than being OOM-killed mid-route, which on a phone means the app
+closing with no explanation. The estimate is structural, so a refusal on a real
+province is predicted rather than discovered — and has never been seen on real
+data, which is the honest limit of it.
+
+`STATUS.md` §3.18 has the analysis and §3.5.2 the original decision.
 
 ## Testing
 
 ```bash
 npm run check        # typecheck + lint + unit tests
-npm test             # 702 unit tests
+npm test             # 821 unit tests
 npm run lint         # type-aware ESLint, ratcheted at 27 warnings
 npm run bundle       # gzip size budget on the built output; fails on regression
-npm run e2e          # 39 browser checks against the built bundle
+npm run e2e          # 40 browser checks against the built bundle
 npm run screens      # 150 screen checks across 3 viewports
+npm run focus        # 13 keyboard and focus checks in a real browser
+npm run shots        # screenshot every screen + record computed styles
 npm run serve        # then point the browser suites at it
 ```
 
@@ -171,6 +192,20 @@ The browser suites import the fixture, route across it, drive the reroute flow b
 moving the simulated GPS fix, and audit every screen for horizontal overflow and
 zero-size text at phone-portrait, phone-landscape and head-unit sizes.
 
+`npm run focus` exists because a unit suite structurally cannot see where focus
+ended up. It drives the built app by keyboard and asks the two questions that
+matter: does a letter reach the field it was typed into, and after a screen change
+is focus on the new screen's heading or back on `<body>`. Both were broken, and
+every other gate was green throughout.
+
+`npm run shots` captures each screen at three viewports and writes the *computed*
+style of its named elements alongside the image, so a defect that CSS error
+recovery silently discarded — which is how the maneuver arrow lost its background,
+for every non-major turn — shows up as a recorded value rather than as an opinion
+about a picture. It also flags any text element whose content is wider than its
+box, which is the most common polish defect and the least visible in a
+screenshot.
+
 CI runs all of it and uploads screenshots as artifacts. Pushing a `v*` tag also
 builds a debug APK and attaches it to a GitHub Release — see
 `.github/workflows/release.yml`.
@@ -182,8 +217,6 @@ is not.
 
 Three things worth knowing before relying on this:
 
-- **Cross-region routing is wrong** (§7 gap 1). Single-region routing is
-  unaffected and is the common case.
 - **Offline turn-by-turn guidance is inferred, not real.** The offline engine
   cannot produce instructions, so turns are guessed from where the road bends.
   Measured against Valhalla it missed three of seven real maneuvers on one 4 km
@@ -191,7 +224,15 @@ Three things worth knowing before relying on this:
   for real turn-by-turn.
 - **It has never run on physical hardware.** Everything is browser-verified plus
   one Android 14 emulator. WebView behaviour, real GPS quality and on-phone
-  memory pressure are unproven.
+  memory pressure are unproven. This is the one gap no further work here can
+  close.
+- **Home and Work are unset until you set them.** They used to be two fixed
+  coordinates in the English Channel, which is a tile labelled "Home"
+  navigating a car into the ocean. They now open search and save what you pick.
+
+One thing that is *not* a gap any more, though older copies of this file said so:
+cross-region routing now runs one A\* over a merged graph rather than stitching
+two routes at a bounding-box midpoint. `STATUS.md` §3.18 has the analysis.
 
 ## Data
 

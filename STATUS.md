@@ -1339,11 +1339,14 @@ Ordered by how much they matter.
    spike but does not prove the parse fits a phone. This also bounds the merge:
    the guard in §3.18 estimates from declared graph size and refuses rather than
    guessing, but a refusal on a real province has never been seen.
-3. **The offline LOD fix is unverified at province scale.** §3.13's assertions are
-   structural (every line layer has a floor below zoom 10, arterials branch on
-   class at low zoom). The only extract available offline is the tiny fixture,
-   which cannot show what a province looks like at zoom 6. See that section for
-   why the claims are worded the way they are.
+3. **The offline LOD refreshes on zoom, but is unverified at province scale.**
+   There was no `zoomend` listener at all, so the level of detail only changed as
+   a side effect of a GPS fix and at a standstill the map visibly refused to gain
+   detail — fixed in §11. What is still unverified is the other half: §3.13's
+   assertions are structural (every line layer has a floor below zoom 10,
+   arterials branch on class at low zoom), and the only extract available offline
+   is the tiny fixture, which cannot show what a province looks like at zoom 6.
+   See that section for why the claims are worded the way they are.
 4. **SAF file import untested on device.** The picker UI was not automatable over
    adb; browser-tested only. Re-confirmed while building the engine screen: the
    file picker cannot be driven through `adb shell input`, so device runs start
@@ -1389,6 +1392,35 @@ Ordered by how much they matter.
 | `merge.ts` was 318 lines of dead code plus ~800 lines of unreachable tests | Called by `RegionLibrary.route()`; requirement #10 implemented |
 | The ETA could read `0 m` while route remained, and increase while driving forwards (§7 gap 12, "the most dangerous readout in the app") | Three properties as pure policy, asserted as properties. §3.17 |
 | A `useMemo` closing over a later-declared ref broke the whole app with all 747 unit tests green | `test/tdz.spec.ts` and `test/app-render.spec.ts`. §3.19 |
+
+### Closed by the third pass (§11)
+
+| Was | Now |
+|---|---|
+| A letter could not be typed anywhere: the `m` mute shortcut sat above the typing guard with an unconditional `preventDefault` | The guard is first. §11, `test/focus.mjs` |
+| Focus was destroyed on every screen change, so the next Tab restarted from the top of the document | A screen change announces itself, takes focus, and sets `document.title`. §11.1 |
+| Every "unavailable — and here is why" sentence was inside a `disabled` button, so it could never be reached | `aria-disabled` throughout, with the activation refused. §11.2 |
+| Arrival was never announced or spoken for any Valhalla route, because `next` is built with `?? active` and so was never null | Derived from progress. `test/audit-regressions.spec.ts` |
+| The distance to the next turn was capped at 9999 m and the capped value was *spoken* | The true distance. §10 |
+| Non-major turns were painted at display3 and spoken as nothing | Every instruction change is spoken and announced |
+| Valhalla's own error text reached the driver in a red card | Translated to something actionable; the raw text kept in the trace |
+| Home and Work routed to two fixed points in the English Channel | The driver's own saved destinations, unset until set |
+| With no GPS the map opened on London while the app's position was Calgary — 7,000 km apart | One exported placeholder, and the map opens on it |
+| The maneuver arrow had no background for every non-major turn (declarations stranded between rules) | The declarations are inside the rule; the suite parses the stylesheet |
+| The ETA bar sat under the system status bar and the nav bar in the gesture area (padding shorthand resetting an inset longhand) | One shorthand with the inset folded in |
+| The launcher computed to one column at phone portrait — five 158dp tiles in an 886px scroll | Two columns, sized to fit |
+| The app bar ellipsised to "Canopy …" and "Onl…" at 412px | The wordmark has a short form; the pill is sized by its content |
+| A successful fallback route painted a warning in the red error card above Start | Warnings have their own tone, and a fallback is the expected path |
+| The whole provincial road network was re-serialised to GeoJSON once a second | Cached per dataset and zoom |
+| Overlays were applied from props frozen at the start of a style boot, so a route chosen in that window drew nothing | Read live from a ref |
+| Zooming gained no new roads on the offline map | `zoomend` re-applies, and `prefers-reduced-motion` is honoured |
+| Every settings *read* was unguarded, so a WebView whose `getItem` throws opened on the crash card | `safeGet` throughout |
+| Region deletion discarded the reason it had built for itself; a refused write freed no bytes and said nothing | Awaited and reported |
+| A 900 MB download outlived the Regions screen | Aborted on unmount |
+| The catalogue availability probe fired every URL at once, with no deadline, under a comment claiming it was lazy | Four at a time, 10s each, cancelled on unmount |
+| The focus ring measured 1.97:1 on the map | A three-layer sandwich that passes on both extremes |
+| Progress was a firehose in a live region, or absent entirely on Regions | The number is the progressbar's value; the region carries the stage |
+| `<main>` did not exist and three screens had no heading | `<main>`, a heading per screen, `aria-modal` on both dialogs |
 
 ### Closed by the audit pass (§10)
 
@@ -1935,6 +1967,166 @@ npm run lint      # type-aware ESLint, ratcheted at 27 warnings
 npm run bundle    # gzip size budget on the built output; fails on regression
 npm run check     # typecheck + lint + unit tests
 ```
+
+---
+
+## 11. The third pass: what a driver actually gets
+
+§10 audited the *code*. This one drove the built app in Chromium at three
+viewports, read it, and compared it against Google's published automotive
+specifications. It found that the things this app is *for* were the things a
+keyboard or screen-reader user could not reach.
+
+### 11.1 One root cause behind most of it
+
+There was exactly one `focus()` call in the whole app, and it targeted the search
+field. Every other transition swapped React state, which unmounts the control
+that was just activated, so focus fell to `<body>` and the next Tab restarted
+from the top of the document — on the Regions screen, roughly sixty catalogue
+rows. Because a bare letter also opened search, pressing `s` after tapping
+Settings both lost your place and navigated away.
+
+That is not a keyboard-user problem alone. On a head unit driven by a rotary
+controller or a switch, losing focus is losing the app.
+
+Screens now announce themselves, take focus, and set `document.title` — which was
+the static string "Canopy Nav" for the life of the process, so nine screens were
+nine identical entries in a task switcher. Search and the route preview had no
+heading at all, so heading navigation skipped them.
+
+**The rule is "the heading is the fallback", not "the heading wins".** The first
+version focused it unconditionally, which is right for Settings, Engines, Regions
+and the turn list and wrong for Search — arriving there put the caret on a
+visually hidden heading, and typing did nothing. A screen that claims focus
+during its own commit keeps it.
+
+### 11.2 Every reason a control was unusable, was unreachable
+
+`disabled` removes a control from the tab order. Every sentence in the app
+written to explain *why* something cannot be used — "Unavailable — no offline map
+loaded", "This download URL could not be reached", "Voice guidance unavailable on
+this device" — lived inside a `disabled` button. The Engines screen read as
+"here are some engines, pick one", with the chosen one impossible to explore.
+
+All of them are `aria-disabled` now, with the activation refused. The e2e check
+asserted the old behaviour, so it was rewritten to assert the property that was
+actually wanted: the row stays focusable *and* carries its reason.
+
+### 11.3 The navigation announcements were never heard
+
+`NavOverlay` mounts only while navigating, so its live region was created *with*
+"In 240 m, turn right" already inside it. NVDA, JAWS and TalkBack all commonly
+discard content inserted into a live region in the same commit that creates the
+region — so the first instruction of every trip, the one needed to leave the
+parking lot, was never announced. It only worked from the second maneuver.
+
+It was also unthrottled: the region carried an **unbucketed** distance inside
+`aria-atomic="true"`, while a comment three lines above claimed the distance was
+deliberately excluded for exactly that reason. A driver using assistive
+technology got "In 340 metres, turn right. In 330 metres, turn right." queued
+without end, and because the queue never drained, the next maneuver arrived late
+or not at all.
+
+The distance stays — a turn instruction without one is not an instruction — and
+is bucketed to the same 50 m step the speech path already used.
+
+Progress updates had the mirror-image problem: the parser emits per segment and
+the downloader per stream chunk, so the live text was "1%. 2%. 2%…" for the
+minutes an import takes. The number is now the `progressbar`'s value; the region
+carries only the stage. The two Regions cards had no role at all.
+
+### 11.4 Measured against the published numbers
+
+The design system claims a 4.5:1 floor and a 24dp minimum type size. Measured:
+
+| Element | Was | Against |
+|---|---|---|
+| Focus ring, on the map | **1.97:1** | SC 1.4.11 wants 3:1 |
+| "Not set" on an unset launcher tile | **2.87:1** | 4.5:1 |
+| "Not set" on a solid tile | 4.49:1 | 4.5:1 — by one hundredth |
+| Error card, over the transparent launcher panel | **3.39:1** | 4.5:1 |
+| Offline chip, 18px over a blurred map | 4.34:1 | 4.5:1 (18px is not "large") |
+| The hint's type size | 17px, 15px | 24dp minimum, 18px smallest step |
+
+Three of those were not contrast problems but **dependency** problems: the tile,
+the error card and the chip were translucent, so their ratios moved with whatever
+was behind them — a road, or nothing. All three are opaque now, which makes the
+ratio a property of the design system rather than of the screen.
+
+The focus ring is a different shape of problem: **no single colour passes on
+near-black and near-white**. So it is now a three-layer sandwich — dark, light,
+dark — where each band is judged against whichever surface it is adjacent to. A
+single ring would have worked today and failed silently the next time a control
+moved.
+
+The attribution was 11px — half the design system's smallest step — at a
+~13×16px tap target, and the pinned progress card painted over it for the whole
+duration of every download. The ODbL requires it displayed.
+
+### 11.5 Two things this pass broke, and how they were caught
+
+Recorded because both are the same shape as §3.19 and §4.6.
+
+**Hiding the app bar's summary line below 600px took the map state with it.** The
+line said "12,481 routable ways · 2 regions"; it was also the launcher's only
+statement of whether a map existed, so at phone width a loaded province and an
+empty app looked identical. Worse than the truncated label it replaced.
+
+`test/screens.mjs` caught it — by asserting `/\d+ routable ways/` against the
+launcher's text. That check had been passing for the wrong reason: the feature it
+guarded is fine, dropping a fixture onto a fresh launcher yields "19 routable
+ways · 1 region". It went red the moment the string moved off screen, which is
+the argument for having it.
+
+**The same suite also had a 6-second sleep** where the parse runs in a Worker, so
+it failed on the first viewport of a run and passed on the second. It polls now. A
+fixed wait is a coin toss dressed as a test, and a flaky red gets ignored.
+
+### 11.6 The harness had to be fixed before it could report anything
+
+`tools/focus.mjs`'s first Tab check dispatched a synthetic `KeyboardEvent` from
+the page. That does not move focus — the browser's own key handling implements
+Tab — so the check reported success without having moved anything. A green result
+from a test that could not have failed. This is the sixth instance of that shape
+in this project and the fastest so far to catch, because the test was written
+knowing about the previous five.
+
+### 11.7 What the new gates are
+
+```bash
+npm run focus   # 13 keyboard and focus checks in a real browser
+npm run shots   # every screen, 3 viewports, computed styles recorded
+```
+
+`shots.mjs` writes the *computed* style of named elements beside the image, so a
+defect CSS error recovery silently discarded — which is how the maneuver arrow
+lost its background for every non-major turn — appears as a recorded value rather
+than as an opinion about a picture. It also flags any text element whose content
+is wider than its box, which is the commonest polish defect and the least visible
+in a screenshot.
+
+`test/audit-regressions.spec.ts` holds 25 source-level guards for the defects
+above, each verified to fail when its defect is reintroduced. It strips comments
+and string literals before matching, because several of these files quote the old
+code in the note explaining the fix — a test that fails on a correct file trains
+people to delete the explanation.
+
+### 11.8 Still open from this pass
+
+1. **No `main` landmark on the map itself.** It is the first tab stop on every
+   screen and has no accessible name. Decorative `tabIndex={-1}` would remove the
+   confusion; a composed description ("Route to X. Traffic. Offline basemap")
+   would make it useful.
+2. **The turn list has no list semantics**, so a screen reader cannot report
+   "item 3 of 24" — which is how a driver scans a turn list.
+3. **The navigation screen cannot reflow.** `overflow: hidden` on `html`/`body`
+   and `position: fixed` on `.app` mean nothing scrolls, and every part of that
+   screen is absolutely positioned. At 200% text zoom the banner and the control
+   stack overlap.
+4. **Confirming a region removal loses focus**, because the Remove button is
+   unmounted when the confirm state appears.
+
+None of these blocks use. All four are recorded so they are not lost.
 
 ---
 
