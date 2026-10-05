@@ -136,7 +136,18 @@ function decodeEntities(s: string): string {
   return s
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
+    // Numeric references are *code points*, not code units, so this has to be
+    // `fromCodePoint`: `fromCharCode(128512)` wraps to 62976 and turns an emoji
+    // into a private-use glyph. `fromCodePoint` throws a RangeError above
+    // 0x10FFFF, and OSM in the wild does contain such values, so the range is
+    // checked rather than trusted.
+    .replace(/&#(\d+);/g, (_, d) => {
+      const cp = +d;
+      return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '�';
+    })
+    // Last, so `&amp;lt;` decodes to the literal text `&lt;` and not to `<`.
+    // A single pass in the other order re-expands its own output and corrupts
+    // every name containing an ampersand.
     .replace(/&amp;/g, '&');
 }
 
