@@ -1,4 +1,7 @@
-import { defineConfig } from 'vite';
+// `vitest/config` rather than `vite`: it re-exports Vite's `defineConfig` widened
+// with the `test` key. Importing from `vite` makes `test` a type error, which is
+// the documented way to end up with a test config TypeScript does not check.
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -55,6 +58,27 @@ export default defineConfig({
     __CANOPY_BUILD__: JSON.stringify(version),
   },
   server: { host: true, port: 5173 },
+  /**
+   * Test runner configuration.
+   *
+   * `--expose-gc` exists for one assertion. `test/streamscale.spec.ts` measures
+   * how much heap the streaming XML parse retains, and without a way to collect
+   * garbage first that measurement is mostly noise: the same 6.3 MB document
+   * measured 1.46x on one run and 4.98x on the next, purely on what the collector
+   * happened to do. A memory gate that varies fourfold between runs is worse
+   * than no gate, because it trains people to re-run until it goes green.
+   *
+   * `pool: 'forks'` is what makes `execArgv` reachable. It is the one setting
+   * here that is not free, so it is recorded with its reason: the whole suite
+   * passes under it, and if that ever stops being true the memory measurement is
+   * the thing to drop, not the flag.
+   */
+  test: {
+    pool: 'forks',
+    poolOptions: {
+      forks: { execArgv: ['--expose-gc'] },
+    },
+  },
   build: {
     target: 'es2020',
     outDir: 'dist',
