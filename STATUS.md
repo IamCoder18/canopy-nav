@@ -63,12 +63,21 @@ stands. **Bold** = fully working and verified.
 | Gate | Command | Result |
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
+| Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
 | Unit tests | `npm test` | **702 passing**, 30 files |
-| End-to-end | `npm run e2e` | **39 checks** against the built bundle |
-| Screen coverage | `node test/screens.mjs` | **50 checks × 3 viewports = 150** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
+| End-to-end | `npm run e2e` | **44 checks** against the built bundle |
+| Screen coverage | `node test/screens.mjs` | **51 checks × 3 viewports = 153** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
+| Bundle budget | `npm run bundle` | entry 105.8 kB / 130, initial 110.3 / 150, largest 281.6 / 300, total JS 410.4 / 460 (gzip) |
+| Offline cold start | verified in-browser | reload with the network off renders the app: 5 tiles, map sized, 0 console errors |
 | Release | v0.11.3 tag | **CI green, Release green**, APK attached |
 | APK | `npm run apk` | debug APK, `com.canopy.nav`, minSdk 23, targetSdk 35 |
 | Device | Android 14 emulator, API 34, 2340×1080 | installs, runs, **zero console output**, real GPS confirmed |
+
+The e2e count moved from 39 to 44 and the screen count from 150 to 153 in §10,
+both because the suites gained checks for defects the audits found. The lint and
+bundle rows are new *gates*, not new measurements: before §10 nothing failed when
+the entry chunk grew or when a hook dependency went stale, because nothing was
+watching.
 
 **Every count in this table is measured**, by counting `PASS` lines from an
 actual run or by counting call sites in the source. Three figures in this
@@ -1132,6 +1141,44 @@ Ordered by how much they matter.
     prime_server, GEOS and zlib either exist or they do not. Worth a bounded
     feasibility spike before committing anything.
 
+12. **The ETA can read `0 m` while route remains.** Measured flipping between
+    `0 m` and `670 m` on a 36 m move, and showing `0 m to destination` while the
+    driver was 900 m off course. The snapping logic has no monotonicity
+    property. This is the most dangerous *readout* in the app and it is unfixed;
+    it needs a unit test asserting that remaining distance never increases as the
+    snapped index advances, and never reads zero before the last vertex.
+13. **Chrome still covers ~98% of the viewport** at phone portrait, and ~142% of
+    its height in landscape. Every element is 76dp or larger because the design
+    says so, and none of them is in the wrong place — but a driver looking at this
+    sees very little map. The first thing a designer would cut, and the one change
+    that should not be made without one.
+14. **A tile-host failure substitutes the map style silently.** If the remote style
+    cannot be fetched the offline style is used instead, which is the correct
+    degradation, but nothing on screen says the basemap changed source. MapLibre
+    also logs its own validation exceptions for the offline style. Harmless to the
+    user, noisy in a logcat.
+
+### Closed by the audit pass (§10)
+
+These were all live gaps or missing capabilities before §10, and are recorded here
+so the list above is not read as the whole story:
+
+| Was | Now |
+|---|---|
+| Offline did not survive a reload — the browser served its own disconnected page | Service worker precaches the shell; verified by reloading with the network off |
+| Mute controlled no audio at all | Real spoken guidance via the Web Speech API; disabled-with-a-reason where no engine exists |
+| No map attribution was displayed — an ODbL breach | Credit declared on the map sources and rendered; regression-guarded in `test/attribution.spec.ts` |
+| The parser accepted `lat="-200"` and invented 74,756 addresses | Coordinates bounded in both readers; bounding box no longer reports its sentinel |
+| A corrupt/empty/road-free `.osm` silently replaced a working map | Refused with a specific message; the map is left untouched |
+| No settings survived a reload — 0 of 5 | All persist, validated on read, with quota failures reported |
+| An engine labelled "Unavailable" was fully selectable | Inert, with the reason in the row |
+| No focus ring anywhere in the app (UA default, 1.06:1) | A ring that survives both the dark chrome and the light map canvas |
+| The import file picker was unreachable by keyboard | A real button driving a visually-hidden input |
+| `m` (documented as mute) opened the search screen; Escape ended an active trip | Named keys matched first; Escape unwinds one level and never ends a trip |
+| The online geocoder was 100% dead — its host did not resolve | Fixed, and the readiness reason now names the real cause |
+| `geocode.ts` had no request timeout | 12 s, composed with caller aborts; verified against a hanging host |
+| The off-route banner printed `6978332 m off the route` | Says what the driver acts on; the rejoin distance is formatted in their units |
+
 Closed since the last release (v0.11.1): app bar / grid cell are now tokens
 (§3.14), the test server is in the repo (§3.14), reroute is wired (§3.11), the XML
 parse streams (§3.12), the offline LOD fix (§3.13), the corrupt `.nav-panel` rule
@@ -1505,33 +1552,89 @@ MapLibre and the region manager are `React.lazy`. Neither is needed to render th
 first frame, and the entry chunk is parsed on a phone's main thread before
 anything is interactive.
 
-### 10.5 Still open, from the audits
+### 10.5 Everything the audits changed, and everything they left
 
-These were found and are **not** fixed, except where marked. They are listed here
-rather than dropped, because a finding nobody records is a finding nobody fixes.
+The audits produced 8 written reports (two of ten agents timed out; both were
+relaunched) covering ~250 browser scenarios. Below is the complete accounting, so
+that §7 can be read as a summary rather than the whole record.
 
-1. **Inferred turn-by-turn is unreliable, and now says so.** Comparing an offline
-   route against Valhalla over one 4 km stretch found three of seven real
-   maneuvers missed, one invented, one direction reversed — and the *count* of
-   inferred steps changed with polyline tessellation density rather than with the
-   road. The steps screen now labels inferred guidance as inferred. Fixing the
-   inference itself needs real maneuver data, i.e. gap 8 above.
-2. **The ETA can read `0 m` while route remains**, and flips between `0 m` and
-   `670 m` on a 36 m move. The snapping logic needs a monotonicity property
-   asserted in a unit test; written up, not yet implemented.
-3. ~~**`geocode.ts` has no timeout.**~~ **Closed.** Both HTTP clients now have
-   one — 20 s for routing, 12 s for geocoding — composed with any caller-side
-   abort so the two remain distinguishable. Verified against a host that accepts
-   the connection and never answers: the screen stops saying "Searching…",
-   reports the failure, and keeps the offline results.
-4. **Cross-region routing is still wrong** — the original gap 1, unchanged.
-5. **A tile-host failure can substitute the style silently**, and MapLibre logs
-   exceptions for the offline style's own validation. Harmless to the user, noisy
-   in a log.
-6. **Chrome still totals ~98% of the viewport** at phone portrait. Correct, and
-   the first thing a designer would cut.
-7. **Nothing has run on a physical device** — still gap 2, and no amount of further
-   work here closes it.
+#### Fixed — the app claimed something it did not do
+
+| # | Defect | Evidence it is gone |
+|---|---|---|
+| 1 | Offline did not survive a reload; the browser served its own disconnected page | Reload under `setOffline(true)`: app renders, 5 tiles, map sized, 0 console errors |
+| 2 | Mute muted nothing — no audio subsystem existed anywhere | `src/nav/voice.ts`; control is disabled-with-a-reason where no engine exists |
+| 3 | No map attribution displayed anywhere — an ODbL breach | Rendered and asserted by `test/attribution.spec.ts` |
+| 4 | The parser invented 74,756 addresses from `lat="-200"` | Coordinates bounded in both readers |
+| 5 | The bounding box reported its uninitialised sentinel as data | Degenerate-but-true box when nothing parsed |
+| 6 | `m` (mute) opened search; Escape ended an active trip | Verified in-browser: mute toggles, navigation survives Escape |
+| 7 | An "Unavailable" engine was fully selectable | `disabled`, with the reason in the row |
+| 8 | Nothing persisted — 0 of 5 settings survived a reload | Units verified surviving a reload in-browser |
+| 9 | The online geocoder's host did not resolve at all | `.org` verified answering 200; `.de` confirmed NXDOMAIN |
+| 10 | `geocode.ts` had no timeout — "Searching…" forever | Verified against a host that never answers |
+| 11 | `6978332 m off the route` — unformatted, always metric | Qualitative wording; rejoin distance formatted in the user's units |
+| 12 | The ETA bar pushed Exit off-screen (x=506 in 412px) | No overflow at any of the three viewports |
+| 13 | The control column sat 137.7px left of its own `right` offset, on the banner | Absolutely-positioned the widest child; measured clear |
+| 14 | The off-route notice painted over the maneuver instruction | One top-down flow: bar, notice, card, controls |
+
+#### Fixed — a regression this project introduced
+
+Splitting the bundle put MapLibre's stylesheet in a lazy chunk, so it loaded
+after the entry CSS; `.maplibregl-map { position: relative }` tied on
+specificity and won on order. **The map rendered nothing.** 39 e2e and 150 screen
+checks passed throughout. Fixed by sizing a wrapper the library has no opinion
+about; the e2e suite now asserts the map draws, and was verified to fail when the
+map is deliberately collapsed.
+
+#### Fixed — correctness and safety
+
+- A corrupt, empty, truncated, non-OSM or road-free `.osm` silently replaced a
+  working map. Now refused, with the map untouched.
+- The format sniff let the extension overrule the bytes, so a PBF named `.osm`
+  imported as an empty region.
+- `OsmEngine`'s constructor sat outside the try block, so its failure escaped
+  `importRegionFile` and the catch then double-faulted, replacing a real diagnosis
+  with "Cannot read properties of undefined".
+- The availability probe never cancelled its one-byte ranged GET — a 16× over-fetch.
+- Quota failures silently lost an imported region on the next launch.
+- `MapView`'s `cancelled` flag was dead code, racing two style boots.
+- The long-press timer outlived the component.
+- Numeric XML character references used `fromCharCode` (UTF-16 code units), so
+  `&#128512;` rendered as a private-use glyph instead of an emoji.
+- A NUL byte had got into `engine.ts`, making the file binary to every text tool.
+
+#### Fixed — accessibility
+
+No focus ring existed anywhere in the app (UA default, 1.06:1 measured); the
+import picker was unreachable by keyboard; `user-scalable=no` failed WCAG 1.4.4;
+`prefers-reduced-motion` was unhandled; there were no landmarks or headings; the
+arrival event was never announced; error text was 16px with no dismiss and no
+role; the steps screen told a user who had imported a map to import a map.
+
+#### Still open — not fixed, listed so it is not lost
+
+1. **Inferred turn-by-turn is unreliable, and now says so.** Against Valhalla on
+   one 4 km stretch it missed three of seven real maneuvers, invented one,
+   reversed one, and the step *count* varied with polyline tessellation density
+   rather than with the road. The steps screen labels inferred guidance as
+   inferred; the inference itself is unchanged. Needs real maneuver data — gap 8.
+2. **The ETA can read `0 m` while route remains** (§7 gap 11). The most dangerous
+   readout in the app, unfixed. Written up, not implemented.
+3. **Cross-region routing is still wrong** (§7 gap 1). Untouched.
+4. **A tile-host failure substitutes the style silently** (§7 gap 14).
+5. **Chrome covers ~98% of the viewport** at phone portrait (§7 gap 13).
+6. **Nothing has run on physical hardware** (§7 gap 2). No further work here
+   closes it.
+
+#### Two things a second opinion would help with
+
+- The 20 s routing and 12 s geocoding timeouts are reasoned, not measured against
+  real latency tails.
+- The narrow-screen navigation layout uses `:has()`. It is supported in current
+  Chromium and Safari; on an older Android WebView the layout falls back to
+  overlapping elements rather than breaking.
+
+---
 
 ### 10.6 Commands added
 
