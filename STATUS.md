@@ -85,6 +85,8 @@ evaluated, which a pass or fail result does not tell you.
    — [five defects in the regions screen](#1411-five-defects-in-the-regions-screen-from-reading-it-rather-than-running-it)
    — [A\*'s optimality guarantee was void for a different reason](#1412-as-optimality-guarantee-was-void-for-a-different-reason-than-121-fixed)
    — [two more stale claims, and one real gap](#1413-two-more-claims-that-were-stale-and-one-that-is-a-real-gap)
+   — [the imported road network was never drawn](#1414-the-imported-road-network-was-never-drawn)
+   — [three more, and the shape they share](#1415-three-more-and-the-shape-they-share-with-1414)
 
 ---
 
@@ -111,7 +113,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1000 unit tests across 51 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1006 unit tests across 52 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -125,7 +127,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1000 passing**, 51 files |
+| Unit tests | `npm test` | **1006 passing**, 52 files |
 | End-to-end | `npm run e2e` | **55 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -203,7 +205,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **51 files, 1000 tests**. The
+retyped by hand. The table is the complete set: **52 files, 1006 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -253,6 +255,7 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `basemap.spec.ts` | 6 | a basemap substitution is reported rather than silent |
 | `astar-admissible.spec.ts` | 6 | A\*'s heuristic is admissible: the returned route is the cheapest by **time**, checked against Dijkstra on the real fixture |
 | `strict-plan.spec.ts` | 6 | `strict` constrains the plan, not the walk — and the two docstrings now agree |
+| `mapsources.spec.ts` | 6 | every source id the app writes to is one the style declares — a layer id is not a source id |
 | `minheap.spec.ts` | 6 | the heap invariant, plus the broken implementation kept and asserted to fail |
 | `pbfgeo.spec.ts` | 6 | absolute coordinates against the PBF spec, via the real encoder |
 | `streamscale.spec.ts` | 6 | the streaming parse holds a small multiple of the document, not the document |
@@ -1489,7 +1492,7 @@ src/
     voice.ts              125  spoken guidance, deduped per meaning
 
   map/
-    MapView.tsx           496  MapLibre view, tile/offline style switch
+    MapView.tsx           510  MapLibre view, tile/offline style switch
     style.ts              520  Google palette, tile remap, offline LOD style
 
   regions/
@@ -1498,7 +1501,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            1000 unit tests, 51 files
+test/            1006 unit tests, 52 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1779,7 +1782,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1000 unit tests
+npm test             # 1006 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -2214,7 +2217,7 @@ anything is interactive.
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files** (the figures as of that
 > revision), and the boundary pass to
-> **1000 across 51** — see §11, §12 and §13. The figures above are left as written
+> **1006 across 52** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
@@ -4133,6 +4136,116 @@ offline engine read `undefined` and return null; `valhalla-custom` is correctly 
 without an endpoint, which read as the walk stopping early; and `NoRouteError` carries
 no `attempts`, so scraping the message for evidence of a fallback was never going to
 work.
+
+### 14.14 The imported road network was never drawn
+
+The most consequential defect found in this pass, and it is a one-word bug.
+
+`applyOverlays` in `src/map/MapView.tsx` wrote the imported `.osm` road network like
+this:
+
+```ts
+set('canopy-osm-roads', layers.roads);
+```
+
+**`canopy-osm-roads` is the id of the _layer_ that draws arterials. The _source_ every
+road layer reads is `canopy-osm`** — `canopy-osm-casing`, `canopy-osm-minor` and
+`canopy-osm-roads` all declare `source: 'canopy-osm'` in `style.ts`, and
+`overlaySources()` declares `canopy-osm`, `canopy-osm-water` and `canopy-osm-green`.
+
+So `m.getSource('canopy-osm-roads')` returned `undefined`, and `set` took the branch it
+has to have:
+
+```ts
+const set = (id: string, data: GeoJSON.FeatureCollection) => {
+  const src = m.getSource(id) as maplibregl.GeoJSONSource | undefined;
+  if (src && 'setData' in src) src.setData(data);   // a miss is a no-op, by design
+};
+```
+
+That tolerance exists because sources do not exist until a style loads, and it is
+correct. It is also what swallowed this: **water and green rendered, roads did not, and
+nothing errored.** In the app's primary mode.
+
+#### Why it survived
+
+The id *looks right*. `canopy-osm-roads` is exactly the layer you would check to confirm
+roads are being styled, so the name was never suspect — the mistake was not a typo but
+a **category** error, and a name that reads correctly across the boundary is the worst
+kind.
+
+And the tests were all pointed at the wrong thing:
+
+- `test/basemap.spec.ts` asserts on the **text** of `MapView.tsx` — that
+  `basemapFor(p.dataset, …)` is called — not that its output reaches anything.
+- `test/mapstyle.spec.ts` asserts the **layers**.
+- `test/attribution.spec.ts` asserts the **sources**.
+- Nothing cross-checked the ids the writer uses against the ids the style declares, which
+  is the only check that would have caught it.
+
+Three suites, each correct, and the seam between them unexamined.
+
+#### The check that was missing
+
+`test/mapsources.spec.ts` resolves **every** id passed to `set(…)` against
+`overlaySources()`, asserts none of them is a layer id, and — in the other direction —
+asserts that every road layer's declared `source` is a declared source. It is a
+static check, because the defect is a static one: two tables of identifiers that must
+agree and did not.
+
+It also asserts it found any ids at all, because a regex matching nothing would make
+every other assertion pass for the wrong reason.
+
+Verified to fail three ways: the original bug restored, a second layer id substituted
+for water, and a source left unwritten.
+
+#### What this says about the other five findings in the same pass
+
+Three more came out of the same audit and are recorded in §14.15; two are stale comments.
+The pattern across all of them is that **the code was right about everything except one
+identifier, one threshold, or one sentence**, and in every case the evidence needed to
+catch it already existed elsewhere in the repository — `overlaySources()` had the right
+ids, `SPEED` had the right speeds, `RENDER_MIN_ZOOM` had the right classes. Nothing was
+missing except the join.
+
+### 14.15 Three more, and the shape they share with §14.14
+
+From the same audit, and each corrected:
+
+- **`regions.ts`'s "Fall back to whichever single region covers the most of the span."**
+  There is no span-overlap computation. `plan()` is an unconditional **origin-first**
+  preference: `if (a) return …; if (b) return …`. So a journey 1 km inside Alberta's
+  edge and then 2 500 km into Quebec returns `{region: Alberta}`, and `route()` asks
+  Alberta's graph for a destination it has never heard of. The helper that *would*
+  implement the stated criterion — `bboxOverlapFrac`, exported from the same file and
+  unit-tested — is **never called by anything in `src/`**.
+
+  `test/regions.spec.ts` pins the opposite behaviour ("falls back to a single plan when
+  the two regions are not neighbours" asserts `plan.region.id === 'a'`, the origin's), so
+  a fix implementing the comment would fail the suite. That is the correct outcome for a
+  behaviour change and the wrong outcome for a bug fix, which is why this is recorded
+  rather than changed: **which one is the defect — the comment or the code — is a
+  product decision**, and it changes which regions a loaded pair can route between.
+
+- **`offRouteThreshold`'s "growing to ~90 m at 30 m/s (108 km/h)".** The code returns
+  `25 + Math.min(65, speed * 2)`, which at 30 m/s is **85 m**. The 90 m ceiling is only
+  reached at 32.5 m/s. The "~" was doing the work of hiding a 5 m discrepancy in a
+  threshold a reader would use to reason about motorway tolerance. Corrected to state
+  both numbers.
+
+- **`GEOCODE_TIMEOUT_MS`'s "the same 20 s figure … as `VALHALLA_TIMEOUT_MS`"**, two lines
+  below "12 s is comfortably longer than a real request". The constant is `12_000`; the
+  sentence is a leftover from when it was 20 s. Corrected.
+
+#### The shape
+
+§14.14 was one identifier. These are one threshold, one sentence, one stale figure, and
+one helper that exists but is never called. In **every** case the correct value was
+already written down somewhere else in the repository — `overlaySources()` had the source
+ids, `SPEED` had the motorway speed, `VALHALLA_TIMEOUT_MS` had the 20 s, and
+`bboxOverlapFrac` was exported and tested.
+
+Nothing was missing. The **joins** were.
 
 ---
 

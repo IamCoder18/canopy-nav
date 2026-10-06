@@ -415,7 +415,21 @@ function applyOverlays(m: MLMap, p: MapViewProps) {
     // The current zoom decides how much road is worth sending: rebuilding every
     // way in a provincial extract to draw sub-pixel lines is the expensive part.
     const layers = basemapFor(p.dataset, Math.round(m.getZoom()));
-    set('canopy-osm-roads', layers.roads);
+    //
+    // **`canopy-osm`, not `canopy-osm-roads`.**
+    //
+    // `canopy-osm-roads` is the id of the *layer* that draws arterials; the *source*
+    // every road layer reads is `canopy-osm` (`canopy-osm-casing`, `canopy-osm-minor`
+    // and `canopy-osm-roads` all declare `source: 'canopy-osm'`). Passing the layer id
+    // where a source id belongs meant `m.getSource` returned `undefined`, `set` took
+    // its silent no-op branch, and **the imported road network was never drawn** —
+    // water and green appeared, roads did not, and nothing errored.
+    //
+    // It survived because the id *looks* right: it matches the layer you would check
+    // to confirm roads are being styled. `test/mapsources.spec.ts` now cross-checks
+    // every id this function passes against `overlaySources()`, which is the check
+    // that was missing.
+    set('canopy-osm', layers.roads);
     set('canopy-osm-water', layers.water);
     set('canopy-osm-green', layers.green);
   }
