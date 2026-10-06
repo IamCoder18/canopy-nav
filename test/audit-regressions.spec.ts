@@ -211,6 +211,24 @@ describe('styles: the declarations that were being discarded', () => {
     expect(rule).toMatch(/color:/);
   });
 
+  it('gives the off-route notice the same corner as the card it sits under', () => {
+    // §3.19 deferred a "0-gap border-to-border look" between these two. Measured,
+    // the gap is the stack's own 8px at every viewport — there was never a
+    // collision — but the two are siblings with the *same* fill and *different*
+    // radii, which reads as one panel split in two rather than as two cards.
+    const card = /\.maneuver-banner \{[^}]*\}/.exec(CSS)?.[0] ?? '';
+    const notice = /\.offroute-banner \{[^}]*\}/.exec(CSS)?.[0] ?? '';
+    const radiusOf = (rule: string) => /border-radius:\s*([\d.]+)px/.exec(rule)?.[1];
+    expect(radiusOf(card)).toBeDefined();
+    expect(radiusOf(notice)).toBe(radiusOf(card));
+    // And they really are the same surface, which is why the corner has to match.
+    const bgOf = (rule: string) => /background:\s*([^;]+);/.exec(rule)?.[1].trim();
+    expect(bgOf(notice)).toBe(bgOf(card));
+    // The amber rule is what distinguishes them; without it they would be
+    // genuinely indistinguishable.
+    expect(notice).toMatch(/border-left:\s*4px solid/);
+  });
+
   it('gives the launcher two columns at phone portrait', () => {
     // `auto-fit, minmax(156px, 1fr)` computed to one column at 412dp, stacking
     // five 158dp tiles into an 886px scroll on the screen whose whole purpose is

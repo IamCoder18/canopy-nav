@@ -897,16 +897,32 @@ code {
   background: rgba(14, 16, 19, 0.94);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
 }
-/* Off-route notice. Sits directly beneath the maneuver banner so it never
-   covers the next instruction -- the driver needs both at once, and the
-   maneuver is the one they act on immediately. */
+/*
+ * The off-route notice. Sits beneath the maneuver card so it never covers the next
+ * instruction -- the driver needs both at once, and the maneuver is the one they
+ * act on immediately.
+ *
+ * `§3.19` deferred this as "touches the maneuver banner's edge at 1280x720. A 0-gap
+ * border-to-border look, on a surface that has a 12-16dp radius elsewhere". Measured
+ * at 1280x720, 412x915 and 892x412, the gap is **8px** in every case -- the stack's
+ * own `gap` -- so the stated claim was not reproducible and there was never a
+ * collision to fix.
+ *
+ * What the measurement did find is the thing underneath it, and it is real: these
+ * two are siblings in one flex column with the *same* fill
+ * (`rgba(14, 16, 19, 0.94)`) and *different* radii -- 16px here, 8px above. Two
+ * dark surfaces with the same colour, the same width and an 8px gap read as one
+ * panel split in two, and the mismatched corners are what makes it look accidental
+ * rather than deliberate. Same radius as the card it sits under; the 4px amber
+ * rule on the left is what distinguishes them, which is the whole job of it.
+ */
 .offroute-banner {
   /* Position comes from `.banner-stack`; this box is in flow inside it. */
   max-width: 100%;
   padding: 12px 24px;
-  /* Was a 12px one-off on no radius in the token scale. R2 = 8dp matches the other
-     compact cards (status, hint, error). */
-  border-radius: 8px;
+  /* Matches `.maneuver-banner` above: same fill, same width, so the corner has to
+     match too or the pair reads as one mis-shaped card. */
+  border-radius: 16px;
   background: rgba(14, 16, 19, 0.94);
   border-left: 4px solid #E8A33D;
   color: #E8EAED;

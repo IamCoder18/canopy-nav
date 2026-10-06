@@ -19,7 +19,7 @@ with **fully offline OpenStreetMap routing**.
   an import forever, and four leaks.
 - **§13** — the boundary pass: everything that crosses a boundary — a network, a disk, a
   service worker, two overlapping requests, a GPS fix — and refuses to be wrong quietly.
-  Nine defects, **three of them corrections to claims this document had been carrying**.
+  Ten defects, **three of them corrections to claims this document had been carrying**.
 
 Each pass also had to fix defects **it introduced**, which are recorded in §11.5, §12.8 and
 §13.6 rather than quietly corrected.
@@ -72,7 +72,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 918 unit tests across 43 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 919 unit tests across 43 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -86,7 +86,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **918 passing**, 43 files |
+| Unit tests | `npm test` | **919 passing**, 43 files |
 | End-to-end | `npm run e2e` | **46 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -162,7 +162,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **43 files, 918 tests**. The
+retyped by hand. The table is the complete set: **43 files, 919 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -180,7 +180,7 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `geocode.spec.ts` | 29 | throttle serialisation and 1 req/s spacing, viewbox, place mapping |
 | `progress.spec.ts` | 29 | the three ETA properties as properties: monotone, never zero before arrival, last-good-kept |
 | `settings.spec.ts` | 29 | every setting round-trips, a malformed endpoint is not "Ready", quota failures reported |
-| `audit-regressions.spec.ts` | 28 | source-level guards for the §10/§11 defects, each verified to fail when reintroduced |
+| `audit-regressions.spec.ts` | 29 | source-level guards for the §10/§11 defects, each verified to fail when reintroduced |
 | `xmlentities.spec.ts` | 24 | entity expansion structurally impossible; hostile documents terminate |
 | `reroute.spec.ts` | 23 | off-route confirmation window, storm guards, backoff growth, tracker reset semantics, banner content |
 | `persist.spec.ts` | 22 | typed-array round-trip, quota errors, corrupt records, rehydration |
@@ -1051,9 +1051,19 @@ was wrong by 3×** — see the note on each, and §13.12.
   CORS-blocked and the measurement would otherwise depend on the network.
 - The off-route notice touches the maneuver banner's edge at 1280×720. A 0-gap
   border-to-border look, on a surface that has a 12–16dp radius elsewhere.
-  **Still open**, and re-measurement is owed: §13.8 established that the reflow
-  probe's overlap arithmetic could not tell a genuine collision from a clipped
-  child, so this figure was taken by a probe with a known defect.
+  **Closed, and the claim was wrong.** Re-measured at 1280×720, 412×915 and
+  892×412: the gap is **8px** in all three — the stack's own `gap` — so there was
+  never a collision. The note was never checked by a probe that could see this
+  pair at all: `reflow.mjs`'s `PIECES` holds the banner *stack*, and the `nested`
+  exemption skips stack-versus-child, so the notice and the card inside it were
+  never compared.
+
+  What the measurement did find is the thing underneath the claim, and it is real:
+  the two are siblings in one flex column with the **same fill**
+  (`rgba(14, 16, 19, 0.94)`), the same width, an 8px gap and **different radii** —
+  16px and 8px. Two identical dark surfaces with mismatched corners read as one
+  panel split in two. The notice now matches the card's 16px; the 4px amber rule is
+  what distinguishes them, which is its whole job. §13.13.
 
 ---
 
@@ -1398,7 +1408,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            918 unit tests, 43 files
+test/            919 unit tests, 43 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1609,7 +1619,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 918 unit tests
+npm test             # 919 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -1697,7 +1707,7 @@ than by planning, and those found more than the plan did.
 | 11 | ETA readout: monotone, and `0 m` means arrived | req #19, §7 gap 12 | **Done** (§3.17) |
 | 12 | Wire cross-region merging, behind a memory guard | req #10, §7 gap 1 | **Done** (§3.18) |
 | 13 | *Added by the crash of block 11:* gates for render-time failures | — | **Done** (§3.19) |
-| 14 | Every boundary: network, disk, service worker, request sequencing, a GPS fix | req #19, §7 gaps 11–18 | **Nine closed; the layout half of gap 11 left open, and not attempted again** (§13) |
+| 14 | Every boundary: network, disk, service worker, request sequencing, a GPS fix | req #19, §7 gaps 11–18 | **Ten closed; the layout half of gap 11 left open, and not attempted again** (§13) |
 
 Block 14 was also not planned. It came from a single question applied to every
 place this app meets something it does not control — *what does this do when the
@@ -2038,7 +2048,7 @@ anything is interactive.
 
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files**, and the boundary pass to
-> **918 across 43** — see §11, §12 and §13. The figures above are left as written
+> **919 across 43** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
@@ -2668,7 +2678,7 @@ something it does not control — a network, a disk, a service worker, two
 overlapping requests, a GPS fix — and asked one question of each: *what does this
 do when the thing on the other side goes wrong?*
 
-Nine defects. Three are corrections to claims this
+Ten defects. Three are corrections to claims this
 document has been carrying, which is the more interesting half: two were wrong
 about a mechanism, and one was wrong about code that does not exist in the state
 it was described.
@@ -3029,7 +3039,37 @@ symptom and the *product* was the defect: a driver looking at sixteen "Checking�
 had been told nothing, and no test in the project asserted that the screen ever reaches a
 verdict.
 
-### 13.13 What this pass also closed
+### 13.13 A "0-gap" collision that was never a collision — and the defect under it
+
+§3.19's fourth deferred item, and the one §13.8 made me re-measure, because the
+figure came from a probe whose overlap arithmetic could not tell a genuine
+collision from a clipped child.
+
+Two things were true and the note had them the wrong way round.
+
+**There was no collision.** Measured at 1280×720, 412×915 and 892×412, the gap
+between the maneuver card and the off-route notice is **8px** in all three — the
+banner stack's own `gap`. And the probe never looked at that pair: `reflow.mjs`'s
+`PIECES` contains the banner *stack*, and its `nested` exemption skips
+stack-versus-child, so the notice and the card inside it were never compared. A
+deferred item carrying a specific pixel figure, which no probe in the project could
+have produced.
+
+**The real defect was underneath it.** The two are siblings in one flex column with
+the same fill, the same width, an 8px gap, and different corners — 16px on the card,
+8px on the notice. Two identical dark surfaces with mismatched radii read as one
+panel split in two, which is a version of the "looks accidental" complaint the note
+was making, arrived at by a different route. The notice now matches at 16px; the 4px
+amber rule on its left edge is what tells them apart, and that is what it is for.
+
+This is the fourth time in this project that a recorded measurement turned out to be
+unreproducible, and the second time the cause was a probe that could not see the
+thing it was quoted for (§4.6's screen suite visiting four screens; §11.9's focus
+check dispatching a synthetic Tab). The general form is worth keeping: **a number
+attached to a specific element is a claim about a measurement, and the measurement
+has to name the thing it measured.**
+
+### 13.14 What this pass also closed
 
 - **A tile-host failure substituted the map style silently.** Correct
   degradation, no sentence anywhere. `MapView` now reports the style it actually
@@ -3061,6 +3101,7 @@ verdict.
 | Two concurrent downloads shared one `AbortController`: the first was uncancellable and either could wipe the other's progress row | A handle per region, released only by its owner. §13.10 |
 | A catalogue row ballooned to **1139dp** against a nominal 116dp, one line per reason paragraph | One line, expandable, reachable without a mouse. §13.11 |
 | The Regions screen could show sixteen "Checking…" rows indefinitely, and looked identical to a hang | Bounded at 75 s, derived; every entry reaches a verdict with a reason. §13.12 |
+| Two sibling cards with the same fill and different corners, read as one panel split in two | The notice matches the card's 16px radius. §13.13 |
 
 ---
 
