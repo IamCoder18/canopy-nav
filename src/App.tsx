@@ -23,6 +23,7 @@ import {
   observeFix, beginReroute, finishReroute, resetReroute, rerouteBanner,
   createRerouteState, type RerouteState,
 } from './nav/reroute';
+import { RequestGate, isSuperseded } from './nav/requests';
 import {
   formatDistance, formatDuration, formatClock, lineLength,
   snapToPolyline, vertexAt, type LatLng,
@@ -492,6 +493,38 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   // cannot resurrect it.
   const trafficProbe = useRef(0);
 
+  /**
+   * Gates for the two long-running route requests.
+   *
+   * `resolveRoute` can be outstanding for twenty seconds, and both `doRoute` and
+   * the reroute effect wrote `route`, `provenance` and `fitNonce` on completion
+   * without checking whether their answer was still the one wanted. Two searches
+   * in quick succession therefore raced: destination A's geometry could install
+   * itself under destination B's label, and the first `finally` cleared the
+   * spinner while the second request was still running.
+   *
+   * The reroute case is the sharper one, and it is why this is a gate rather than
+   * a boolean. `resetReroute()` runs whenever navigation ends, so pressing Exit
+   * mid-reroute *did* clear the state — and then the abandoned response arrived,
+   * installed a route on the preview screen, and wrote
+   * `finishReroute(..., ok: false)` onto the freshly-reset state, resurrecting
+   * `status: 'failed'` and its banner for a trip that no longer existed.
+   *
+   * `useRef`, not `useState`: a gate is not rendered, and re-rendering the whole
+   * navigation screen because a request started would be absurd.
+   */
+  const routeGate = useRef<RequestGate | null>(null);
+  if (!routeGate.current) routeGate.current = new RequestGate('route');
+  const rerouteGate = useRef<RequestGate | null>(null);
+  if (!rerouteGate.current) rerouteGate.current = new RequestGate('reroute');
+
+  // Abandoned work on unmount, so a route request outliving the app does not
+  // install itself into a component that is gone.
+  useEffect(() => () => {
+    routeGate.current?.cancel();
+    rerouteGate.current?.cancel();
+  }, []);
+
   /** A new route invalidates the previous route's traffic verdict with it. */
   const resetTraffic = useCallback((ends: { from: LatLng; to: LatLng } | null) => {
     trafficProbe.current += 1;
@@ -855,6 +888,10 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
     setDegraded([]);
     const from = origin ?? location;
     const t0 = Date.now();
+    // Takes the gate before the first await, so a second search supersedes this
+    // one from the moment it starts rather than from the moment it finishes.
+    const gate = routeGate.current!;
+    const { token, signal } = gate.begin();
     try {
       const outcome = await resolveRoute(
         {
@@ -870,7 +907,11 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         },
         dataset,
         { apiKey, endpoint },
+        signal,
       );
+      // Throws `SupersededError` if a newer search has started, so none of the
+      // writes below can happen for an answer nobody asked for any more.
+      gate.assertLive(token);
       setRoute(outcome.route);
       setDegraded(outcome.degraded.map((d) => `${d.provider}: ${d.reason}`));
       setProvenance({
@@ -885,6 +926,11 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
       go('preview');
       setFitNonce((n) => n + 1);
     } catch (e) {
+      // An abandoned request reports nothing. Its error would otherwise land in
+      // the red card above Start, blaming an engine for a route the app is no
+      // longer trying to compute — and if a newer request is still running, its
+      // `finally` is what clears the spinner, not this one.
+      if (isSuperseded(e)) return;
       // Single-dataset routing can't span extracts. With several regions
       // downloaded the library merges them and routes across the seam.
       const multi = regions.length > 1 ? regionLib.route(from, dest.pos) : null;
@@ -924,6 +970,10 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         go('preview');
         setFitNonce((n) => n + 1);
       } else {
+        // A cross-region merge is synchronous, so the gate is re-checked rather
+        // than assumed: the download it depends on may have started while the
+        // provider chain was failing.
+        gate.assertLive(token);
         setRoute(null);
         // `route()` is nullable for three unrelated reasons — no region covers
         // the pair, no path exists, or the merge did not fit in memory — and the
@@ -947,7 +997,10 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         setProvenance(null);
       }
     } finally {
-      setRouting(false);
+      // Only the live request clears the spinner. Without this, the first of two
+      // overlapping searches finished while the second was still running and the
+      // UI showed "ready" over an unanswered request.
+      if (!gate.isStale(token)) setRouting(false);
     }
   }, [dataset, origin, location, enginePlan, selection.allowFallback, valhallaUnits, apiKey, endpoint, regions.length, resetTraffic, go]);
 
@@ -1197,6 +1250,12 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
     if (!navActive || !route) {
       rerouteState.current = resetReroute();
       setRerouteNotice(null);
+      // Ending the trip abandons any reroute in flight. The state reset above was
+      // already doing half of this — clearing `busy`, the tracker and the baseline
+      // — and leaving the request running meant its answer landed on a screen with
+      // no trip: a route installed on the preview, and `finishReroute` writing
+      // `status: 'failed'` and its banner over the reset.
+      rerouteGate.current?.cancel();
       return;
     }
     const geometry = route.geometry;
@@ -1213,10 +1272,6 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
           location,
           fix.speed,
           Date.now(),
-          // Needed by the stale-position guard: a reroute that does not move the
-          // driver nearer the destination is evidence of a frozen fix, not of a
-          // driver who is lost, and must not issue a request.
-          destination?.pos,
         );
     rerouteState.current = state;
     setRerouteNotice(rerouteBanner(state, geometry, units));
@@ -1225,6 +1280,12 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
     rerouteState.current = beginReroute(state);
     setRerouteNotice('Off route — finding a new way');
 
+    // Taken here, before the request, for the same reason as in `doRoute`: this is
+    // where the previous reroute stops mattering.
+    const gate = rerouteGate.current!;
+    const { token, signal } = gate.begin();
+    const trip = destination;
+
     void (async () => {
       let ok = false;
       let reason: string | undefined;
@@ -1232,7 +1293,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         const outcome = await resolveRoute(
           {
             from: origin,
-            to: destination.pos,
+            to: trip.pos,
             provider: enginePlan[0] ?? 'local',
             plan: enginePlan,
             strict: !selection.allowFallback,
@@ -1241,7 +1302,12 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
           },
           dataset,
           { apiKey, endpoint },
+          signal,
         );
+        // The trip can end while this is in flight — Exit, or a new destination.
+        // Without this the abandoned response installs a route on whatever screen
+        // the driver is now looking at.
+        gate.assertLive(token);
         ok = true;
         // Only now is the old route replaced, and it is replaced wholesale so
         // guidance, steps and ETA all come from the engine that answered.
@@ -1254,20 +1320,38 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
           when: Date.now(),
         });
         beginRouteProgress(outcome.route.geometry);
-        resetTraffic({ from: origin, to: destination.pos });
+        resetTraffic({ from: origin, to: trip.pos });
         setFitNonce((n) => n + 1);
       } catch (e) {
+        // Abandoned work says nothing. Reported, it would be a failure for a trip
+        // that no longer exists — and `finishReroute(ok: false)` on freshly-reset
+        // state resurrects `status: 'failed'` and its banner on a screen with no
+        // trip, which is the specific defect the gate closes.
+        if (isSuperseded(e)) return;
         // `describeError`, not `(e as Error).message`: a rejection value that is
         // not an `Error` makes that expression `undefined` — or a `TypeError`
         // thrown from inside the catch block, which skips the cleanup below.
         reason = e instanceof NoRouteError ? e.message : describeError(e);
       } finally {
-        rerouteState.current = finishReroute(
-          rerouteState.current, ok, Date.now(), reason, origin,
-        );
-        setRerouteNotice(
-          rerouteBanner(rerouteState.current, geometry, units),
-        );
+        // Only the live attempt settles the policy. `resetReroute()` has already
+        // run if the trip ended, and writing `finishReroute` over that state would
+        // resurrect it.
+        //
+        // Guarded by an `if` rather than an early `return`, because a `return`
+        // inside `finally` discards any exception still in flight — which would
+        // swallow a genuine routing failure from the request being abandoned.
+        if (!gate.isStale(token)) {
+          rerouteState.current = finishReroute(
+            // `fix` is the raw position, and it is the baseline the stale-position
+            // guard compares against — a projection would be clamped to the
+            // route's extent and read as motionless for a driver hundreds of
+            // metres away.
+            rerouteState.current, ok, Date.now(), reason, origin, location,
+          );
+          setRerouteNotice(
+            rerouteBanner(rerouteState.current, geometry, units),
+          );
+        }
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps

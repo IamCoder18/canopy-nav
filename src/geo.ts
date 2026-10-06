@@ -2,7 +2,74 @@
 
 export type LatLng = [number, number]; // [lon, lat] for GeoJSON
 
-/** Decode Google/Valhalla encoded polylines. `precision` 5 = polyline5, 6 = polyline6. */
+/**
+ * An encoded polyline that cannot be decoded.
+ *
+ * Raised for a payload that is not a polyline, is one that stops part-way through
+ * a value, or decodes to a place that does not exist. The decoder used to run off
+ * the end of the string instead, and — measured, not assumed — the damage was
+ * **not** a `NaN` coordinate:
+ *
+ *     '?'.charCodeAt(5)            -> NaN
+ *     NaN << 3                     -> 0
+ *     NaN >= 0x1f                  -> false
+ *
+ * so the truncated read contributed a delta of *zero*, terminated as though it had
+ * succeeded, and appended a real-looking finite point. A four-point Detroit leg
+ * trimmed by one character decoded to four points, the last of them **30.9 km**
+ * from the true endpoint. An exhaustive sweep of all 224³ three-character strings
+ * over the plausible byte range produced zero non-finite coordinates, so
+ * "the truncated polyline yields `NaN`" was never true.
+ *
+ * A wrong-but-finite endpoint is the worse failure of the two. It draws, it
+ * reports a distance, it arrives somewhere, and nothing anywhere reports an
+ * error — so refusing is the whole point of this class.
+ */
+export class PolylineError extends Error {
+  constructor(readonly reason: string) {
+    super(`Encoded polyline is malformed: ${reason}`);
+    this.name = 'PolylineError';
+  }
+}
+
+/**
+ * One value out of a polyline stream, with the offset just past it.
+ *
+ * The arithmetic is Google's, unchanged: `result` starts at 1 and each character
+ * contributes `charCode - 64`, so the first chunk is equivalent to the usual
+ * `charCode - 63`, and a character with its high bit still set continues the
+ * value. What is new is that reading stops with an error rather than past the
+ * end of the string.
+ */
+function readValue(str: string, index: number): { value: number; next: number } {
+  let result = 1;
+  let shift = 0;
+  let at = index;
+  let b: number;
+  do {
+    if (at >= str.length) throw new PolylineError('it ends part-way through a coordinate');
+    const code = str.charCodeAt(at++);
+    // The encoding is ASCII 63..126. Anything else is not a polyline, and
+    // decoding it as arithmetic yields a number that is merely plausible.
+    if (code < 63 || code > 126) throw new PolylineError(`unexpected character at offset ${at - 1}`);
+    b = code - 64;
+    result += b << shift;
+    shift += 5;
+    // Five bits per character into a 32-bit accumulator. Past six chunks a
+    // value cannot be a coordinate delta in degrees at any published precision,
+    // and the shift has already begun discarding significant bits.
+    if (shift > 35) throw new PolylineError('a coordinate value is implausibly long');
+  } while (b >= 0x1f);
+  return { value: result & 1 ? ~(result >> 1) : result >> 1, next: at };
+}
+
+/**
+ * Decode Google/Valhalla encoded polylines. `precision` 5 = polyline5, 6 = polyline6.
+ *
+ * Throws `PolylineError` on anything that is not a complete, in-range polyline.
+ * Refusing is the point: a geometry with a hole in it still draws, still reports
+ * a distance, and still looks like a route.
+ */
 export function decodePolyline(str: string, precision = 6): LatLng[] {
   const factor = 10 ** precision;
   const coords: LatLng[] = [];
@@ -11,26 +78,23 @@ export function decodePolyline(str: string, precision = 6): LatLng[] {
   let lon = 0;
 
   while (index < str.length) {
-    let result = 1;
-    let shift = 0;
-    let b: number;
-    do {
-      b = str.charCodeAt(index++) - 63 - 1;
-      result += b << shift;
-      shift += 5;
-    } while (b >= 0x1f);
-    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    const dLat = readValue(str, index);
+    lat += dLat.value;
+    index = dLat.next;
+    const dLon = readValue(str, index);
+    lon += dLon.value;
+    index = dLon.next;
 
-    result = 1;
-    shift = 0;
-    do {
-      b = str.charCodeAt(index++) - 63 - 1;
-      result += b << shift;
-      shift += 5;
-    } while (b >= 0x1f);
-    lon += result & 1 ? ~(result >> 1) : result >> 1;
-
-    coords.push([lon / factor, lat / factor]);
+    // A delta can be legal arithmetic and still leave the planet: the decoder
+    // cannot tell a corrupt payload from a server that meant it. Latitude is
+    // bounded to ±90 and longitude to ±180 because those are facts about the
+    // world, not about the format.
+    const point: LatLng = [lon / factor, lat / factor];
+    if (!Number.isFinite(point[0]) || !Number.isFinite(point[1]) ||
+        Math.abs(point[1]) > 90 || Math.abs(point[0]) > 180) {
+      throw new PolylineError(`it decodes to ${point[0]}, ${point[1]}, which is not a place on Earth`);
+    }
+    coords.push(point);
   }
   return coords;
 }
@@ -58,6 +122,18 @@ export function bearing(a: LatLng, b: LatLng): number {
 }
 
 export function formatDistance(meters: number, units: 'metric' | 'imperial'): string {
+  // A number that is not a distance cannot be formatted as one.
+  //
+  // This is the actual source of the `NaN km` / `NaN hr NaN min` readouts that
+  // were attributed to a truncated polyline. Measured: `formatDistance(NaN)` and
+  // `formatDuration(undefined)` both print `NaN`, because every comparison
+  // against `NaN` is false and the value falls through to the arithmetic. The
+  // input is missing rather than malformed — a response whose `summary` carries
+  // a length but no `time` — and a formatter is the last place that can say so.
+  //
+  // "—" rather than a number, because the alternative is a readout claiming a
+  // distance the app does not have.
+  if (!Number.isFinite(meters)) return '—';
   if (units === 'imperial') {
     // Google Maps uses feet for short distances and miles for longer ones;
     // the switch-over is around 0.1 mi (~528 ft / 161 m).
@@ -90,6 +166,10 @@ function snapTo(value: number, step: number, nonzero: boolean): number {
 
 /** Android Auto / Google Maps style compact duration ("1 hr 5 min", "24 min"). */
 export function formatDuration(seconds: number): string {
+  // See `formatDistance`: the guard belongs here too, because `undefined` reaches
+  // this function directly from a response whose summary has a length and no
+  // time, and `NaN < 60` is false so it would otherwise print `NaN hr NaN min`.
+  if (!Number.isFinite(seconds)) return '—';
   // Google Maps shows "<1 min" for anything under 60 s rather than rounding to 0.
   if (seconds < 60) return '<1 min';
   const mins = Math.round(seconds / 60);

@@ -1062,7 +1062,23 @@ export async function downloadRegion(
   throw last ?? networkError(entry, new Error('download failed'));
 }
 
-/** Load whatever survived a previous attempt, if it is safe to continue it. */
+/**
+ * Load whatever survived a previous attempt, if it is safe to continue it.
+ *
+ * Three ways this can refuse, and they are deliberately not the same:
+ *
+ *  - **No validator.** `If-Range` is what stops the server splicing a prefix from
+ *    a different version of the file onto these bytes, so without one the file
+ *    cannot be resumed *safely* and is deleted.
+ *  - **The prefix is not OSM data.** Sniffed rather than trusted, which closes a
+ *    loop that used to be permanent — see the note below.
+ *  - **The prefix could not be read.** The file exists (its size was just taken)
+ *    but `readBinary` failed, which on a device means the base64 decode ran out
+ *    of memory on a 620 MB province. That is a transient condition of *this
+ *    attempt*, and it is not evidence about the bytes on disk, so **nothing is
+ *    deleted**. Deleting here is what made an OOM silently throw away a transfer
+ *    that had already transferred most of a province.
+ */
 async function resumeFrom(
   entry: CatalogEntry,
   b: FsBinding | null,
@@ -1082,14 +1098,49 @@ async function resumeFrom(
   }
   const prefix = await readBinary(b, partPath(entry));
   if (!prefix || prefix.byteLength !== have) {
-    await removeQuietly(b, partPath(entry));
+    // Unreadable *now*. The next attempt starts from zero, and `fetchOnce` clears
+    // the stale part before writing anything, so leaving the bytes here is safe
+    // and deleting them is not.
     return state;
   }
+
+  /**
+   * Why the prefix is sniffed, which is the whole of the fix for a permanently
+   * failed download.
+   *
+   * A `not-osm` rejection can land *after* bytes are already on disk: `absorb`
+   * only decides once `SNIFF_MIN` bytes have arrived, so the first chunk of a
+   * short response is written to the part file before the second one settles the
+   * verdict. The download then fails — correctly — and leaves a poisoned part file
+   * and a `.part.json` beside it.
+   *
+   * On the next attempt that prefix was trusted, `Range` was sent for the rest of
+   * the payload, and the sniff ran again on the *tail*. So it failed the same way,
+   * wrote a little more, and failed again: every retry resumed from bad bytes and
+   * could not succeed. Not slow, not intermittent — permanently broken, with a
+   * message about the format that named the wrong cause.
+   *
+   * The prefix is the head of the *whole* file by construction (`PartSink` only
+   * ever appends to a path the previous attempt cleared, so the part file always
+   * starts at byte 0), so sniffing it here is exactly the sniff that could not be
+   * done at the time.
+   */
+  const verdict = sniffFormat(prefix.subarray(0, Math.min(SNIFF_BYTES, have)));
+  if (verdict !== 'pbf' && verdict !== 'xml') {
+    // Genuinely worthless bytes: they are what made every retry fail.
+    await removeQuietly(b, partPath(entry));
+    await removeQuietly(b, metaPath(entry));
+    return state;
+  }
+
   state.chunks = [prefix];
   state.received = have;
   // Everything read back is also on disk.
   state.persisted = have;
   state.validator = meta.etag ?? meta.modified;
+  // The verdict carries into the request, so a mid-file attempt does not have to
+  // re-sniff bytes it no longer has.
+  state.format = verdict;
   return state;
 }
 
@@ -1174,6 +1225,27 @@ async function fetchOnce(
   let received = resume.received;
   const head = new Uint8Array(SNIFF_BYTES);
   let headLen = 0;
+  /**
+   * Get rid of bytes this attempt has already written, when the payload is not OSM.
+   *
+   * A `not-osm` rejection could previously land *after* the first chunk was
+   * flushed to the part file — `absorb` only decides once `SNIFF_MIN` bytes have
+   * arrived, and a chunk smaller than that is written on the way past. What was
+   * left behind was a part file holding the head of somebody's HTML error page,
+   * plus a `.part.json` that made it look resumable. Every later attempt resumed
+   * from those bytes and failed the same way, so the download was permanently
+   * broken while reporting a format problem each time.
+   *
+   * Only when the sink exists, and only the partial — the finished copy of a
+   * *previous* good download is a different path and is not touched.
+   */
+  const discardPoisonedPrefix = async () => {
+    if (!sink || !b) return;
+    await removeQuietly(b, partPath(entry));
+    await removeQuietly(b, metaPath(entry));
+    resume.persisted = 0;
+    resume.sinkActive = false;
+  };
 
   const absorb = (chunk: Uint8Array) => {
     if (decided) return;
@@ -1182,13 +1254,38 @@ async function fetchOnce(
     if (headLen < SNIFF_MIN) return;
     decided = true;
     const verdict = sniffFormat(head.subarray(0, headLen));
-    if (verdict !== 'pbf' && verdict !== 'xml') {
-      throw notOsmError(entry, head.subarray(0, headLen), verdict);
-    }
+    if (verdict !== 'pbf' && verdict !== 'xml') rejectNotOsm(head.subarray(0, headLen), verdict);
     format = verdict;
     resume.format = verdict;
   };
 
+  /** Set when a payload is rejected as non-OSM, so the prefix can be cleaned up. */
+  let poisoned = false;
+
+  /**
+   * The single place a payload is rejected, so no call site can forget to flag it.
+   *
+   * Typed as a `const` with an explicit signature rather than inferred, because
+   * TypeScript only treats a call as never-returning for control-flow purposes
+   * when the callee's type is written down — which is what keeps
+   * `verdict !== 'pbf' && verdict !== 'xml'` narrowing `verdict` to a
+   * `RegionFormat` on the line after.
+   */
+  const rejectNotOsm: (bytes: Uint8Array, verdict: SniffResult) => never = (bytes, verdict) => {
+    poisoned = true;
+    throw notOsmError(entry, bytes, verdict);
+  };
+
+  /**
+   * The read, with the poisoned-prefix cleanup on the way out.
+   *
+   * Wrapping the whole read rather than adding a call at each of the four
+   * rejection sites: the cleanup is a property of *any* `not-osm` failure, and a
+   * fifth site added later would otherwise be the one that forgets. It has to be
+   * here rather than at the end of the function because an `absorb` rejection
+   * happens mid-stream, with a sink open and bytes already flushed to disk.
+   */
+  try {
   if (!body) {
     // No streaming body support (older WebViews, some proxies). This is the one
     // path that materialises the response at once; say so rather than pretend.
@@ -1205,7 +1302,7 @@ async function fetchOnce(
     decided = true;
     if (!format) {
       const verdict = sniffFormat(bytes.subarray(0, SNIFF_BYTES));
-      if (verdict !== 'pbf' && verdict !== 'xml') throw notOsmError(entry, bytes.subarray(0, 16), verdict);
+      if (verdict !== 'pbf' && verdict !== 'xml') rejectNotOsm(bytes.subarray(0, 16), verdict);
       format = verdict;
       resume.format = verdict;
     }
@@ -1267,10 +1364,16 @@ async function fetchOnce(
   // Only now is the format certain (a short response only settles at the end).
   if (!format) {
     const verdict = sniffFormat(head.subarray(0, headLen));
-    if (verdict !== 'pbf' && verdict !== 'xml') throw notOsmError(entry, head.subarray(0, headLen), verdict);
+    if (verdict !== 'pbf' && verdict !== 'xml') rejectNotOsm(head.subarray(0, headLen), verdict);
     format = verdict;
   }
   resume.format = format;
+  } catch (e) {
+    // The bytes of a rejected payload are worse than no bytes: the next attempt
+    // resumes from them and fails the same way, forever.
+    if (poisoned) await discardPoisonedPrefix();
+    throw e;
+  }
 
   if (total !== null && received < total) throw truncatedError(entry, received, total);
 

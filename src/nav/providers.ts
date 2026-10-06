@@ -218,6 +218,17 @@ export async function resolveRoute(
   req: RouteRequest,
   dataset: OsmDataset | null,
   providerState: { endpoint?: string; apiKey?: string },
+  /**
+   * Caller-side cancellation, composed with each provider's own timeout.
+   *
+   * Best effort by design: it saves the socket, not the search. `routeOnGraph` is
+   * a synchronous A* walk, so a cancelled request still finishes its local
+   * routing and its answer is discarded by `RequestGate.assertLive` at the call
+   * site. What this buys is that a twenty-second request the driver has abandoned
+   * stops occupying the radio — which on a metered automotive connection is the
+   * part that costs something.
+   */
+  signal?: AbortSignal,
 ): Promise<RouteOutcome> {
   const units = req.units ?? 'km';
   const strict = req.strict ?? false;
@@ -279,11 +290,22 @@ export async function resolveRoute(
             id === 'valhalla-simplerouting' && providerState.apiKey
               ? { Authorization: `Bearer ${providerState.apiKey}` }
               : undefined,
+            signal,
           );
+          // A cancelled request must not fall through to the next engine. The
+          // abort surfaces as a `RoutingError` from `fetchWithTimeout`, and
+          // without this the offline engine would be asked for a route the app
+          // has already abandoned — reporting a real failure for a request
+          // nobody is waiting for, and possibly drawing it.
+          if (signal?.aborted) throw signal.reason;
           row.outcome = 'served';
           row.ms = Date.now() - t0;
           return { route, used: id, degraded, attempts, fellBack: degraded.length > 0 || i > 0 };
         } catch (err) {
+          // Same reasoning for the failure path: a cancellation is not a provider
+          // failure, so it must not be recorded as one, appended to `degraded`, or
+          // allowed to become the reason the whole request failed.
+          if (signal?.aborted) throw signal.reason;
           const reason =
             err instanceof RoutingError ? err.message : (err as Error).message || 'Routing request failed';
           row.outcome = 'failed';

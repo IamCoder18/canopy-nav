@@ -22,7 +22,8 @@
     "focus": "node tools/focus.mjs",
     "shots": "node tools/shots.mjs",
     "reflow": "node tools/reflow.mjs",
-    "reflow:note": "node tools/reflow.mjs || true"
+    "reflow:note": "node tools/reflow.mjs || true",
+    "swshell": "node tools/sw-shellcheck.mjs"
   },
   "engines": {
     "node": ">=20"

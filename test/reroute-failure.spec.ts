@@ -87,13 +87,18 @@ describe('a failed reroute — the route and its guidance survive', () => {
     // to keep, which means no output of it may ever be mistaken for "here is
     // the route". This pins the shape that makes the promise checkable: add a
     // route-bearing field and this test says so.
+    // `lastFix` is the raw position of the last successful reroute, held so the
+    // stale-position guard can tell a moving driver from a frozen sensor. It is a
+    // position and nothing else — no geometry, no maneuvers — which is why the
+    // field list below can stay exhaustive without opening a door the promise in
+    // this test depends on.
     expect(Object.keys(createRerouteState()).sort()).toEqual([
-      'busy', 'failures', 'lastFinished', 'lastOrigin', 'message', 'reason', 'status', 'tracker',
+      'busy', 'failures', 'lastFinished', 'lastFix', 'lastOrigin', 'message', 'reason', 'status', 'tracker',
     ]);
 
     const failed = failedAttempt('no route found');
     expect(Object.keys(failed).sort()).toEqual([
-      'busy', 'failures', 'lastFinished', 'lastOrigin', 'message', 'reason', 'status', 'tracker',
+      'busy', 'failures', 'lastFinished', 'lastFix', 'lastOrigin', 'message', 'reason', 'status', 'tracker',
     ]);
     // and no field anywhere in the failed result mentions a route or geometry
     expect(JSON.stringify(failed)).not.toMatch(/geometry|legs|maneuvers/);

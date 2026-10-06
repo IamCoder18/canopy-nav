@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { routeOnValhalla, valhallaStatus, RoutingError, VALHALLA_ENDPOINT } from '../src/nav/valhalla';
-import { decodePolyline, type LatLng } from '../src/geo';
+import { decodePolyline, formatDuration, type LatLng } from '../src/geo';
 
 /** Precision-6 polyline encoder (Google's algorithm). */
 function encode6(coords: LatLng[]): string {
@@ -467,6 +467,105 @@ describe('routeOnValhalla — errors', () => {
     expect(err).toBeInstanceOf(RoutingError);
     expect(err.message).toBe('Route not found between the selected points');
     expect(err.status).toBeUndefined();
+  });
+});
+
+/**
+ * A payload that is missing something, rather than one that is malformed.
+ *
+ * Every case here reached the driver as either `NaN hr NaN min` or an internal
+ * message about an object being undefined. The mechanism is the same in both:
+ * `undefined` in arithmetic fails *quietly*, because every comparison against it
+ * is false, so the value falls through the branches and prints itself. A refusal
+ * is the only thing that reports it.
+ */
+describe('routeOnValhalla — a response that is missing what it needs', () => {
+  /** `TRIP_JSON` with `patch` applied to the trip summary. */
+  function withSummary(patch: Record<string, unknown>): unknown {
+    const clone = structuredClone(TRIP_JSON) as typeof TRIP_JSON;
+    Object.assign(clone.trip.summary, patch);
+    return clone;
+  }
+
+  it('refuses a response with no summary anywhere, naming the cause', async () => {
+    const body = structuredClone(TRIP_JSON) as any;
+    delete body.trip.summary;
+    delete body.trip.legs[0].summary;
+    respond(body);
+
+    const err = await routeOnValhalla({ from: FROM, to: TO }).catch((e) => e);
+    expect(err).toBeInstanceOf(RoutingError);
+    expect(err.message).toMatch(/no summary/i);
+    expect(err.message).toMatch(/unknown/i);
+    // The engine trace keeps the specific cause; the headline stays actionable.
+    expect(err.detail).toMatch(/summary/i);
+  });
+
+  it('refuses an unreadable length rather than reporting a distance of nothing', async () => {
+    respond(withSummary({ length: undefined }));
+
+    const err = await routeOnValhalla({ from: FROM, to: TO }).catch((e) => e);
+    expect(err).toBeInstanceOf(RoutingError);
+    expect(err.message).toMatch(/unreadable distance/i);
+    expect(err.detail).toMatch(/length/);
+  });
+
+  it('refuses a negative length', async () => {
+    respond(withSummary({ length: -3 }));
+    const err = await routeOnValhalla({ from: FROM, to: TO }).catch((e) => e);
+    expect(err).toBeInstanceOf(RoutingError);
+    expect(err.message).toMatch(/unreadable distance/i);
+  });
+
+  it('keeps a missing time missing, so no duration is claimed', async () => {
+    // A summary with a length and no time. Before this, `summary.time` was
+    // `undefined` and the ETA bar printed `NaN hr NaN min`.
+    respond(withSummary({ time: undefined }));
+
+    const route = await routeOnValhalla({ from: FROM, to: TO });
+    expect(route.geometry).toHaveLength(LEG_SHAPE_PTS.length);
+    // The geometry is good and the trip is worth showing; only the ETA is absent.
+    expect(route.summary.time).toBeNaN();
+    expect(formatDuration(route.summary.time)).toBe('—');
+  });
+
+  it('treats a missing maneuvers array as no maneuvers, not as undefined', async () => {
+    const body = structuredClone(TRIP_JSON) as any;
+    delete body.trip.legs[0].maneuvers;
+    respond(body);
+
+    const route = await routeOnValhalla({ from: FROM, to: TO });
+    // The guidance model walks this as an array; `undefined` there is a crash.
+    expect(route.maneuvers).toEqual([]);
+  });
+
+  it('refuses a truncated shape rather than drawing a route to the wrong place', async () => {
+    const body = structuredClone(TRIP_JSON) as any;
+    // One character short of a complete final longitude.
+    body.trip.legs[0].shape = LEG_SHAPE.slice(0, -1);
+    respond(body);
+
+    const err = await routeOnValhalla({ from: FROM, to: TO }).catch((e) => e);
+    expect(err).toBeInstanceOf(RoutingError);
+    expect(err.message).toMatch(/incomplete route/i);
+    expect(err.detail).toMatch(/malformed/i);
+  });
+
+  it('reports a body that stops part-way through JSON as a cut-off reply', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('Unexpected end of JSON input');
+      },
+    });
+
+    const err = await routeOnValhalla({ from: FROM, to: TO }).catch((e) => e);
+    expect(err).toBeInstanceOf(RoutingError);
+    // Not "Unexpected end of JSON input": that is a sentence about the HTTP
+    // client's internals, for a failure whose cause is a transfer that stopped.
+    expect(err.message).toMatch(/cut short/i);
+    expect(err.detail).toMatch(/JSON/i);
   });
 });
 

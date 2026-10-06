@@ -821,3 +821,216 @@ describe('on a device (Capacitor Filesystem)', () => {
     expect(await mod.cachedRegion(AB)).toBeNull();
   });
 });
+
+/**
+ * A download that fails in a way that leaves the *next* attempt worse off.
+ *
+ * Both cases below are one root cause: a part file holding bytes that were never
+ * OSM data. They were recorded as one gap because the observable symptom was one
+ * thing — a province that would not download — reached by two paths, and the
+ * second was invisible from the first.
+ */
+describe('a failed download does not poison the next attempt', () => {
+  beforeEach(() => {
+    device.files.clear();
+    device.writes = 0;
+    device.failWrite = false;
+  });
+  afterEach(() => {
+    device.on = false;
+  });
+
+  /** A `.part` + `.part.json` pair, as a previous attempt would have left them. */
+  function seedPartial(prefix: Uint8Array): void {
+    device.files.set('canopy-regions/ca-ab.part', prefix);
+    device.files.set(
+      'canopy-regions/ca-ab.part.json',
+      new Uint8Array(Buffer.from(JSON.stringify({ url: AB.pbfUrl, etag: '"v1"', modified: null, total: null }))),
+    );
+  }
+
+  it('recovers from a part file holding a captive portal page', async () => {
+    const mod = await deviceModule();
+    // The exact shape a `not-osm` rejection leaves behind: the head of somebody's
+    // HTML, plus the validator that makes it look resumable.
+    const poison = bytesOf(HTML_PAGE.repeat(4));
+    seedPartial(poison);
+
+    const payload = pbfBytes(2048, 31);
+    const log = mockFetch(() => streaming([payload], {
+      headers: { 'content-length': String(payload.length) },
+    }));
+    vi.stubGlobal('fetch', log);
+
+    const res = await mod.downloadRegion(AB, { retries: 0 });
+
+    // Two things have to be true, and the second is the one that was broken:
+    // no `Range` request for bytes we already hold, *and* the poisoned file gone.
+    expect(log.calls[0].headers.Range).toBeUndefined();
+    expect(device.files.has('canopy-regions/ca-ab.part')).toBe(false);
+    expect(device.files.has('canopy-regions/ca-ab.part.json')).toBe(false);
+    expectSameBytes(new Uint8Array(await res.file.arrayBuffer()), payload);
+  });
+
+  it('discards the poisoned prefix it wrote itself, mid-download', async () => {
+    const mod = await deviceModule();
+    // The ordering that made the original bug permanent: bytes reach the disk
+    // *before* the verdict is known. `PartSink` batches every 4 MB, so a real
+    // captive-portal page is far too small to flush on its own — the first chunk
+    // has to cross that threshold for the failure to leave anything behind.
+    const FLUSH = 4 * 1024 * 1024;
+    const REPEATS = Math.ceil((FLUSH + 1024) / HTML_PAGE.length);
+    const poison = bytesOf(HTML_PAGE.repeat(REPEATS));
+    expect(poison.byteLength).toBeGreaterThan(FLUSH);
+
+    const log = mockFetch(() => streaming([
+      poison.subarray(0, FLUSH + 1024),  // over the flush threshold: written to disk
+      poison.subarray(FLUSH + 1024),    // settles the verdict, and it is not OSM
+    ], { headers: { etag: '"v1"' } }));
+    vi.stubGlobal('fetch', log);
+
+    const err = await mod.downloadRegion(AB, { retries: 0 }).then(
+      () => { throw new Error('should have rejected'); },
+      (e: DownloadError) => e,
+    );
+    expect(err.code).toBe('not-osm');
+    // The discriminating assertion. Over 4 MB of HTML was flushed to the part file
+    // before the verdict was reached, so before the fix this file existed and every
+    // later attempt resumed from it.
+    expect(device.files.has('canopy-regions/ca-ab.part')).toBe(false);
+    expect(device.files.has('canopy-regions/ca-ab.part.json')).toBe(false);
+
+    // The next attempt must start clean rather than resume from an HTML page.
+    const good = pbfBytes(2048, 41);
+    const log2 = mockFetch(() => streaming([good], {
+      headers: { 'content-length': String(good.length) },
+    }));
+    vi.stubGlobal('fetch', log2);
+
+    const res = await mod.downloadRegion(AB, { retries: 0 });
+    expect(log2.calls[0].headers.Range).toBeUndefined();
+    expectSameBytes(new Uint8Array(await res.file.arrayBuffer()), good);
+  });
+
+  it('keeps a partial it could not read, rather than deleting the user\'s bytes', async () => {
+    const mod = await deviceModule();
+    const partial = pbfBytes(4096, 53);
+    seedPartial(partial);
+
+    // An out-of-memory base64 decode is what `readBinary` reports as `null`: it
+    // catches and returns null rather than propagating. The file exists — its
+    // size was taken moments earlier by `fileSize` — so a `null` here is a
+    // statement about *this attempt*, not about the bytes on disk.
+    const { Filesystem } = await import('@capacitor/filesystem');
+    const realReadFile = Filesystem.readFile.bind(Filesystem);
+    let failResumeReads = true;
+    vi.spyOn(Filesystem, 'readFile').mockImplementation(async (o: any) => {
+      // `cachedRegion` reads the *finished* path first and finds nothing, so
+      // keying on the suffix is what makes this precise about the resume read.
+      if (failResumeReads && String(o.path).endsWith('.part')) {
+        throw new RangeError('Invalid string length');
+      }
+      return realReadFile(o);
+    });
+
+    // Attempt one: the resume read fails, so the download restarts from zero —
+    // correct, because nothing trustworthy was recovered — and the bytes that
+    // were on disk survive, which is the whole point.
+    const payload = pbfBytes(2048, 61);
+    const log = mockFetch(() => streaming([payload], {
+      headers: { 'content-length': String(payload.length) },
+    }));
+    vi.stubGlobal('fetch', log);
+
+    const res = await mod.downloadRegion(AB, { retries: 0 });
+    expect(log.calls[0].headers.Range).toBeUndefined();
+    expect(res.size).toBe(payload.length);
+    // Replaced by the completed extract.
+    expect(device.files.has('canopy-regions/ca-ab')).toBe(true);
+
+    // The discriminating case: fail the read on an attempt that never gets as far
+    // as replacing the file. Before the fix, `resumeFrom` deleted the user's
+    // partial here — on a 620 MB province, most of a transfer thrown away by an
+    // out-of-memory base64 decode, silently.
+    device.files.delete('canopy-regions/ca-ab');
+    const CH = 1024 * 1024;
+    const big = pbfBytes(6 * CH, 67);
+    device.files.set('canopy-regions/ca-ab.part', big.subarray(0, 3 * CH));
+    device.files.set('canopy-regions/ca-ab.part.json', new Uint8Array(Buffer.from(
+      JSON.stringify({ url: AB.pbfUrl, etag: '"v1"', modified: null, total: null }),
+    )));
+
+    vi.stubGlobal('fetch', mockFetch(() => { throw new TypeError('Failed to fetch'); }));
+    await mod.downloadRegion(AB, { retries: 0 }).catch(() => undefined);
+
+    // Still there. The failed read did not destroy it.
+    expect(device.files.get('canopy-regions/ca-ab.part')?.byteLength).toBe(3 * CH);
+
+    // And the very next attempt, with reads working again, resumes from it.
+    failResumeReads = false;
+    const log2 = mockFetch(() => streaming([big.subarray(3 * CH)], {
+      status: 206,
+      headers: { 'content-range': `bytes ${3 * CH}-${big.length - 1}/${big.length}` },
+    }));
+    vi.stubGlobal('fetch', log2);
+
+    const finished = await mod.downloadRegion(AB, { retries: 0 });
+    expect(log2.calls[0].headers.Range).toBe(`bytes=${3 * CH}-`);
+    expectSameBytes(new Uint8Array(await finished.file.arrayBuffer()), big);
+  });
+
+  it('still refuses to resume a partial with no validator beside it', async () => {
+    const mod = await deviceModule();
+    // Unchanged behaviour, and deliberately: without `If-Range` the server cannot
+    // be told to refuse a stale prefix, so resuming risks splicing two versions.
+    device.files.set('canopy-regions/ca-ab.part', pbfBytes(1000, 71));
+
+    const payload = pbfBytes(2048, 73);
+    const log = mockFetch(() => streaming([payload], {
+      headers: { 'content-length': String(payload.length) },
+    }));
+    vi.stubGlobal('fetch', log);
+
+    const res = await mod.downloadRegion(AB, { retries: 0 });
+    expect(log.calls[0].headers.Range).toBeUndefined();
+    expectSameBytes(new Uint8Array(await res.file.arrayBuffer()), payload);
+  });
+
+  it('does not mistake a good prefix for poison', async () => {
+    const mod = await deviceModule();
+    // The sniff in `resumeFrom` is new, so it has to be shown not to reject the
+    // thing it is supposed to accept.
+    const payload = pbfBytes(3 * 1024 * 1024, 83);
+    const CH = 1024 * 1024;
+    seedPartial(payload.subarray(0, 2 * CH));
+
+    const log = mockFetch((n) => {
+      if (n === 1) {
+        let i = 0;
+        const stream = new ReadableStream<Uint8Array>({
+          pull(c) {
+            if (i >= 2) { c.close(); return; }
+            c.enqueue(payload.subarray(i * CH, (i + 1) * CH));
+            i++;
+          },
+        });
+        return new Response(stream as unknown as BodyInit, {
+          headers: { 'content-length': String(payload.length), etag: '"v1"' },
+        });
+      }
+      const from = 2 * CH;
+      return streaming([payload.subarray(from)], {
+        status: 206,
+        headers: { 'content-range': `bytes ${from}-${payload.length - 1}/${payload.length}` },
+      });
+    });
+    vi.stubGlobal('fetch', log);
+
+    // First attempt: truncated, leaves the part file.
+    await mod.downloadRegion(AB, { retries: 0 }).catch(() => undefined);
+    // Second: resumes, and must actually resume.
+    const res = await mod.downloadRegion(AB, { retries: 0 });
+    expect(log.calls[1].headers.Range).toBe(`bytes=${2 * CH}-`);
+    expectSameBytes(new Uint8Array(await res.file.arrayBuffer()), payload);
+  });
+});

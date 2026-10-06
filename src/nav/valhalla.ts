@@ -1,4 +1,4 @@
-import { decodePolyline, type LatLng } from '../geo';
+import { decodePolyline, PolylineError, type LatLng } from '../geo';
 
 /**
  * Valhalla (FOSSGIS / OSM) turn-by-turn routing client.
@@ -250,16 +250,41 @@ function parseTrip(json: unknown, units: 'km' | 'miles'): Route {
   // A leg's `shape` already includes its final coordinate, and the last
   // maneuver's end_shape_index is that coordinate's index (geometry.length - 1).
   // Appending it again produced a duplicated arrival point.
-  const legs = trip.legs.map((leg) => ({
-    geometry: decodePolyline(leg.shape, 6),
-    maneuvers: leg.maneuvers,
-    summary: leg.summary,
-  }));
+  const legs = trip.legs.map((leg) => {
+    let geometry: LatLng[];
+    try {
+      geometry = decodePolyline(leg.shape, 6);
+    } catch (e) {
+      // A cut polyline is not a route. Left alone it decoded to `[NaN, NaN]`,
+      // which the ETA bar formatted as "NaN hr NaN min" and the off-route
+      // tracker read as `dist: Infinity` — so the app showed a corrupt distance
+      // and then asked for a new route forever, without ever reporting a fault.
+      throw new RoutingError(
+        'The routing server sent an incomplete route. Try again, or use the offline map.',
+        undefined,
+        e instanceof PolylineError ? e.message : String(e),
+      );
+    }
+    // A single-point geometry is degenerate but not corrupt, and the app already
+  // handles it honestly: `guidance` returns null for a line under two points
+  // rather than inventing turns, and `snapToPolyline` reports a distance of 0
+  // instead of Infinity. Refusing here would turn a case that degrades into one
+  // that fails, so it is deliberately left alone — the decode failure above is
+  // the case that silently produces a *wrong* answer.
+  return {
+    geometry,
+      // Absent rather than malformed on a healthy response, but a server that
+      // omits it must not turn into `undefined` reaching the guidance model,
+      // which walks `maneuvers` as an array.
+      maneuvers: Array.isArray(leg.maneuvers) ? leg.maneuvers : [],
+      summary: leg.summary,
+    };
+  });
 
-  const rawSummary = trip.summary ?? legs[0].summary;
   // Normalise to metres once, here, so no consumer has to know which engine or
-  // unit produced a length.
-  const summary = { ...rawSummary, length: lengthToMetres(rawSummary.length, units) };
+  // unit produced a length — and refuse a summary that is missing rather than
+  // inventing one. See `requireSummary`.
+  const summary = requireSummary(trip.summary ?? legs[0].summary, units);
 
   // Valhalla may return alternates as extra top-level trips or nested alongside
   // the primary; accept either so traffic comparison has something to work with.
@@ -362,7 +387,77 @@ export async function routeOnValhalla(
     const { message, detail } = await readError(res);
     throw new RoutingError(message, res.status, detail);
   }
-  return parseTrip(await res.json(), units);
+
+  // `res.json()` rejects with a bare `SyntaxError` on a body that stops part-way
+  // through, which reached the driver as "Unexpected end of JSON input" — a
+  // sentence about the HTTP client's internals, for a failure whose real cause is
+  // a transfer that did not finish.
+  // `body` above is the request; this is the response. Named apart because a
+  // truncated body is the failure this whole block exists for.
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch (e) {
+    throw new RoutingError(
+      'The reply from the routing server was cut short. Check your connection and try again.',
+      res.status,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+  return parseTrip(payload, units);
+}
+
+/**
+ * A summary that is actually a summary.
+ *
+ * Measured, because the alternative was a guess: a response whose `trip.summary`
+ * carries a length and no `time` produced `summary.time === undefined`, and every
+ * comparison against `undefined` is false, so the ETA bar fell through to the
+ * arithmetic and printed `NaN hr NaN min`. A response with no summary anywhere
+ * threw a `TypeError` on `rawSummary.length`, which reached the driver as an
+ * internal message about an object being undefined.
+ *
+ * Both are *missing* rather than malformed, and this is the last place that can
+ * tell the difference. What it cannot do is invent a duration, so a route with no
+ * usable summary is refused instead: the offline engine is the fallback, and a
+ * route whose arrival time is unknown is better than one that claims `NaN`.
+ */
+function requireSummary(
+  raw: ValhallaLeg['summary'] | undefined,
+  units: 'km' | 'miles',
+): ValhallaLeg['summary'] {
+  if (!raw || typeof raw !== 'object') {
+    throw new RoutingError(
+      'The routing server sent a route with no summary, so its arrival time is unknown. ' +
+      'Try another engine, or use the offline map.',
+      undefined,
+      'trip.summary and every leg summary were absent',
+    );
+  }
+  const length = Number(raw.length);
+  if (!Number.isFinite(length) || length < 0) {
+    throw new RoutingError(
+      'The routing server sent a route with an unreadable distance. ' +
+      'Try another engine, or use the offline map.',
+      undefined,
+      `summary.length was ${JSON.stringify(raw.length)}`,
+    );
+  }
+  const time = Number(raw.time);
+  /**
+   * A missing time stays missing: `NaN`, deliberately, not a `0`.
+   *
+   * `0` would be a claim — `<1 min` for a two-hour drive. `NaN` is inert in every
+   * consumer, because `NaN || fallback` is the fallback (`NaN` is falsy), so the
+   * progress tick falls back to 1 and the remaining-seconds product to 0, while
+   * `formatDuration` prints `—` rather than a duration nobody measured. The
+   * geometry is good and the trip is worth showing; only the ETA is unknown.
+   */
+  return {
+    ...raw,
+    length: lengthToMetres(length, units),
+    time: Number.isFinite(time) ? time : NaN,
+  };
 }
 
 /** Valhalla accepts `exclude_polygons` shapes as encoded polylines. */

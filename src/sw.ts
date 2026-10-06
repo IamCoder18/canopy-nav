@@ -39,6 +39,8 @@
  */
 declare const __CANOPY_BUILD__: string | undefined;
 
+import { looksLikeAppShell } from './shellcheck';
+
 /**
  * The worker global, reached through a cast.
  *
@@ -63,6 +65,33 @@ const CACHE = `canopy-shell-${VERSION}`;
  * rendered a blank page.
  */
 const SHELL = ['./', './index.html'];
+
+/**
+ * Is this response the app, rather than something wearing its URL?
+ *
+ * The decision itself lives in `shellcheck.ts`, which is a plain module and so is
+ * testable; this is the part that needs a `Response`. One `clone()` plus a
+ * `text()`, on the navigation path only, and only while online — which is not the
+ * case the offline promise is about.
+ */
+async function isAppShell(res: Response): Promise<boolean> {
+  let body = '';
+  try {
+    body = await res.clone().text();
+  } catch {
+    // An unreadable body is not evidence of the app. Refusing to cache is the safe
+    // direction: the alternative is caching bytes nobody has checked.
+    return false;
+  }
+  return looksLikeAppShell({
+    origin: sw.location.origin,
+    url: res.url,
+    status: res.status,
+    redirected: res.redirected,
+    contentType: res.headers.get('content-type'),
+    body,
+  });
+}
 
 /** Every same-origin script or stylesheet the document references. */
 function assetUrlsFrom(html: string, base: string): string[] {
@@ -176,8 +205,24 @@ sw.addEventListener('fetch', (event) => {
       (async () => {
         try {
           const fresh = await fetch(req);
-          const cache = await caches.open(CACHE);
-          void cache.put('./index.html', fresh.clone());
+          // Only a document that is actually this app may become the cached shell.
+          //
+          // Any 200 used to be accepted, and a captive portal answers a navigation
+          // with exactly that: HTTP 200, `text/html`, a login form. Putting that in
+          // the cache makes it the app's shell *permanently* — every later offline
+          // load serves the login page instead of the app, and there is nothing the
+          // user can do about it from inside the app, because the app never opens.
+          // That is strictly worse than the `ERR_INTERNET_DISCONNECTED` page this
+          // worker exists to prevent, and it is the same class of defect: a network
+          // state nobody handled.
+          //
+          // The response is still returned to the page. Refusing to cache it is not
+          // the same as refusing to serve it, and the driver sitting in a hotel
+          // lobby still gets whatever the network gave them.
+          if (await isAppShell(fresh)) {
+            const cache = await caches.open(CACHE);
+            void cache.put('./index.html', fresh.clone());
+          }
           return fresh;
         } catch {
           const cache = await caches.open(CACHE);

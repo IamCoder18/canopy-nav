@@ -27,6 +27,9 @@
  *      race, and the loser would overwrite the winner.
  *   3. Back off after failure. If the engine cannot route, retrying every few
  *      seconds drains the battery and will not start working on its own.
+ *   4. A *silent* hold is not a hold. When the policy declines to act it has to
+ *      say why in words the driver can act on, because "nothing happened" on a
+ *      navigation screen is indistinguishable from a frozen app.
  */
 
 import { formatDistance, haversine, type LatLng } from '../geo';
@@ -60,10 +63,26 @@ export interface RerouteState {
   /**
    * Where the last successful reroute started.
    *
-   * Compared against the next candidate reroute's origin by `madeProgress`, so a
-   * position that has stopped moving cannot keep triggering requests.
+   * Kept for the record and the engine trace — it is the point the new route was
+   * built from. It is deliberately *not* what the stale-position guard compares;
+   * see `lastFix`.
    */
   lastOrigin: LatLng | null;
+  /**
+   * The raw position that started the last successful reroute.
+   *
+   * This is what the guard compares against, and the distinction is not cosmetic.
+   * `lastOrigin` is a *projection* onto the route line, and a projection is
+   * clamped to the line's extent: measured, a driver receding perpendicular from a
+   * 3-vertex line projects to the same western endpoint forever, from 111 m of
+   * deviation to 594 m. Comparing projections therefore reads "nothing has
+   * changed" for a driver who has driven 600 m — indistinguishable from a frozen
+   * sensor, which is the one thing the guard exists to catch.
+   *
+   * The raw fix has no such ceiling, so it is the honest signal for "has the
+   * position changed".
+   */
+  lastFix: LatLng | null;
   /**
    * Why the last attempt failed, kept separately from `message`.
    *
@@ -85,6 +104,7 @@ export function createRerouteState(): RerouteState {
     failures: 0,
     lastFinished: null,
     lastOrigin: null,
+    lastFix: null,
     reason: null,
     message: null,
   };
@@ -106,7 +126,7 @@ export const MAX_BACKOFF_MS = 120_000;
 
 /** How long to wait after the last attempt before trying again. */
 /**
- * Did the last reroute actually move the driver toward the destination?
+ * Has the driver's position changed since the last reroute?
  *
  * This is what stops the frozen-position loop. A `watchPosition` that stops
  * delivering — a tunnel, revoked permission, cold GNSS — leaves `location` at its
@@ -118,18 +138,44 @@ export const MAX_BACKOFF_MS = 120_000;
  * busy latch nor the backoff could help, because every attempt *succeeded* and
  * reset the counter.
  *
- * Requiring forward progress closes it. A reroute whose start is not nearer the
- * destination than the previous start's is not evidence the driver is lost; it is
- * evidence the fix is stale. Measured in metres rather than shape index, because
- * a stale fix sits at the same snapped index indefinitely.
+ * ## Why "has it moved" and not "is it getting closer"
+ *
+ * The first version asked `madeProgress`: the candidate start had to be measurably
+ * *nearer the destination* than the last one. It closed the loop and it closed it
+ * too well — it also silenced the case the banner exists to speak to. A driver who
+ * **misses an exit** is genuinely off-route, and their projected start moves *away*
+ * from the destination as they continue past the junction, which is exactly the
+ * evidence that the position is live. So the app said "Off route — waiting for a
+ * position update" to a driver whose positions were arriving perfectly well, and
+ * kept saying it for as long as they drove on the wrong road.
+ *
+ * The distinction the guard is actually for is *frozen* versus *moving*, and
+ * movement alone is the honest test. A frozen fix re-projects to the same point
+ * every time, so it fails this; a driver travelling at any speed passes it. There
+ * is no direction to require, because there is no direction that is right for
+ * every driver — half of all off-route corrections involve moving away from the
+ * destination.
+ *
+ * ## Why the raw fix and not the projected start
+ *
+ * The first version compared two *projections* onto the route line, reasoning that
+ * a reroute would be built from the projection, so the projection was the thing
+ * being compared. That is wrong in a way only measurement finds: a projection is
+ * clamped to the line's extent. Against a 3-vertex route, a driver receding
+ * perpendicular from it projects to the **same western endpoint** from 111 m of
+ * deviation all the way to 594 m — measured, every step identical after the first.
+ *
+ * So the projection reads "nothing has changed" for a driver who has driven 600 m,
+ * which is indistinguishable from a frozen sensor. The guard then told a driver
+ * who was demonstrably moving that it was "waiting for a position update", and
+ * kept saying it for the whole drive.
+ *
+ * `lastFix` therefore holds the raw position, and that is what the guard compares.
+ * A driver stationary in a car park jitters by a metre or two and is caught by the
+ * 10 m floor; a driver 600 m away from where they were is not.
  */
-export function madeProgress(
-  before: LatLng,
-  after: LatLng,
-  destination: LatLng,
-  minGain = 10,
-): boolean {
-  return haversine(after, destination) <= haversine(before, destination) - minGain;
+export function hasMovedSince(before: LatLng, after: LatLng, minMove = 10): boolean {
+  return haversine(after, before) >= minMove;
 }
 
 export function backoffMs(state: RerouteState): number {
@@ -177,7 +223,6 @@ export function observeFix(
   fix: LatLng,
   speed: number,
   now: number,
-  destination?: LatLng,
 ): ObserveResult {
   // No route, or a degenerate one: detection is meaningless.
   if (route.length < 2) {
@@ -232,24 +277,25 @@ export function observeFix(
   const wait = backoffMs(state);
   const elapsed = state.lastFinished === null ? Infinity : now - state.lastFinished;
 
-  // A position that has not advanced since the last successful reroute cannot be
+  // A position that has not moved since the last successful reroute cannot be
   // evidence of a new deviation, however long ago that reroute was. Checked
   // *before* the settle window so the driver is told the real reason immediately
   // rather than being told "settling" for another half-minute.
-  if (state.lastOrigin && destination) {
-    const candidate = rerouteOrigin(tracker, route);
-    if (!madeProgress(state.lastOrigin, candidate, destination)) {
-      return {
-        state: {
-          ...state,
-          tracker,
-          status: 'suspect',
-          message: 'Off route — waiting for a position update',
-        },
-        trigger: false,
-        origin: null,
-      };
-    }
+  //
+  // Compared against the raw fix, not the projected origin, and deliberately not
+  // against the destination. Both choices were made by measurement; see
+  // `hasMovedSince` and `lastFix`.
+  if (state.lastFix && !hasMovedSince(state.lastFix, fix)) {
+    return {
+      state: {
+        ...state,
+        tracker,
+        status: 'suspect',
+        message: 'Off route — waiting for a position update',
+      },
+      trigger: false,
+      origin: null,
+    };
   }
 
   if (elapsed < wait) {
@@ -304,6 +350,7 @@ export function finishReroute(
   now: number,
   reason?: string,
   origin?: LatLng,
+  fix?: LatLng,
 ): RerouteState {
   return {
     ...state,
@@ -315,9 +362,10 @@ export function finishReroute(
     // The reason outlives the next fix: `message` alone is rebuilt every fix and
     // becomes a bare countdown a second later.
     // Only a *successful* reroute advances the stale-position baseline. A failed
-    // one left the driver where they were, so there is no new origin to compare
+    // one left the driver where they were, so there is nothing new to compare
     // against and the next check must not fire.
     lastOrigin: ok ? (origin ?? state.lastOrigin) : state.lastOrigin,
+    lastFix: ok ? (fix ?? state.lastFix) : state.lastFix,
     reason: ok ? null : (reason ?? 'no new route found'),
     message: ok ? null : `Off route — ${reason ?? 'no new route found'}`,
   };

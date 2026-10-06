@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   decodePolyline,
+  PolylineError,
   haversine,
   bearing,
   formatDistance,
@@ -110,6 +111,114 @@ describe('decodePolyline', () => {
     // ~1 degree at precision 6 is 1e6, which needs 4 varint chunks.
     const out = decodePolyline(encodePolyline([[0, 0], [1, -1]], 6), 6);
     expect(out).toEqual([[0, 0], [1, -1]]);
+  });
+});
+
+/**
+ * The refusal cases, which used to be silent.
+ *
+ * The decoder read past the end of a truncated string rather than noticing it.
+ * What that produced was measured rather than assumed, and it is not the obvious
+ * thing: `charCodeAt` past the end is `NaN`, but `NaN << shift` is `0` and
+ * `NaN >= 0x1f` is `false`, so the truncated read contributed a delta of *zero*,
+ * stopped as if it had succeeded, and appended a **finite** point — 30.9 km from
+ * the true endpoint in the fixture below. An exhaustive sweep of all 224³
+ * three-character strings produced zero non-finite coordinates.
+ *
+ * So these assertions are not about `NaN`. They are about the harder case: a
+ * geometry that is wrong, plausible and silent. It draws, it reports a distance,
+ * and it arrives somewhere.
+ */
+describe('decodePolyline refuses a payload it cannot fully decode', () => {
+  const FULL = encodePolyline(
+    [[-114.0719, 51.0447], [-113.4938, 53.5461], [-114.05, 51.05], [-114.06, 51.06]],
+    6,
+  );
+
+  it('rejects a string cut between a latitude and its longitude', () => {
+    // Trim one character: every value before it is whole, the last is not.
+    const cut = FULL.slice(0, -1);
+    expect(() => decodePolyline(cut, 6)).toThrow(PolylineError);
+    expect(() => decodePolyline(cut, 6)).toThrow(/part-way through a coordinate/i);
+  });
+
+  it('rejects a string cut mid-varint, not only at a value boundary', () => {
+    expect(() => decodePolyline(FULL.slice(0, -3), 6)).toThrow(PolylineError);
+    expect(() => decodePolyline(FULL.slice(0, 1), 6)).toThrow(PolylineError);
+  });
+
+  it('never hands back a non-finite coordinate, whatever it is given', () => {
+    const payloads = [FULL.slice(0, -1), FULL.slice(0, -3), FULL.slice(0, 1), '@', '?_', '?? ??'];
+    for (const p of payloads) {
+      let out: LatLng[] | null = null;
+      try {
+        out = decodePolyline(p, 6);
+      } catch {
+        out = null;
+      }
+      // Either refused, or every point finite. The old decoder satisfied neither
+      // branch for a truncated string.
+      if (out) {
+        for (const [lon, lat] of out) {
+          expect(Number.isFinite(lon)).toBe(true);
+          expect(Number.isFinite(lat)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('refuses the payload that used to decode to a plausible wrong answer', () => {
+    // This particular leg, trimmed by one character, is the case measured for
+    // the fix: the old decoder returned four finite points whose last was 30.9 km
+    // from the true endpoint. Kept as its own test so the shape of the bug is on
+    // the record — a corrupt payload has to be refused, not shortened.
+    const leg: LatLng[] = [[-114.0719, 51.0447], [-113.9, 51.9], [-113.4938, 53.5461], [-113.0, 54.2]];
+    const truncated = encodePolyline(leg, 6).slice(0, -1);
+
+    expect(() => decodePolyline(truncated, 6)).toThrow(PolylineError);
+    // ...and the untrimmed encoding of the same leg still decodes exactly, so the
+    // refusal above is about the truncation and not about the route.
+    expect(decodePolyline(encodePolyline(leg, 6), 6)).toHaveLength(leg.length);
+  });
+
+  it('rejects characters outside the encoding alphabet', () => {
+    // The alphabet is ASCII 63..126. A space in a `shape` is a payload that is
+    // not a polyline, and decoding it as arithmetic is how a nonsense geometry
+    // gets drawn.
+    expect(() => decodePolyline('? ??', 6)).toThrow(/unexpected character/i);
+  });
+
+  it('rejects a shape that decodes to a place that does not exist', () => {
+    // Well-formed varints, every character legal, and the arithmetic is exact —
+    // it just lands at latitude 200. Drawn, that is a line to nowhere, and it
+    // still reports a distance to it.
+    const offWorld = encodePolyline([[0, 0], [0, 200], [0, 89]], 6);
+    expect(() => decodePolyline(offWorld, 6)).toThrow(/not a place on Earth/i);
+  });
+
+  it('rejects a shape that decodes past the antimeridian', () => {
+    // Longitude has the same bound and the same reason. A route that leaves the
+    // ±180 window is a decode failure, not a trip around the world.
+    expect(() => decodePolyline(encodePolyline([[0, 0], [400, 0]], 6), 6))
+      .toThrow(/not a place on Earth/i);
+  });
+
+  it('accepts the extremes of the world', () => {
+    // The bound is ±180 / ±90, not "somewhere sensible": an antimeridian
+    // crossing and a pole-adjacent coordinate are real routes and must decode.
+    const edge = encodePolyline([[-180, -90], [180, 90], [179.999999, 89.999999]], 6);
+    expect(decodePolyline(edge, 6)).toHaveLength(3);
+  });
+
+  it('names the cause, for the engine trace to carry', () => {
+    try {
+      decodePolyline(FULL.slice(0, -1), 6);
+      throw new Error('should have thrown');
+    } catch (e) {
+      expect(e).toBeInstanceOf(PolylineError);
+      expect((e as PolylineError).reason).toMatch(/part-way through/i);
+      expect((e as Error).message).toMatch(/malformed/i);
+    }
   });
 });
 
@@ -264,6 +373,29 @@ describe('formatDistance', () => {
     expect(formatDistance(10 * M_PER_MI, 'imperial')).toBe('10 mi');
     expect(formatDistance(123.4 * M_PER_MI, 'imperial')).toBe('123 mi');
   });
+
+  /**
+   * A number that is not a distance cannot be formatted as one.
+   *
+   * `NaN km` reached the ETA bar and `NaN hr NaN min` the preview, from a
+   * response whose `summary` carried a length and no `time` — a *missing* value,
+   * not a corrupt one. Every comparison against `NaN` is false, so the value fell
+   * through to the arithmetic and printed itself. The guard was previously
+   * attributed to a truncated polyline, which was measured and is not the cause:
+   * a truncated polyline decodes to a finite, wrong point (see the
+   * `decodePolyline` refusal block above).
+   */
+  it('refuses a value that is not a distance, in either unit system', () => {
+    for (const bad of [NaN, Infinity, -Infinity, undefined as unknown as number]) {
+      expect(formatDistance(bad, 'metric')).toBe('—');
+      expect(formatDistance(bad, 'imperial')).toBe('—');
+    }
+  });
+
+  it('does not confuse a genuine zero with a missing value', () => {
+    expect(formatDistance(0, 'metric')).toBe('0 m');
+    expect(formatDistance(0, 'imperial')).toBe('0 ft');
+  });
 });
 
 describe('formatDuration', () => {
@@ -288,6 +420,19 @@ describe('formatDuration', () => {
     expect(formatDuration(65 * 60)).toBe('1 hr 5 min');
     expect(formatDuration(125 * 60)).toBe('2 hr 5 min');
     expect(formatDuration(24 * 3600)).toBe('24 hr 0 min');
+  });
+
+  it('refuses a duration that is not one, rather than printing NaN', () => {
+    // `NaN < 60` is false, so without the guard every branch falls through to the
+    // arithmetic and the readout becomes literally "NaN hr NaN min" — the exact
+    // string that was reported as a symptom of a truncated polyline.
+    for (const bad of [NaN, Infinity, -Infinity, undefined as unknown as number]) {
+      expect(formatDuration(bad)).toBe('—');
+    }
+  });
+
+  it('does not confuse a genuine zero with a missing value', () => {
+    expect(formatDuration(0)).toBe('<1 min');
   });
 });
 
