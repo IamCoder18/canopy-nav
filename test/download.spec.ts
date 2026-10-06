@@ -475,6 +475,39 @@ describe('downloadRegion: retry', () => {
     );
     expect(log404.calls).toHaveLength(1);
   });
+
+  it('releases the body of an error response, on every attempt', () => {
+    // `fetch` resolves on headers, so a 503's HTML body is still streaming when
+    // `fetchOnce` throws — and a 503 is retryable, so this path runs repeatedly with
+    // every previous error page still being pulled. The `try`/`finally` that owns the
+    // reader is not entered on this path, so nothing else releases it.
+    //
+    // `checkRegionAvailable` already discards on all four of its exits for this
+    // reason; this is the same leak one function over.
+    const cancelled: number[] = [];
+    const log = mockFetch((n) => {
+      // A body that records its own cancellation.
+      //
+      // The first version of this test called `res.body.cancel()` itself and counted
+      // that, which proves nothing — it cancelled the body it had just built and
+      // passed with the discard removed. Only the code under test can produce a cancel
+      // here, so the stream's own `cancel` callback is the observation.
+      const stream = new ReadableStream({
+        start(controller) { controller.enqueue(new TextEncoder().encode('<html>busy</html>')); },
+        cancel() { cancelled.push(n); },
+      });
+      return new Response(stream, { status: 503, statusText: 'Service Unavailable' });
+    });
+    vi.stubGlobal('fetch', log);
+
+    return downloadRegion(AB, { retries: 2 }).then(
+      () => { throw new Error('should have rejected'); },
+      () => {
+        expect(log.calls.length, 'three attempts').toBe(3);
+        expect(cancelled.length, 'every error body released').toBe(3);
+      },
+    );
+  });
 });
 
 /* ------------------------------ availability --------------------------- */
@@ -807,7 +840,19 @@ describe('on a device (Capacitor Filesystem)', () => {
     const res = await mod.downloadRegion(AB, { retries: 0 });
     expect(res.size).toBe(512);
     expect(res.path).toBeUndefined();
-    expect(res.warnings.join(' ')).toMatch(/could not be saved on the device/i);
+    // The warning must say what is actually lost.
+    //
+    // It used to read "It will only be available until the app is closed", which is
+    // false: the finished file is imported and persisted separately by `saveRegion`, so
+    // the map survives a restart. What this cache is for is `cachedRegion` — resuming
+    // an *interrupted* download — and warning a driver that their province will
+    // disappear, when it will not, is how you make people avoid the part that works.
+    const warning = res.warnings.join(' ');
+    expect(warning).toMatch(/could not be kept on the device/i);
+    expect(warning).toMatch(/download is interrupted you will have to start it again/i);
+    expect(warning, 'must not claim the map is lost').not.toMatch(/until the app is closed/i);
+    // And it must not suggest the map itself is at risk.
+    expect(warning).toMatch(/the map is saved/i);
     expectSameBytes(new Uint8Array(await res.file.arrayBuffer()), payload);
   });
 

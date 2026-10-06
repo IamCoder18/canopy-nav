@@ -283,10 +283,61 @@ describe('regions: the flows that reported nothing', () => {
     expect(REGIONS).toMatch(/downloads\.current\.get\(dl\.entry\.id\)\?\.abort\(\)/);
   });
 
-  it('replaces a download of the same region rather than racing it', () => {
+  it('runs one download at a time, across regions', () => {
     // One progress row and one Cancel control cannot honestly represent two
     // concurrent transfers of up to 1.4 GB each.
-    expect(REGIONS).toMatch(/downloads\.current\.get\(entry\.id\)\?\.abort\(\);\s*\n\s*const ctrl/);
+    //
+    // This used to assert an abort keyed by region id, which only ever aborted a
+    // download of the *same* region — so two different regions ran at once, sharing
+    // the row, and Cancel aborted whichever one happened to be showing. The test's own
+    // title said "of the same region" while the code comment above it said "One at a
+    // time, deliberately", and the gap between those two is the defect.
+    expect(REGIONS).toMatch(/for \(const ctrl of downloads\.current\.values\(\)\) ctrl\.abort\(\);\s*\n\s*downloads\.current\.clear\(\);/);
+    // And the per-region *abort* must be gone: it is the thing that permitted two.
+    // Scoped to the abort because `get(entry.id)` is still correct for the ownership
+    // checks — "is this handle still the one for my region?" — which are what stop a
+    // cancelled download's `finally` from clearing the row of the one that replaced it.
+    expect(REGIONS).not.toMatch(/downloads\.current\.get\(entry\.id\)\?\.abort\(\)/);
+  });
+
+  it("refuses a second region's Download button while one is running", () => {
+    // The other half. Without this the abort above would fire on a tap the UI should
+    // never have offered, so a driver mid-transfer could silently swap regions.
+    expect(REGIONS).toMatch(/if \(dl && dl\.entry\.id !== e\.id\) return;/);
+  });
+
+  it('reports a failed persist on the download path, not only on import', () => {
+    // `store.ts` handles the rejection from `saveRegion` and then, with no callback,
+    // discards it: `void saveRegion(...).catch(err => onPersistError?.(...))`. So an
+    // import that parses and then hits a quota error reports success — the row says
+    // loaded and the region is gone on next launch.
+    //
+    // `App.tsx` documents this exact bug for the import path and fixes it there. The
+    // download path was left, and it is the path most likely to exhaust a quota,
+    // because the file has already been downloaded. Two call sites, two callbacks.
+    // `[ ]` rather than a run of spaces: the indentation is part of what identifies
+    // the call's extent, and `no-regex-spaces` is right that counting spaces by eye is
+    // not readable.
+    const imports = [...REGIONS.matchAll(/importRegionFile\(\{([\s\S]*?)\n[ ]{6}\}\)/g)];
+    expect(imports.length, 'both import call sites').toBeGreaterThanOrEqual(2);
+    for (const m of imports) {
+      expect(m[1], 'every import call site reports a persist failure').toMatch(/onPersistError/);
+    }
+  });
+
+  it("uses the probe's own diagnosis instead of a generic one, and does not call a timeout a cancellation", () => {
+    // `checkRegionAvailable` returns a verdict with `error` written by
+    // `networkMessage` — a sentence that exists precisely to say the extract host
+    // blocked the request and to name the route that works. It was dropped here and
+    // replaced with "The catalogue URL may have moved, or this device may be offline",
+    // whose second clause is false for the CORS case that actually happens (§7 gap 4).
+    expect(REGIONS).toMatch(/avail\.error\s*\n\s*\?\? `\$\{entry\.name\} could not be reached/);
+    // A probe timeout arrives as an abort, which `aborted()` words as "was cancelled".
+    expect(REGIONS).toMatch(/let timedOut = false;/);
+    expect(REGIONS).toMatch(/if \(timedOut\) \{/);
+    expect(REGIONS).toMatch(/captive portal or a connection that is up but not usable/);
+    // And the timer must not outlive the await that can throw over it.
+    expect(REGIONS).toMatch(/\} finally \{\s*\n\s*clearTimeout\(probeTimer\);/);
   });
 
   it('bounds and times the catalogue availability probe', () => {

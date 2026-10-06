@@ -20,8 +20,8 @@ with **fully offline OpenStreetMap routing**.
 - **§13** — the boundary pass: everything that crosses a boundary — a network, a disk, a
   service worker, two overlapping requests, a GPS fix — and refuses to be wrong quietly.
   Eleven defects, **three of them corrections to claims this document had been carrying**.
-  §14 closes a twelfth and a thirteenth, and corrects two more claims of this document's
-  own — one of them the premise the largest gap in it rested on.
+  §14 closes four more, and corrects two claims of this document's own — one of them
+  the premise the largest gap in it rested on.
 - **§14** — the type-scale pass. Leading was a length and did not scale; the bars'
   heights were constants nobody measured; a warning about being lost was invisible at
   ordinary text sizes; and the detector that was supposed to notice large text watched
@@ -82,6 +82,7 @@ evaluated, which a pass or fail result does not tell you.
    — [the detector was watching for the wrong thing](#148-the-detector-was-watching-for-the-wrong-thing)
    — [the largest gap in this document rested on a false premise](#149-the-largest-gap-in-this-document-rested-on-a-false-premise)
    — [a reroute cannot be refused by moving the driver](#1410-a-reroute-cannot-be-refused-by-moving-the-driver-and-a-reason-that-vanished)
+   — [five defects in the regions screen](#1411-five-defects-in-the-regions-screen-from-reading-it-rather-than-running-it)
 
 ---
 
@@ -108,7 +109,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 984 unit tests across 49 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 988 unit tests across 49 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -122,7 +123,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **984 passing**, 49 files |
+| Unit tests | `npm test` | **988 passing**, 49 files |
 | End-to-end | `npm run e2e` | **55 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -200,7 +201,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **49 files, 984 tests**. The
+retyped by hand. The table is the complete set: **49 files, 988 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -211,14 +212,14 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `valhalla.spec.ts` | 46 | request body, headers, response parsing, multi-leg, unit normalisation, a response missing what it needs |
 | `engines.spec.ts` | 38 | engine selection policy, plan ordering, per-engine readiness reasons, the attempt trace, strict mode |
 | `merge.spec.ts` | 37 | node-ID union, direction permissions, dead-edge sweep, >2^21 node regression |
-| `download.spec.ts` | 36 | streaming, progress, abort, retry/resume, HTML-error detection, truncation, disk cache, poisoned part files |
+| `download.spec.ts` | 37 | streaming, progress, abort, retry/resume, HTML-error detection, truncation, disk cache, poisoned part files |
 | `engine.spec.ts` | 34 | OSM parsing, graph construction, one-ways, A\* route quality, geometry continuity, index isolation and keying |
 | `contrast.spec.ts` | 31 | every ink token against every dark surface, printed as a table |
 | `stream.spec.ts` | 30 | streaming XML parse ≡ whole-file parse across chunk sizes, incl. 1-char and seeded fuzz |
 | `geocode.spec.ts` | 29 | throttle serialisation and 1 req/s spacing, viewbox, place mapping |
 | `progress.spec.ts` | 29 | the three ETA properties as properties: monotone, never zero before arrival, last-good-kept |
 | `settings.spec.ts` | 29 | every setting round-trips, a malformed endpoint is not "Ready", quota failures reported |
-| `audit-regressions.spec.ts` | 29 | source-level guards for the §10/§11 defects, each verified to fail when reintroduced |
+| `audit-regressions.spec.ts` | 32 | source-level guards for the §10/§11 defects, each verified to fail when reintroduced |
 | `xmlentities.spec.ts` | 24 | entity expansion structurally impossible; hostile documents terminate |
 | `reroute.spec.ts` | 23 | off-route confirmation window, storm guards, backoff growth, tracker reset semantics, banner content |
 | `persist.spec.ts` | 22 | typed-array round-trip, quota errors, corrupt records, rehydration |
@@ -1488,12 +1489,12 @@ src/
     style.ts              520  Google palette, tile remap, offline LOD style
 
   regions/
-    download.ts          1420  streaming downloader, resume, part-file handling
-    RegionsScreen.tsx     983  manage, catalogue, cross-region route test
+    download.ts          1445  streaming downloader, resume, part-file handling
+    RegionsScreen.tsx    1062  manage, catalogue, cross-region route test
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            984 unit tests, 49 files
+test/            988 unit tests, 49 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1567,6 +1568,15 @@ or "gap 18" are to the *old* numbering and say so; the current numbers are 1–1
    cross-origin `fetch` is blocked before any response is formed. Valhalla, the
    working routing provider, sends `*`. In a browser this is total: one-tap region
    download cannot work, ever, from any code.
+
+   **What the driver used to be told instead, and no longer is.** The probe returns
+   this as a *verdict* carrying a sentence written for it — naming the host,
+   explaining that extract hosts do not allow cross-origin reads, and pointing at
+   Import as the route that works. `startDownload` was reading `avail.ok` and
+   `avail.status` and discarding that sentence, replacing it with *"The catalogue URL
+   may have moved, or this device may be offline"* — both clauses false for the only
+   failure that actually happens. Fixed in §14.11. A dead-but-routable host is now
+   also distinguished from a cancellation, which it was being reported as.
 
    **On device this is unverified, and the likely answer is that it is also
    blocked** — the Capacitor WebView's origin is `https://localhost`, so the same
@@ -1765,7 +1775,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 984 unit tests
+npm test             # 988 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -2200,7 +2210,7 @@ anything is interactive.
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files** (the figures as of that
 > revision), and the boundary pass to
-> **984 across 49** — see §11, §12 and §13. The figures above are left as written
+> **988 across 49** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
@@ -3854,6 +3864,142 @@ it fail — losing the extract — is not something a driver does mid-turn.
 That is worth more than the check I went looking for, and it is the same lesson as §14.9
 in a different place: **when a test cannot be made to fail, the first question is whether
 the failure it is looking for is reachable at all.**
+
+### 14.11 Five defects in the regions screen, from reading it rather than running it
+
+Found by having a second pass over `settings.ts`, `persist.ts`, `download.ts` and
+`RegionsScreen.tsx` looking for defects with no browser involved. Four are fixed and
+verified; the fifth is recorded unfixed with its evidence, because the fix is not the
+obvious one.
+
+#### 1. Two downloads ran at once, and my own §13.10 note said they had their own rows
+
+`startDownload` aborted `downloads.current.get(entry.id)` — a download of the **same**
+region. Two *different* regions could therefore run concurrently: 380 MB and 1.4 GB on a
+metered automotive connection, sharing the one `dl` row, so the row flickered between
+them at stream-chunk rate and the single Cancel button aborted whichever happened to be
+showing while the other ran on unstoppably.
+
+The code comment said *"One at a time, deliberately"*, and `downloads`' own comment listed
+"two downloads could also be started at all" as the problem the `Map` fixed. **A `Map`
+does not fix that.** It makes each download cancellable; it does not prevent the second.
+
+And §13.10 recorded the opposite as a deliberate decision — that two regions "can still
+run concurrently, and that is deliberate", on the grounds that *"each now has its own row
+and its own cancellation."* **There is one row.** That sentence described a capability
+this screen does not have, and it is what kept the guard permissive. A documented
+decision is still a decision; it was simply wrong, and it survived because nothing
+compared it to the JSX.
+
+`startDownload` now aborts every live handle before starting, and the Download button
+refuses a second region while one is in flight.
+
+#### 2. A quota failure on the download path was reported as success
+
+`store.ts` does `void saveRegion(...).catch(err => onPersistError?.(err.message))`. With
+no callback the rejection is **handled and then discarded** — no unhandled-rejection
+warning, no report. So an import that parses perfectly and then fails to persist — a
+quota exhaustion, which `persist.ts` goes to real trouble to word, naming the region, its
+size and which other region to delete — reported success: the row says loaded, the chip
+says "1 loaded", and the region is gone on next launch with nothing said at any point.
+
+`App.tsx` documents this exact bug for the *import* path, in a comment, and fixes it
+there:
+
+> it was passed by nobody in the repo — so a device that ran out of room silently lost
+> the region on next launch while the UI said "1 loaded"
+
+The **download** path was left, and it is the path most likely to exhaust a quota,
+because the file has already been downloaded. Both call sites now pass both callbacks,
+and a test asserts *every* `importRegionFile` call site does — because the defect was
+purely that two of three looked identical at the file level.
+
+#### 3. The probe's own diagnosis was computed and thrown away
+
+`checkRegionAvailable` never throws for a network failure; it **returns** a verdict whose
+`error` is a sentence `networkMessage` writes specifically for it — naming the host,
+saying extract hosts do not allow cross-origin reads, and pointing at Import as the route
+that works. `startDownload` read `avail.ok` and `avail.status` and dropped `avail.error`,
+replacing it with:
+
+> The catalogue URL may have moved, or this device may be offline.
+
+Both clauses are false for the case that actually happens (§7 gap 4: CORS). The file's own
+comment on the *older* wording calls this the bug — *"the old wording told the user to
+'check the device's network' when their network was fine"* — and it was back.
+
+Worse, the same block reported a **probe timeout** as a cancellation. A hung host aborts
+after 15 s, `checkRegionAvailable` throws `aborted(entry, 0, null)`, and the driver was
+told they had cancelled a download they had never started. `timedOut` now distinguishes
+them, and says what actually happened: the host accepted the connection and sent nothing.
+
+`clearTimeout` also moved into a `finally` — it sat *after* the `await`, so the throw
+skipped it and left a 15-second timer armed, holding its closure, on a path the code was
+written to make unreachable.
+
+#### 4. An error response's body was never released
+
+`fetch` resolves on headers, so a `503`'s HTML body is still streaming when `fetchOnce`
+throws — and `retryable()` treats 429/500/503 as worth another attempt, so this ran up to
+three times with every previous error page still being pulled in the background.
+
+The `try`/`finally` that owns the reader is not entered on that path, so nothing released
+it. `checkRegionAvailable` discards on all four of its exits for exactly this reason,
+justified there by a measurement — *"opening the regions screen transferred 9,961,472
+bytes for a 619,019-byte file"*. The same leak, one function over.
+
+The test for it was wrong twice before it was right: the first version called
+`res.body.cancel()` itself and counted that, which passes with the discard removed; the
+second observes the stream's own `cancel` callback, which only the code under test can
+provoke. **0 releases without the fix, 3 with.**
+
+#### 5. On a device, the resume copy is never written — recorded, not fixed
+
+`download.ts` writes the finished file to the device with:
+
+```ts
+await b.fs.writeFile({ path: dest, directory: b.dir, data: file });
+```
+
+`file` is a `File`. `@capacitor/filesystem`'s own type declaration says:
+
+> `data: string | Blob` — **Note: Blob data is only supported on Web.**
+
+And this branch runs **only** when `Capacitor.isNativePlatform()` is true. So on a real
+device the write rejects every time, the resume copy never exists, `cachedRegion` never
+hits, and an interrupted download restarts from byte zero. The module contradicts itself
+twelve hundred lines earlier: `readBinary`'s comment says *"Native returns base64 (Blob
+is web-only)"* — and then hands a Blob to `writeFile`.
+
+**Not fixed here, deliberately.** The obvious fix is to convert to base64, and at 380 MB
+to 900 MB that is a 500 MB to 1.2 GB string across the bridge — the same cost that made
+§13 decline to enable `CapacitorHttp` wholesale, and the reason Capacitor's own guidance
+is `@capacitor/file-transfer`. A chunked base64 writer is implementable, and shipping one
+that can only be exercised on hardware I do not have (§7 gap 1) is how this project ends
+up with a plausible-looking untested path — §12.2 is the precedent for what that costs.
+
+What *was* fixed is the sentence the failure produces. It used to read:
+
+> "It will only be available until the app is closed."
+
+**That is false**, and it is the most alarming line in the file. The finished file is
+imported and persisted separately by `saveRegion`, so the **map** survives a restart and
+a reboot — which is the entire point of downloading it. What the cache is for is
+`cachedRegion`: resuming an *interrupted* download. Telling a driver their province will
+vanish when it will not is how you make people avoid the part that works. It now says
+the map is saved and that an interrupted download will have to start again.
+
+#### The general form
+
+Four of these five are the same mistake, and it is the one this project keeps making:
+**a comment stating an invariant that the code does not enforce.** "One at a time."
+"the reason outlives the next fix." "this path is unreachable." "Blob data is web-only,
+and we are handing it a Blob."
+
+A comment is a claim about code, so it needs the same treatment as a number: re-derived,
+or checked. §2's `npm run status` now checks the shapes it can, and four of these five
+turned out to be checkable as source invariants — which is not the same as true, and is
+why the fifth is recorded rather than asserted.
 
 ---
 

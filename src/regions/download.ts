@@ -1170,7 +1170,19 @@ async function fetchOnce(
     if (isAbort(signal)) throw aborted(entry, resume.received, null);
     throw networkError(entry, e);
   }
-  if (!res.ok) throw httpError(entry, res);
+  if (!res.ok) {
+    // Release the body before reporting. `fetch` resolves on *headers*, so an error
+    // page is still streaming — and `retryable()` treats 429, 500 and 503 as worth
+    // another attempt, so this path runs up to `retries + 1` times with every previous
+    // error body still being pulled in the background.
+    //
+    // The `try`/`finally` that owns the reader is not entered on this path, so
+    // nothing else releases it. `checkRegionAvailable` discards on all four of its
+    // exits for exactly this reason, justified there by a measurement: opening the
+    // regions screen transferred 9,961,472 bytes for a 619,019-byte file.
+    discardBody(res);
+    throw httpError(entry, res);
+  }
 
   // Track the validator of the entity now being read: `If-Range` on a later
   // attempt is what stops the server splicing a prefix from a different version
@@ -1392,11 +1404,24 @@ async function fetchOnce(
       await b.fs.writeFile({ path: dest, directory: b.dir, data: file });
       path = dest;
     } catch (e) {
-      // The download is good even if the offline copy is not; say so loudly
-      // rather than pretending the region will be there after a restart.
+      // The download is good even if the offline copy is not, so this is a warning and
+      // not a failure. What is lost, precisely: the *resume* copy.
+      //
+      // The old wording said "It will only be available until the app is closed", and
+      // that is both false and the most alarming sentence in the file. The finished
+      // file is imported and persisted separately, by `saveRegion` in `store.ts`, so
+      // the **map** survives a restart and a reboot — that is the whole point of
+      // downloading it. What this cache is for is `cachedRegion`, which lets an
+      // *interrupted* download continue from where it stopped instead of re-fetching
+      // 380 MB to 1.4 GB from byte zero.
+      //
+      // Telling a driver their province will vanish when they close the app, when it
+      // will not, is worse than saying nothing: it is the kind of warning that makes
+      // people avoid the feature that works.
       warnings.push(
-        `${label(entry)} downloaded, but it could not be saved on the device (${describe(e)}). ` +
-        'It will only be available until the app is closed.',
+        `${label(entry)} downloaded, and the map is saved — but this copy could not be ` +
+        `kept on the device (${describe(e)}), so if the download is interrupted you will ` +
+        'have to start it again rather than resume it.',
       );
     }
   }

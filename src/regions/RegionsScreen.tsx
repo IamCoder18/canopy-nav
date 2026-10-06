@@ -22,6 +22,15 @@ import type { LatLng } from '../geo';
 import { formatDistance, formatDuration } from '../geo';
 import { ink, type as T, DP, ICON } from '../theme';
 import { focusQuietly } from '../App';
+
+/**
+ * Per-entry probe deadline, shared by the availability pool and the download path.
+ *
+ * Module scope rather than inside the probe effect, because the download path needs
+ * the same number to word its own timeout honestly — and two copies of a timeout is
+ * two numbers that will drift.
+ */
+const PROBE_TIMEOUT_MS = 10_000;
 import {
   IconBack, IconClose, IconFile, IconLayers, IconCompass, IconLocate, IconChevronRight,
   IconTrash, IconWarning, IconCheck,
@@ -159,11 +168,23 @@ export function RegionsScreen(props: RegionsScreenProps) {
   const startDownload = async (entry: CatalogEntry) => {
     setError(null);
     setWarnings([]);
-    // One at a time, deliberately. The screen shows a single progress row and a
-    // single Cancel control, so a second concurrent download would have nowhere to
-    // report and no way to be stopped; a second Download tap therefore replaces the
-    // first rather than racing it.
-    downloads.current.get(entry.id)?.abort();
+    // One at a time, deliberately, and **enforced for every region rather than just
+    // the one being replaced.**
+    //
+    // This used to abort a download of the *same* region only. Two different regions
+    // could therefore
+    // run at once — 380 MB and 1.4 GB on a metered automotive connection — sharing the
+    // one `dl` row, so the row flickered between them at stream-chunk rate and the
+    // single Cancel button aborted whichever happened to be showing at the instant it
+    // was tapped while the other ran on unstoppably.
+    //
+    // §13.10 introduced the `Map` and recorded that two regions "can still run
+    // concurrently, and that is deliberate", on the grounds that each would have its
+    // own row and its own cancellation. **There is one row.** That sentence was a
+    // claim about a capability this screen does not have, and it is what kept the
+    // guard permissive.
+    for (const ctrl of downloads.current.values()) ctrl.abort();
+    downloads.current.clear();
     const ctrl = new AbortController();
     downloads.current.set(entry.id, ctrl);
     setDl({ entry, progress: { received: 0, total: null, fraction: null } });
@@ -172,14 +193,46 @@ export function RegionsScreen(props: RegionsScreenProps) {
       // Probe first so a dead or redirected URL is reported before spending
       // minutes on a download that cannot succeed.
       const probe = new AbortController();
-      const probeTimer = setTimeout(() => probe.abort(), 15000);
-      const avail = await checkRegionAvailable(entry, { signal: probe.signal });
-      clearTimeout(probeTimer);
+      let timedOut = false;
+      const probeTimer = setTimeout(() => { timedOut = true; probe.abort(); }, PROBE_TIMEOUT_MS);
+      // `finally`, not a statement after the await: the throw below skips it, and a
+      // 15 s timer left armed holds its closure — and this screen is mounted for the
+      // life of the region list.
+      let avail;
+      try {
+        avail = await checkRegionAvailable(entry, { signal: probe.signal });
+      } finally {
+        clearTimeout(probeTimer);
+      }
       if (!avail.ok) {
+        // Three different failures reach this line and two of them were reported as
+        // something they are not.
+        //
+        // `checkRegionAvailable` never throws for a network failure — it *returns* a
+        // verdict carrying `error`, a sentence `networkMessage` writes specifically
+        // for it. That sentence was being dropped here and replaced with "The
+        // catalogue URL may have moved, or this device may be offline", whose second
+        // clause is false: the reason is CORS, and `networkMessage` says so and names
+        // the route that works. The file's own comment on the older wording calls
+        // exactly this the bug: "the old wording told the user to 'check the device's
+        // network' when their network was fine." It was back.
+        //
+        // And a probe that *times out* arrives as an abort, which `aborted()` words as
+        // "was cancelled. Nothing was saved" — telling the driver they cancelled
+        // something when a timer did. `timedOut` is what tells the two apart.
+        if (timedOut) {
+          throw new DownloadError(
+            'network',
+            `${entry.name} could not be reached within ${Math.round(PROBE_TIMEOUT_MS / 1000)} s. ` +
+            'The host accepted the connection but sent nothing, which usually means a ' +
+            'captive portal or a connection that is up but not usable.',
+            0,
+          );
+        }
         throw new DownloadError(
-          'http',
-          `${entry.name} could not be reached (HTTP ${avail.status}). ` +
-          'The catalogue URL may have moved, or this device may be offline.',
+          avail.status > 0 ? 'http' : 'network',
+          avail.error
+            ?? `${entry.name} could not be reached (HTTP ${avail.status}).`,
           avail.status,
         );
       }
@@ -198,6 +251,26 @@ export function RegionsScreen(props: RegionsScreenProps) {
         file: res.file,
         onProgress: setProgress,
         onError: setError,
+        // Same two callbacks as the Import path below, and for the same reason.
+        //
+        // Without them, `store.ts`'s `void saveRegion(...).catch(...)` **handles** the
+        // rejection and then drops it, so an import that parses perfectly and then
+        // fails to persist — a quota exhaustion, which is the case `persist.ts` goes
+        // to real trouble to word well, naming the region, its size and which other
+        // region to delete — reports success. The row says "Alberta loaded", the chip
+        // says "1 loaded", and the region is gone on next launch with nothing said at
+        // any point.
+        //
+        // `App.tsx` documents precisely this bug for the import path: "a device that
+        // ran out of room silently lost the region on next launch while the UI said
+        // '1 loaded'". It was fixed there and left here — and **this** is the path
+        // most likely to exhaust a quota, since the file has already been downloaded.
+        onWarn: (msg: string | null) => {
+          if (msg) setWarnings((w) => (w.includes(msg) ? w : [...w, msg]));
+        },
+        onPersistError: (msg: string | null) => {
+          if (msg) setWarnings((w) => (w.includes(msg) ? w : [...w, msg]));
+        },
       });
       if (ds) {
         setError(null);
@@ -306,7 +379,6 @@ export function RegionsScreen(props: RegionsScreenProps) {
   useEffect(() => {
     let cancelled = false;
     const CONCURRENCY = 4;
-    const PROBE_TIMEOUT_MS = 10_000;
     /**
      * How long the whole screen may stay undecided.
      *
@@ -815,7 +887,14 @@ export function RegionsScreen(props: RegionsScreenProps) {
                           : probing ? `Checking whether the ${e.name} download is reachable`
                             : have ? `Replace the ${e.name} map` : `Download the ${e.name} map`
                       }
-                      onClick={() => { if (dl?.entry.id !== e.id && availability[e.id] !== false && !probing) void startDownload(e); }}
+                      // Idle, or re-tapping the row already on screen. Any *other*
+                      // row is refused while a download is in flight, because the
+                      // screen has one progress row and one Cancel control.
+                      onClick={() => {
+                        if (dl && dl.entry.id !== e.id) return;
+                        if (availability[e.id] === false || probing) return;
+                        void startDownload(e);
+                      }}
                     >
                       {dl?.entry.id === e.id
                         ? 'Downloading…'
