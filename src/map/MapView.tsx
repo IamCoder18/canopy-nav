@@ -59,6 +59,20 @@ export interface MapViewProps {
   /** Bumping this re-fits to the route. */
   fitNonce?: number;
   className?: string;
+  /**
+   * Called when the basemap's actual source changes.
+   *
+   * Reported because a tile-host failure used to substitute the offline style
+   * silently: the map kept working and nothing on screen said the basemap had
+   * changed source. Harmless to the driver, but it means the picture behind the
+   * route is no longer what the app claims it is — and this app's rule is that
+   * nothing implies data it does not have.
+   *
+   * `reason` is non-null only when tiles were asked for and could not be
+   * fetched, which is the case worth reporting: a deliberate offline session is
+   * the expected path, not a failure.
+   */
+  onBasemapChange?: (source: 'tiles' | 'offline') => void;
 }
 
 const mapRef: { current: MLMap | null } = { current: null };
@@ -68,6 +82,14 @@ export function MapView(props: MapViewProps) {
   const map = useRef<MLMap | null>(null);
   const ready = useRef(false);
   const styleMode = useRef<'tiles' | 'offline'>('tiles');
+
+  /**
+   * The basemap callback, held in a ref for the same reason as the tap handlers
+   * above: this effect must not depend on prop identity, or a caller that
+   * re-creates its callback would re-boot the style on every render.
+   */
+  const onBasemapRef = useRef(props.onBasemapChange);
+  useEffect(() => { onBasemapRef.current = props.onBasemapChange; }, [props.onBasemapChange]);
 
   /* ------------------------- initialise map ------------------------- */
 
@@ -203,6 +225,9 @@ export function MapView(props: MapViewProps) {
       // then claim a mode the style does not match, and the guard at the top of
       // this effect would skip the update that would have fixed it.
       if (cancelled) return;
+      // Reported after the cancellation check, so an abandoned boot does not
+      // announce a source the map never adopted.
+      onBasemapRef.current?.(mode);
       styleMode.current = mode;
       ready.current = false;
       current.setStyle(style);

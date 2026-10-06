@@ -1974,6 +1974,31 @@ ul.result-list > li { margin: 0; }
  * whose entire audience is the one AAOS's 24dp minimum type size exists for.
  * Only the layout that responds to it is outstanding.
  *
+ * ## Re-measured, because the probe was measuring the wrong state
+ *
+ * `tools/reflow.mjs` waited for the *root font size* to exceed the threshold
+ * rather than for the `data-textsize` attribute. The probe itself writes the root
+ * size, so that condition was satisfied the instant it was checked, and the reflow
+ * was then measured against `data-textsize="normal"` -- a state no device is ever
+ * in, since `textscale.ts` notices within its 2 s poll. At 200% this rule was
+ * therefore never in effect while the probe measured, and it reported
+ * `overflow-y: visible` plus a collision this rule prevents.
+ *
+ * With the probe waiting for the attribute, the real measurements are:
+ *
+ *   - 100%: nothing clipped, nothing overlapping, nothing out of reach.
+ *   - 175%: this rule is in effect (`overflow-y: auto`, bounded) and the stack no
+ *     longer intersects the bottom bar. Seven chrome labels are still clipped.
+ *   - 200%: the stack does not intersect the bottom bar either. The off-route
+ *     notice is scrolled 20px out of view, and the same seven labels are clipped.
+ *
+ * So the remaining work is not "add a rule" but "stop hard-coding a height and
+ * deriving a layout from it". The seven clipped labels live *inside* the two bars,
+ * whose `height` is also a fixed token, and bounding the stack cannot fix them --
+ * it would take the space the bars need. A column layout for the three pieces
+ * makes those heights intrinsic; it was written and measured, it removed one
+ * reported collision and fixed none of the clipping, and it is not in this file.
+ *
  * ## What does ship, and what it measures
  *
  * Just the banner stack's lower bound — the one collision that was actually

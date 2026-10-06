@@ -81,15 +81,45 @@ const PIECES = [
 const MEASURE = (pieces) => {
   const vw = document.documentElement.clientWidth;
   const vh = document.documentElement.clientHeight;
+
+  /**
+   * The box as the driver can actually see it.
+   *
+   * `getBoundingClientRect` reports the layout box, which for a child of a
+   * scrolling container extends past that container's clip. The off-route notice
+   * at 200% is exactly that case: `.banner-stack` has `overflow-y: auto`, so the
+   * notice's lower 20px is *clipped* — not painted over the bottom bar — and the
+   * probe was reporting it as a collision. It also meant the notice counted as
+   * on-screen when it was partly scrolled out of reach, which is the opposite
+   * failure and the more dangerous one.
+   *
+   * Intersecting with every clipping ancestor's box is the honest measurement, and
+   * it makes the two claims separable: something clipped by a scroll container is
+   * reported as *clipped*, and only genuinely painted overlap counts as overlap.
+   */
+  const visibleRect = (el) => {
+    let r = el.getBoundingClientRect();
+    let x0 = r.x, y0 = r.y, x1 = r.right, y1 = r.bottom;
+    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      const cs = getComputedStyle(p);
+      if (!/auto|scroll|hidden/.test(cs.overflow + cs.overflowX + cs.overflowY)) continue;
+      const pr = p.getBoundingClientRect();
+      x0 = Math.max(x0, pr.x); y0 = Math.max(y0, pr.y);
+      x1 = Math.min(x1, pr.right); y1 = Math.min(y1, pr.bottom);
+    }
+    return { x: x0, y: y0, right: x1, bottom: y1, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+  };
+
   const boxes = [];
   for (const [sel, label] of pieces) {
     const el = document.querySelector(sel);
     if (!el) continue;
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') continue;
-    const r = el.getBoundingClientRect();
-    if (r.width === 0 || r.height === 0) continue;
-    boxes.push({ label, sel, x: r.x, y: r.y, w: r.width, h: r.height, bottom: r.bottom, right: r.right });
+    const layout = el.getBoundingClientRect();
+    if (layout.width === 0 || layout.height === 0) continue;
+    const v = visibleRect(el);
+    boxes.push({ label, sel, x: v.x, y: v.y, w: v.w, h: v.h, bottom: v.bottom, right: v.right });
   }
   const overlaps = [];
   for (let i = 0; i < boxes.length; i++) {
@@ -116,7 +146,24 @@ const MEASURE = (pieces) => {
   const clipped = [...document.querySelectorAll('.maneuver-instr, .maneuver-dist, .eta-value, .nav-bottom-btn span')]
     .filter((el) => el.scrollHeight > el.clientHeight + 2 || el.scrollWidth > el.clientWidth + 2)
     .map((el) => `"${(el.textContent || '').trim().slice(0, 24)}"`);
-  return { overlaps, offscreen, clipped, count: boxes.length };
+  /**
+   * Content pushed out of a scrolling container.
+   *
+   * Distinct from the clipping above: that is a control too small for its own text,
+   * this is a card scrolled out of the region the driver can see. Both mean "not
+   * readable", and reporting them as one number hides which is which.
+   */
+  const scrolledOut = [];
+  for (const [sel, label] of pieces) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    const layout = el.getBoundingClientRect();
+    const vis = visibleRect(el);
+    if (layout.height > 0 && vis.h + 2 < layout.height) {
+      scrolledOut.push(`${label} (${Math.round(layout.height - vis.h)}px out of view)`);
+    }
+  }
+  return { overlaps, offscreen, clipped, scrolledOut, count: boxes.length };
 };
 
 const browser = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader'] });
@@ -217,13 +264,21 @@ for (const zoom of [1, 1.75, 2]) {
     return { n, threshold };
   }, { factor: zoom, threshold: 20 });
   // Wait for the app's own detector to see the new root size.
+  //
+  // The condition is the *attribute*, not the root size. Both of the original
+  // alternatives measured a state the app is never in: waiting only for the root
+  // size is satisfied the instant the probe writes it, before the app has run its
+  // detection, so the reflow was then measured against `data-textsize="normal"` —
+  // a layout the app is in for at most one poll interval and never on a device
+  // whose font size is genuinely large. The app notices on `resize` or within its
+  // 2 s poll, so the budget is generous on purpose.
   try {
     await page.waitForFunction(
-      (t) => (getComputedStyle(document.documentElement).fontSize
-        ? parseFloat(getComputedStyle(document.documentElement).fontSize) : 16) > t
-        || document.documentElement.dataset.textsize === 'large',
-      20,
-      { timeout: 5000, polling: 200 },
+      (large) => (document.documentElement.dataset.textsize === 'large') === large,
+      zoom > 1,
+      // Above the 2 s poll interval plus slack, because that is the slowest path
+      // the app has to notice.
+      { timeout: 6000, polling: 200 },
     );
   } catch { /* reported below */ }
   await page.waitForTimeout(600);
@@ -234,12 +289,30 @@ for (const zoom of [1, 1.75, 2]) {
     const el = document.querySelector('.banner-stack');
     if (!el) return { found: false };
     const cs = getComputedStyle(el);
+    /**
+     * The bound the stack uses versus the bar it has to clear.
+     *
+     * `--navbot` is a fixed token while `.nav-bottom` grows when its labels wrap,
+     * so at large text the two drift apart and the stack's lower bound ends up
+     * *inside* the bar. Reported so that is visible rather than inferred.
+     */
+    const bar = document.querySelector('.nav-bottom');
+    const barBox = bar?.getBoundingClientRect();
+    const stackBox = el.getBoundingClientRect();
+    const boundPx = Number.parseFloat(cs.bottom);
     return {
       found: true,
       attr: document.documentElement.dataset.textsize,
       overflowY: cs.overflowY,
       bottom: cs.bottom,
-      height: Math.round(el.getBoundingClientRect().height),
+      height: Math.round(stackBox.height),
+      navbot: getComputedStyle(document.documentElement).getPropertyValue('--navbot').trim(),
+      barTop: barBox ? Math.round(barBox.top) : null,
+      // The bound the stack was told to keep, and how far it actually kept it.
+      // A large difference means the token is not describing the bar it names.
+      boundPx: Number.isFinite(boundPx) ? Math.round(boundPx) : null,
+      // Positive means the stack reaches below the top of the bar.
+      overlapBy: barBox ? Math.round(stackBox.bottom - barBox.top) : null,
     };
   });
   console.log('  banner-stack:', JSON.stringify(applied));
@@ -256,6 +329,11 @@ for (const zoom of [1, 1.75, 2]) {
       m.offscreen.length === 0, m.offscreen.join('; ') || 'all within the viewport');
     check(`text ${Math.round(zoom * 100)}%: no instruction text is clipped`,
       m.clipped.length === 0, m.clipped.join(', ') || 'none clipped');
+    // Scrollable is not the same as readable. Reported separately, because a card
+    // scrolled out of the visible region is a different defect from a control too
+    // small for its own text, and folding them into one number hid this one.
+    check(`text ${Math.round(zoom * 100)}%: nothing is scrolled out of reach`,
+      m.scrolledOut.length === 0, m.scrolledOut.join('; ') || 'all in view');
   }
   await ctx.close();
 }

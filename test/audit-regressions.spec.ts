@@ -242,8 +242,33 @@ describe('regions: the flows that reported nothing', () => {
     expect(src('regions/store.ts')).toMatch(/export async function removeRegion/);
   });
 
-  it('aborts a download that outlives the screen', () => {
-    expect(REGIONS).toMatch(/useEffect\(\(\) => \(\) => abortRef\.current\?\.abort\(\), \[\]\)/);
+  it('aborts every download that outlives the screen', () => {
+    // Was one `abortRef` for the whole screen, which meant only the *last* download
+    // started could be cancelled — a second Download left the first running with
+    // nothing able to stop it, which is the whole point of leaving the screen
+    // mid-transfer.
+    expect(REGIONS).toMatch(/for \(const ctrl of downloads\.current\.values\(\)\) ctrl\.abort\(\)/);
+    expect(REGIONS).toMatch(/downloads\.current\.clear\(\)/);
+  });
+
+  it('gives each download its own handle, and releases only its own row', () => {
+    // The single `abortRef` also meant a superseded download's `finally` cleared
+    // the progress row belonging to the one the driver was watching.
+    expect(REGIONS).toMatch(/downloads\.current\.get\(entry\.id\) === ctrl/);
+    // Comments stripped first: the note explaining what this replaced names it, and
+    // a guard that fails on its own explanation trains people to delete the
+    // explanation.
+    expect(code('regions/RegionsScreen.tsx')).not.toMatch(/abortRef/);
+  });
+
+  it('cancels the download that is on screen, not the last one started', () => {
+    expect(REGIONS).toMatch(/downloads\.current\.get\(dl\.entry\.id\)\?\.abort\(\)/);
+  });
+
+  it('replaces a download of the same region rather than racing it', () => {
+    // One progress row and one Cancel control cannot honestly represent two
+    // concurrent transfers of up to 1.4 GB each.
+    expect(REGIONS).toMatch(/downloads\.current\.get\(entry\.id\)\?\.abort\(\);\s*\n\s*const ctrl/);
   });
 
   it('bounds and times the catalogue availability probe', () => {

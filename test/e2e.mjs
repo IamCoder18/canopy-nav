@@ -444,29 +444,54 @@ try {
     // string is absent for the wrong reason. The suite then counted zero
     // download controls and reported the catalogue as empty.
     //
-    // So the condition is positive and structural: a settled number of rows whose
-    // labels are decided. Absence is not evidence that nothing is there yet.
+    // The second version polled for *decided labels* instead, which fixed the
+    // empty-read but introduced a worse problem: "every catalogue row has a
+    // download control" became a claim about the network. A row still reading
+    // "Checking…" was counted as having no control at all, so on a slow link the
+    // suite reported a UI defect it had just timed out on. Measured: the same
+    // commit passed and failed across runs with nothing changed but how long
+    // Geofabrik took to answer sixteen HEAD requests.
+    //
+    // The control check is structural — one `.pill-btn` inside each row's action
+    // cluster — so it is true or false regardless of what the network does. The
+    // probe settling is a separate claim, with its own check.
     try {
-      await page.waitForFunction(() => {
-        const rows = [...document.querySelectorAll('.pill-btn')]
-          .map((b) => b.textContent.trim())
-          .filter((t) => /^(Download|Unavailable|Downloading)/.test(t));
-        return rows.length >= 16;
-      },
-      // `polling: 500`, not the default animation-frame polling: with the OSM
-      // worker and MapLibre both busy, rAF ticks are irregular enough to make a
-      // 60s timeout behave unpredictably. And 120s, because with no network every
-      // one of the ~20 probes burns its full 10s deadline at 4 concurrent.
-      { timeout: 120000, polling: 500 });
+      await page.waitForFunction(
+        () => document.querySelectorAll('.region-actions .pill-btn').length >= 16,
+        // `polling: 500`, not the default animation-frame polling: with the OSM
+        // worker and MapLibre both busy, rAF ticks are irregular enough to make a
+        // 60s timeout behave unpredictably.
+        { timeout: 60000, polling: 500 },
+      );
     } catch {
       // Reported below by the row count, which is the more useful detail.
+    }
+    // Then wait for the probe itself to settle, separately and with its own budget.
+    // Geofabrik answers sixteen HEAD requests four at a time with a 10 s deadline
+    // each, and CORS blocks the rest instantly, so the worst case is four batches
+    // of 10 s. Under a slow link that is the whole budget and the check below
+    // reports it as what it is — a probe that did not finish in time — rather than
+    // folding it into a UI assertion.
+    try {
+      await page.waitForFunction(
+        () => ![...document.querySelectorAll('.pill-btn')]
+          .some((b) => b.textContent.trim() === 'Checking…'),
+        { timeout: 90000, polling: 500 },
+      );
+    } catch {
+      // Reported by the probe-settles check below.
     }
     const catalogue = await page.evaluate(() => {
       const rows = [...document.querySelectorAll('.pill-btn')].map((b) => b.textContent.trim());
       return {
         provinces: document.body.innerText.includes('Alberta') && document.body.innerText.includes('British Columbia'),
         states: document.body.innerText.includes('California'),
-        downloadButtons: rows.filter((t) => /^(Download|Unavailable|Downloading)/.test(t)).length,
+        // The structural count: a download control in every row's action cluster,
+        // whatever state the reachability probe is in.
+        downloadButtons: document.querySelectorAll('.region-actions .pill-btn').length,
+        // And the rows the probe has actually decided, as a distinct fact.
+        decided: rows.filter((t) => /^(Download|Unavailable|Downloading)/.test(t)).length,
+        pending: rows.filter((t) => t === 'Checking…').length,
         // textContent concatenates an icon's text, so match the whole trimmed
         // string rather than a prefix.
         rows: [...document.querySelectorAll('.pill-btn')]
@@ -501,6 +526,11 @@ try {
     check('catalogue lists US states', catalogue.states);
     check('every catalogue row has a download control', catalogue.downloadButtons >= 16,
       `${catalogue.downloadButtons} controls`);
+    // Separate claim, separate check: the reachability probe has to *settle*. A
+    // screen that shows "Checking…" forever tells the driver nothing about whether
+    // their download will work, which is what the probe exists to answer.
+    check('the availability probe settles', catalogue.pending === 0,
+      `${catalogue.decided} decided, ${catalogue.pending} still checking`);
     // A row labelled "Unavailable" must not be activatable, and a downloadable row
     // must be -- the label and the affordance have to agree, whatever the network
     // happens to be doing.

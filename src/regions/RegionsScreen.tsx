@@ -111,7 +111,20 @@ export function RegionsScreen(props: RegionsScreenProps) {
   /** Live download progress, distinct from the parser's BuildProgress. */
   const [dl, setDl] = useState<{ entry: CatalogEntry; progress: DownloadProgress } | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
-  const abortRef = useRef<AbortController | null>(null);
+  /**
+   * Live download handles, keyed by region id.
+   *
+   * This was one `abortRef` for the whole screen, which meant a second download
+   * overwrote the first's handle: the first became uncancellable, and the progress
+   * row — one `dl` value for the screen — flickered between the two as each
+   * reported progress into it. Two downloads could also be started at all, which
+   * on a metered automotive connection is 380 MB and 1.4 GB at once with one
+   * Cancel button between them.
+   *
+   * A `Map` rather than a single ref, so each download owns its own cancellation
+   * and a stale one's `finally` cannot clear the other's row.
+   */
+  const downloads = useRef(new Map<string, AbortController>());
   const [availability, setAvailability] = useState<Record<string, boolean>>({});
   /**
    * Why a catalogue row is unavailable, keyed by id.
@@ -130,8 +143,13 @@ export function RegionsScreen(props: RegionsScreenProps) {
   const startDownload = async (entry: CatalogEntry) => {
     setError(null);
     setWarnings([]);
+    // One at a time, deliberately. The screen shows a single progress row and a
+    // single Cancel control, so a second concurrent download would have nowhere to
+    // report and no way to be stopped; a second Download tap therefore replaces the
+    // first rather than racing it.
+    downloads.current.get(entry.id)?.abort();
     const ctrl = new AbortController();
-    abortRef.current = ctrl;
+    downloads.current.set(entry.id, ctrl);
     setDl({ entry, progress: { received: 0, total: null, fraction: null } });
 
     try {
@@ -151,7 +169,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
       }
 
       const res = await downloadRegion(entry, {
-        onProgress: setDlProgress(entry),
+        onProgress: setDlProgress(entry, ctrl),
         signal: ctrl.signal,
         expectedBytes: avail.bytes ?? undefined,
       });
@@ -177,13 +195,24 @@ export function RegionsScreen(props: RegionsScreenProps) {
       // that silently half-succeeded would be worse than one that reports.
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      abortRef.current = null;
-      setDl(null);
+      // Only release the row if *this* download still owns it. Clearing
+      // unconditionally is how a slow first download wiped the progress of the one
+      // the driver was actually watching.
+      if (downloads.current.get(entry.id) === ctrl) {
+        downloads.current.delete(entry.id);
+        setDl(null);
+      }
     }
   };
 
-  const setDlProgress = (entry: CatalogEntry) => (p: DownloadProgress) =>
-    setDl({ entry, progress: p });
+  /**
+   * Progress from a download, discarded once it is not the one on screen.
+   *
+   * The check is against the handle rather than the id, so a download that has
+   * been superseded cannot overwrite the row belonging to its replacement.
+   */
+  const setDlProgress = (entry: CatalogEntry, ctrl: AbortController) => (p: DownloadProgress) =>
+    setDl((cur) => (downloads.current.get(entry.id) === ctrl ? { entry, progress: p } : cur));
 
   /* ------------------------------- removal ------------------------------- */
 
@@ -212,8 +241,15 @@ export function RegionsScreen(props: RegionsScreenProps) {
     setOutcome({ removed: r.name });
   };
 
+  /**
+   * Cancel the download on screen.
+   *
+   * Aborts by the row's region id, not "whatever handle was last stored", so the
+   * control always cancels the thing the driver can see.
+   */
   const cancelDownload = () => {
-    abortRef.current?.abort();
+    if (!dl) return;
+    downloads.current.get(dl.entry.id)?.abort();
   };
 
   /**
@@ -228,7 +264,11 @@ export function RegionsScreen(props: RegionsScreenProps) {
    * `App`. On a metered automotive connection that is the difference between
    * cancelling and not.
    */
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => {
+    // Every download, not just the last one started.
+    for (const ctrl of downloads.current.values()) ctrl.abort();
+    downloads.current.clear();
+  }, []);
 
   /* --------------------------- availability probe ------------------------- */
 

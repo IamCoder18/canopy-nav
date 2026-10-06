@@ -5,7 +5,7 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v0.11.3 (APK attached). Main is ahead by four passes, each recorded below:
+**Latest release:** v0.11.3 (APK attached). Main is ahead by five passes, each recorded below:
 
 - **§3.17–3.18** — §3.17 closes the ETA gap this document once called the most dangerous
   readout in the app. **Requirement #10 is implemented**: cross-region routing merges the
@@ -17,9 +17,12 @@ with **fully offline OpenStreetMap routing**.
   entirely, plus six contrast ratios measured against Google's published automotive numbers.
 - **§12** — the engine audit: a priority queue that was not a heap, a parser that could hang
   an import forever, and four leaks.
+- **§13** — the boundary pass: everything that crosses a boundary — a network, a disk, a
+  service worker, two overlapping requests, a GPS fix — and refuses to be wrong quietly.
+  Seven defects, **three of them corrections to claims this document had been carrying**.
 
-Each pass also had to fix defects **it introduced**, which are recorded in §11.5 and §12.8
-rather than quietly corrected.
+Each pass also had to fix defects **it introduced**, which are recorded in §11.5, §12.8 and
+§13.6 rather than quietly corrected.
 
 ---
 
@@ -41,6 +44,8 @@ rather than quietly corrected.
    — [measured against the published numbers](#114-measured-against-the-published-numbers)
 12. [The engine audit](#12-the-engine-audit)
    — [a priority queue that was not a heap](#121-a-priority-queue-that-was-not-a-heap)
+13. [The boundary pass](#13-the-boundary-pass)
+   — [what this document got wrong](#134-what-this-document-got-wrong)
 
 ---
 
@@ -67,7 +72,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 828 unit tests across 38 files, plus 5 browser suites | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 904 unit tests across 41 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -81,20 +86,30 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **792 passing**, 36 files |
-| End-to-end | `npm run e2e` | **44 checks** against the built bundle |
+| Unit tests | `npm test` | **904 passing**, 41 files |
+| End-to-end | `npm run e2e` | **46 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
-| Bundle budget | `npm run bundle` | entry 105.8 kB / 130, initial 110.3 / 150, largest 281.6 / 300, total JS 412.3 / 460 (gzip) |
+| Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
+| Offline shell | `npm run swshell` | a captive portal answered 2 navigations, then the network went off: the app still boots, 5 launcher tiles |
+| Reflow at large text | `npm run reflow` | **3 checks fail** — a diagnostic, not a gate. §12.7, §13.5 |
+| Bundle budget | `npm run bundle` | entry 112.0 kB / 130, initial 117.5 / 150, largest 282.0 / 300, total JS 417.8 / 460 (gzip) |
 | Offline cold start | verified in-browser | reload with the network off renders the app: 5 tiles, map sized, 0 console errors |
 | Release | v0.11.3 tag | **CI green, Release green**, APK attached |
 | APK | `npm run apk` | debug APK, `com.canopy.nav`, minSdk 23, targetSdk 35 |
 | Device | Android 14 emulator, API 34, 2340×1080 | installs, runs, **zero console output**, real GPS confirmed |
 
-The e2e count moved from 39 to 44 and the screen count from 150 to 153 in §10,
-both because the suites gained checks for defects the audits found. The lint and
-bundle rows are new *gates*, not new measurements: before §10 nothing failed when
-the entry chunk grew or when a hook dependency went stale, because nothing was
-watching.
+The e2e count moved from 39 to 44 in §10 and to 46 in §13; the screen count from
+150 to 153 in §10 and 159 at the last re-derivation. The lint and bundle rows are
+*gates*, not new measurements: before §10 nothing failed when the entry chunk grew
+or when a hook dependency went stale, because nothing was watching. The offline
+shell row is a gate for the same reason and was added in §13: the defect it covers
+is invisible to every other suite, because every other suite assumes the app
+opens.
+
+**The unit-test count in this table was wrong in the previous revision** — it
+read 828, which was accurate for the §12 revision, and 792 before that. The 828
+was right; the *table* was not, because two rows above it still said 792. Both
+numbers were in this file at once, which is the error this section is about.
 
 **Every count in this table is measured**, by counting `PASS` lines from an
 actual run or by counting call sites in the source. Three figures in this
@@ -146,41 +161,81 @@ That was the last known console output in the project.
 
 ### Test breakdown
 
+Every count below is from `vitest --reporter=json` on a run, grouped by file, not
+retyped by hand. The table is the complete set: **41 files, 904 tests**. The
+previous revision's table listed 24 of the 38 files and several stale counts.
+
 | File | Tests | Covers |
 |---|---|---|
-| `engine.spec.ts` | 34 | OSM parsing, graph construction, one-ways, A* route quality, geometry continuity, region merging, index isolation and keying |
+| `geo.spec.ts` | 67 | polyline codec and every refusal case, haversine, bearing, formatting boundaries, `simplify`, `snapToPolyline` |
+| `regions.spec.ts` | 63 | `RegionLibrary`, bbox helpers, `catalogFor`, `searchAll` ranking, `bestFor`, cross-region routing |
 | `providers.spec.ts` | 46 | provider chain, fallback, `requiresKey`, 4xx handling, `localToRoute` bbox reduction |
-| `regions.spec.ts` | 60 | `RegionLibrary`, bbox helpers, `catalogFor`, `searchAll` ranking, `bestFor` |
-| `geo.spec.ts` | 54 | polyline codec, haversine, bearing, formatting boundaries, `simplify`, `snapToPolyline` |
-| `valhalla.spec.ts` | 36 | request body, headers, response parsing, multi-leg, unit normalisation |
-| `download.spec.ts` | 31 | streaming, progress, abort, retry/resume, HTML-error detection, truncation, disk cache |
-| `geocode.spec.ts` | 29 | throttle serialisation and 1 req/s spacing, viewbox, place mapping |
-| `merge.spec.ts` | 37 | node-ID union, direction permissions, dead-edge sweep, >2^21 node regression |
-| `persist.spec.ts` | 21 | typed-array round-trip, quota errors, corrupt records, rehydration |
-| `icons.spec.ts` | 4 | every maneuver kind renders distinct geometry |
-| `navigation.spec.ts` | 17 | off-route detection, speed-scaled thresholds, traffic verdicts |
-| `pbf.spec.ts` | 11 | PBF vs XML parser equivalence on a hand-built file and the whole fixture |
-| `pbfgeo.spec.ts` | 6 | absolute coordinates against the PBF spec, via the real encoder — the nanodegree regression |
+| `valhalla.spec.ts` | 46 | request body, headers, response parsing, multi-leg, unit normalisation, a response missing what it needs |
 | `engines.spec.ts` | 38 | engine selection policy, plan ordering, per-engine readiness reasons, the attempt trace, strict mode |
+| `merge.spec.ts` | 37 | node-ID union, direction permissions, dead-edge sweep, >2^21 node regression |
+| `download.spec.ts` | 36 | streaming, progress, abort, retry/resume, HTML-error detection, truncation, disk cache, poisoned part files |
+| `engine.spec.ts` | 34 | OSM parsing, graph construction, one-ways, A\* route quality, geometry continuity, index isolation and keying |
+| `contrast.spec.ts` | 31 | every ink token against every dark surface, printed as a table |
+| `stream.spec.ts` | 30 | streaming XML parse ≡ whole-file parse across chunk sizes, incl. 1-char and seeded fuzz |
+| `geocode.spec.ts` | 29 | throttle serialisation and 1 req/s spacing, viewbox, place mapping |
+| `progress.spec.ts` | 29 | the three ETA properties as properties: monotone, never zero before arrival, last-good-kept |
+| `settings.spec.ts` | 29 | every setting round-trips, a malformed endpoint is not "Ready", quota failures reported |
+| `audit-regressions.spec.ts` | 28 | source-level guards for the §10/§11 defects, each verified to fail when reintroduced |
+| `xmlentities.spec.ts` | 24 | entity expansion structurally impossible; hostile documents terminate |
 | `reroute.spec.ts` | 23 | off-route confirmation window, storm guards, backoff growth, tracker reset semantics, banner content |
-| `stream.spec.ts` | 30 | streaming XML parse ≡ whole-file parse across chunk sizes, incl. 1-char and seeded fuzz; progress; degenerate input |
-| `mapstyle.spec.ts` | 20 | offline style LOD: every line layer has a low-zoom floor, arterials branch on class, layer ordering, no duplicate ids |
-| `serve.spec.ts` | 16 | test-server path containment (plain, encoded, dot-segment traversal) and no side effects on import |
-| `theme.spec.ts` | 11 | `theme.ts` ↔ `styles.css` token-name agreement, fallbacks present, `:root` declarations |
-| `styletiles.spec.ts` | 9 | tile-style order-comparison guard: the actual shield filter, short-circuit shape, recursion, idempotency |
-| `progress.spec.ts` | 29 | the three ETA properties as properties: monotone, never zero before arrival, last-good-kept when the fix is unusable — plus `snapAlong` in metres and `formatDistance` not rounding to zero (§3.17) |
-| `mergeguard.spec.ts` | 13 | merge memory guard: three outcomes, the boundary at ratio 1, scaling with region *count*, and that the source graphs count because they stay resident (§3.18) |
-| `tdz.spec.ts` | 5 | no `useMemo` in `App` closes over a binding declared later in the component body (§3.19) |
-| `app-render.spec.ts` | 3 | `App` renders at all; the root landmark is labelled and names the current screen (§3.19) |
+| `persist.spec.ts` | 22 | typed-array round-trip, quota errors, corrupt records, rehydration |
+| `staleposition.spec.ts` | 21 | the stale-position guard, and the driver-moving-away case it used to refuse (§13.4) |
+| `errorboundary.spec.ts` | 20 | a render throw shows a recovery card rather than a blank screen |
+| `mapstyle.spec.ts` | 20 | offline style LOD: every line layer has a low-zoom floor, arterials branch on class |
+| `requests.spec.ts` | 19 | `RequestGate`: supersession, cancellation, and that an abandoned request writes nothing |
+| `shellcheck.spec.ts` | 18 | the service worker's shell predicate, and that the fetch handler consults it |
+| `import.spec.ts` | 17 | a bad file is refused and never replaces a working map |
+| `navigation.spec.ts` | 17 | off-route detection, speed-scaled thresholds, traffic verdicts |
+| `serve.spec.ts` | 16 | test-server path containment and no side effects on import |
+| `renderzoom.spec.ts` | 14 | zoom LOD re-application and reduced motion |
+| `reroute-backoff.spec.ts` | 14 | backoff growth to its cap |
+| `attribution.spec.ts` | 13 | the ODbL credit is present, well-formed, and not re-suppressed |
+| `mergeguard.spec.ts` | 13 | merge memory guard: three outcomes, the boundary at ratio 1, scaling with region count |
+| `reroute-failure.spec.ts` | 13 | a failed reroute leaves the route and its guidance alone |
+| `pbf.spec.ts` | 11 | PBF vs XML parser equivalence on a hand-built file and the whole fixture |
+| `theme.spec.ts` | 11 | `theme.ts` ↔ `styles.css` token-name agreement, fallbacks present, no bare literals |
+| `reroute-strict.spec.ts` | 9 | strict mode bounds the plan rather than aborting it |
+| `styletiles.spec.ts` | 9 | tile-style order-comparison guard: the actual shield filter, idempotency |
+| `basemap.spec.ts` | 6 | a basemap substitution is reported rather than silent |
+| `minheap.spec.ts` | 6 | the heap invariant, plus the broken implementation kept and asserted to fail |
+| `pbfgeo.spec.ts` | 6 | absolute coordinates against the PBF spec, via the real encoder |
+| `streamscale.spec.ts` | 6 | the streaming parse holds a small multiple of the document, not the document |
+| `tdz.spec.ts` | 5 | no `useMemo` in `App` closes over a binding declared later |
+| `app-render.spec.ts` | 4 | `App` renders; the root landmark is labelled and names the current screen |
+| `icons.spec.ts` | 4 | every maneuver kind renders distinct geometry |
 
-**Three counts in this document have now been wrong at least once, and each was wrong the
+Browser gates, measured the same way:
+
+| Suite | Checks | Command |
+|---|---|---|
+| `test/e2e.mjs` | 46 | `npm run e2e` |
+| `test/screens.mjs` | 159 (53 × 3 viewports) | `npm run screens` |
+| `tools/focus.mjs` | 15 | `npm run focus` |
+| `tools/sw-shellcheck.mjs` | 1 (offline boot after a captive portal) | `npm run swshell` |
+| `tools/reflow.mjs` | 3 failing — a diagnostic, §12.7 | `npm run reflow` |
+
+**Five counts in this document have now been wrong at least once, and each was wrong the
 same way.** The e2e count (§2). The screen figure, recorded as both "29 × 3 = 87" and "50 × 3
 = 150" in different sections of *this* file while the true value was 51 × 3 = 153 — §2 was
 right and §6 and §9.2 were stale, which is the more awkward direction, because the correct
 number was sitting in the document the whole time. And the unit-test total, which sat at 702
-through three commits that added 53 tests. A number that is written once and never
-re-derived is a claim, not a measurement, and every one of these was found by re-running the
-gate rather than by reading harder.
+through three commits that added 53 tests.
+
+The fifth, in this revision, is the one that makes the other four legible: **§2 and the
+breakdown table below carried two different totals at once** — 792 and 828 — because each
+was correct when written and only one was re-read. A number that is written once and never
+re-derived is a claim, not a measurement, and every one of these was found by re-running
+the gate rather than by reading harder.
+
+That is now mechanical rather than aspirational: the breakdown table is generated from
+`vitest --reporter=json` grouped by file, and the browser counts are counted from `PASS`
+lines of an actual run. A stale count can still be typed, but it now has to be typed
+deliberately against a table that was machine-written.
 
 ---
 
@@ -1282,62 +1337,69 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx                3832  screens, navigation state, focus + announcements,
-                               keyboard shortcuts, Home/Work places
-  textscale.ts             92  detects the platform's font scale (§12.7)
-  errors.ts                67  describeError: a message for any thrown value
+  App.tsx                3936  screens, navigation state, focus + announcements,
+                                keyboard shortcuts, request gates, Home/Work places
+  textscale.ts             84  detects the platform's font scale (§12.7)
+  shellcheck.ts            77  is this document the app? (the service worker's guard)
+  sw.ts                   264  offline shell service worker
+  errors.ts                54  describeError: a message for any thrown value
+  settings.ts             347  typed, validated, quota-safe persistence
   theme.ts                177  AAOS design tokens (colour, type, layout, shape)
-  icons.tsx               345  29 maneuver kinds + system icons, hand-drawn SVG
-  geo.ts                  272  polyline codec, haversine, formatting, snapping,
-                               + snapAlong (metres along a line) and vertexAt
-  styles.css             1362  layout, insets, responsive rules
+  icons.tsx               421  29 maneuver kinds + system icons, hand-drawn SVG
+  geo.ts                  352  polyline codec, haversine, formatting, snapping,
+                                + snapAlong (metres along a line) and vertexAt
+  styles.css             2061  layout, insets, responsive rules
 
   osm/
-    engine.worker.ts     1140  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
+    engine.worker.ts     1175  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
     pbf.ts                606  .osm.pbf protobuf reader
+    engine.ts             391  worker client, format sniff, GeoJSON mirroring
+    regions.ts            444  RegionLibrary, catalogue, bbox helpers, merge cache
     merge.ts              318  union-find merge of adjacent extracts
     mergeguard.ts         170  can a merge be afforded here? three outcomes
-    regions.ts            444  RegionLibrary, catalogue, bbox helpers, merge cache
-    engine.ts             335  worker client, format sniff, GeoJSON mirroring
     tags.ts                36  shared node-tag filter
 
   nav/
-    valhalla.ts           314  Valhalla /route client
-    providers.ts          345  provider chain, attempt trace, connectivity
+    valhalla.ts           502  Valhalla /route client, response validation
+    reroute.ts            394  reroute policy: when to act, backoff, banner
+    providers.ts          390  provider chain, attempt trace, connectivity
+    requests.ts           112  RequestGate: one live route request at a time
     engines.ts            239  engine selection, readiness, provenance
     geocode.ts            231  Nominatim client, 1 req/s throttle
-    traffic.ts            163  fastest-of-N-alternates traffic verdict
-    location.ts           212  device/browser/simulated location
+    location.ts           256  device/browser/simulated location
     offroute.ts           114  deviation detection primitives, reroute origin
-    reroute.ts            346  reroute policy: when to act, backoff, banner
     progress.ts           126  ETA policy: monotone, never zero, keep last good
     maneuver.ts            85  Valhalla maneuver codes -> icons
+    traffic.ts            163  fastest-of-N-alternates traffic verdict
+    voice.ts              125  spoken guidance, deduped per meaning
 
   map/
-    MapView.tsx           471  MapLibre view, tile/offline style switch
+    MapView.tsx           496  MapLibre view, tile/offline style switch
     style.ts              520  Google palette, tile remap, offline LOD style
 
   regions/
+    download.ts          1420  streaming downloader, resume, part-file handling
     RegionsScreen.tsx     864  manage, catalogue, cross-region route test
-    store.ts              285  RegionLibrary singleton, per-region workers
     persist.ts            650  IndexedDB caching of parsed datasets
-    download.ts          1317  streaming downloader
+    store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            828 unit tests, 38 files
-test/e2e.mjs           40 browser checks, built bundle
-test/screens.mjs        53 checks x 3 viewports (159 total)
-tools/osm2pbf.mjs        XML -> PBF encoder (builds the test fixtures;
-                            extract slicing is done by osmium on a desktop)
-tools/serve.mjs         LAN static server for on-device manual testing
-tools/diag-route.mjs    throwaway used to read a failing e2e check (§3.19)
-tools/focus.mjs         17 keyboard/focus checks in a real browser (§11)
-tools/shots.mjs         screenshot every screen + computed styles (§11)
-tools/reflow.mjs        chrome overlap at 100/175/200% text (§12.7) — a
-                            diagnostic, NOT a gate: it fails, and a gate that
-                            always fails is one people learn to ignore
+test/            904 unit tests, 41 files
+test/e2e.mjs           46 browser checks, built bundle
+test/screens.mjs       53 checks x 3 viewports (159 total)
+tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
+                             extract slicing is done by osmium on a desktop)
+tools/serve.mjs         140 LAN static server for on-device manual testing
+tools/bundle-budget.mjs 153 gzip size budget; fails on regression
+tools/reflow.mjs        343 chrome overlap at 100/175/200% text (§13.8) — a
+                             diagnostic, NOT a gate: it fails, and a gate that
+                             always fails is one people learn to ignore
+tools/focus.mjs         297 17 keyboard/focus checks in a real browser (§11)
+tools/shots.mjs         195 screenshot every screen + computed styles (§11)
+tools/sw-shellcheck.mjs  99 offline boot after a captive portal (§13.3) — a gate
+tools/diag-route.mjs     55 throwaway used to read a failing e2e check (§3.19)
 ```
 
-`App.tsx` at 2873 lines is the largest file in the project and is now the main obstacle to
+`App.tsx` at 3936 lines is the largest file in the project and is now the main obstacle to
 working on it: the guidance model, the routing orchestration, the reroute effect and every
 screen live in one component, so a change to any of them risks all of them, and the failure
 mode is a render-time throw that only a browser suite can see (§3.19). Splitting the
@@ -1376,15 +1438,21 @@ Ordered by how much they matter.
    "No offline map loaded".
 5. **Reroute is wired but its failure path is thin.** The app now reroutes on its
    own (§3.11), and the browser suite drives the full off-route flow. Not yet
-   exercised: a reroute that fails *while offline* (the local engine cannot reach
-   the pair), or two consecutive failures driving the backoff to its cap on device.
+   exercised: two consecutive failures driving the backoff to its cap *in the
+   browser*, with the request sequencing of §13.6 also in play. The policy is
+   unit-tested to its cap (`reroute-backoff.spec.ts`) and the sequence is
+   unit-tested; the two together have not been driven end to end.
 6. **Offline turn-by-turn infers turns** from bearing changes. Real instructions
    need Valhalla. Measured against Valhalla on one 4 km stretch it missed three of
    seven real maneuvers, invented one and reversed one direction — so the app now
    *labels* inferred guidance as inferred (§10.5). The inference itself is still
    wrong often enough that it should not be relied on for navigation.
-7. **zstd PBF blobs are rejected by name.** Geofabrik still ships zlib, so this
-   is future-proofing only.
+7. **zstd PBF blobs are rejected by name.** Geofabrik still ships zlib, so this is
+   future-proofing only. Worth recording why it is *not* fixed: no platform
+   `DecompressionStream` format decodes zstd, and a hand-written decoder is a
+   large, security-sensitive dependency to add for a format nobody publishes yet.
+   The honest form is the current one — name it and say so — rather than a
+   plausible-looking partial implementation.
 8. **Emulator cutout band.** A black band remains where the emulator simulates a
    display cutout. Believed cosmetic and device-specific; not confirmed.
 9. **Optional: NDK cross-compile Valhalla** to replace the local engine with real
@@ -1397,47 +1465,19 @@ Ordered by how much they matter.
     says so, and none of them is in the wrong place — but a driver looking at this
     sees very little map. The first thing a designer would cut, and the one change
     that should not be made without one.
-11. **A tile-host failure substitutes the map style silently.** If the remote style
-    cannot be fetched the offline style is used instead, which is the correct
-    degradation, but nothing on screen says the basemap changed source. MapLibre
-    also logs its own validation exceptions for the offline style. Harmless to the
-    user, noisy in a logcat.
-12. **`RoadGraph.regionOf` is persisted for every region** despite only being
-    meaningful for merged graphs (§3.5.2). Reachable now that the app can build a
-    merged graph, but the bytes are still wasted on single-region entries.
-
-Added by the engine audit (§12). Each is written up in §12.6; they are listed here
-because a gap that lives only in the section that found it is a gap that gets
-forgotten.
-
-13. **The platform's font-size setting does nothing, and the navigation screen
+11. **The platform's font-size setting does nothing, and the navigation screen
     cannot cope when the text is large anyway.** One defect, two causes — see
-    §12.7. The setting reaches a WebView by scaling the root font size, and every
-    token here emits an absolute `px`. At 200% text, measured:
-    `tools/reflow.mjs` finds the banner stack and the off-route notice
-    intersecting the bottom bar and seven chrome labels clipped. **The
-    instruction — the only thing on that screen — is unreadable.** Half the layout
-    fix ships; the control column's does not, because writing it made that column
-    worse. The `rem` conversion is the real fix.
-14. **The reroute has no cancellation, and `doRoute` has no request sequencing.**
-    Pressing Exit mid-reroute lets the abandoned response install a route and
-    writes its outcome onto freshly reset state. Two overlapping route requests
-    can show destination A's line under destination B's label, and the first
-    `finally` clears the spinner while the second is still running.
-15. **A poisoned `.part` file is permanent, and an out-of-memory base64 decode
-    deletes the user's partial download.** `readBinary` returns `null` on failure
-    and `resumeFrom` reads that as "no partial file", so an OOM on a 620 MB
-    province silently restarts a transfer that had already transferred most of it.
-16. **A truncated response makes the ETA read "NaN hr NaN min"** and the off-route
-    tracker see `dist: Infinity`, which is a permanent reroute loop.
-    `decodePolyline` manufactures `[NaN, NaN]` from a cut polyline.
-17. **The service worker can cache a captive portal's login page as the app
-    shell**, after which the app never boots offline again. Strictly worse than
-    the `ERR_INTERNET_DISCONNECTED` page §10 was written to fix, and the same
-    class of defect — an unhandled failure state.
-18. **The stale-position guard refuses to reroute a driver moving *away* from the
-    destination** — which is what missing an exit looks like. The banner says
-    "waiting for a position update" while positions arrive perfectly well.
+    §12.7 and §13.5. Detection ships; the banner-stack lower bound ships and is
+    re-measured; the layout that responds to it does not. **This is the largest
+    single piece of work left in the app**, and the `rem` conversion is the fix.
+12. **`RoadGraph.regionOf` is a merged-graph-only field that the persistence
+    layer still knows about.** Recorded here because the previous revision
+    claimed it "is persisted for every region … the bytes are still wasted on
+    single-region entries". **That was wrong, and it is corrected in §13.4**: the
+    parser never sets the field, `mergeRegions` is the only thing that does, and a
+    merged graph is never written to storage. There are no bytes to waste. The
+    remaining observation is cosmetic — the serialiser has a branch that is
+    currently unreachable.
 
 ### Closed in the §3.17–3.19 pass
 
@@ -1524,14 +1564,17 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 828 unit tests
-npm run e2e          # 40 browser checks against the built bundle
+npm test             # 904 unit tests
+npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
 npm run sync         # build, clear android assets, cap sync
 npm run apk          # sync + gradlew assembleDebug
 npm run typecheck
 npm run screens      # screen coverage at 3 viewports
+npm run focus        # 15 keyboard and focus checks in a real browser
+npm run swshell      # offline boot after a captive portal (a gate)
+npm run reflow       # large-text reflow — a DIAGNOSTIC, it fails (§13.9)
 npm run serve        # LAN server for on-device testing (see below)
 ```
 
@@ -1609,6 +1652,12 @@ than by planning, and those found more than the plan did.
 | 11 | ETA readout: monotone, and `0 m` means arrived | req #19, §7 gap 12 | **Done** (§3.17) |
 | 12 | Wire cross-region merging, behind a memory guard | req #10, §7 gap 1 | **Done** (§3.18) |
 | 13 | *Added by the crash of block 11:* gates for render-time failures | — | **Done** (§3.19) |
+| 14 | Every boundary: network, disk, service worker, request sequencing, a GPS fix | req #19, §7 gaps 11–18 | **Seven closed; the layout half of gap 11 left open, and not attempted again** (§13) |
+
+Block 14 was also not planned. It came from a single question applied to every
+place this app meets something it does not control — *what does this do when the
+thing on the other side goes wrong?* — and three of its six defects turned out to
+be corrections to claims this document itself had been carrying (§13.4).
 
 Blocks 8–10 were not planned. They came from asking what was still broken rather
 than what was still missing, and they found the single most consequential bug in
@@ -1943,9 +1992,10 @@ first frame, and the entry chunk is parsed on a phone's main thread before
 anything is interactive.
 
 > These are the numbers as of §10. Two further passes added work and, in the
-> engine audit, took the total to **828 across 38 files** — see §11 and §12. The
-> figures above are left as written because §10.4 is a record of what that pass
-> changed, and editing them would make it a record of something else.
+> engine audit, took the total to **828 across 38 files**, and the boundary pass to
+> **904 across 41** — see §11, §12 and §13. The figures above are left as written
+> because §10.4 is a record of what *that* pass changed, and editing them would
+> make it a record of something else. §2 carries the current figures, measured.
 
 ### 10.5 Everything the audits changed, and everything they left
 
@@ -2013,16 +2063,18 @@ role; the steps screen told a user who had imported a map to import a map.
    reversed one, and the step *count* varied with polyline tessellation density
    rather than with the road. The steps screen labels inferred guidance as
    inferred; the inference itself is unchanged. Needs real maneuver data — §7 gap 6.
-2. **A tile-host failure substitutes the style silently** (§7 gap 11).
+2. ~~**A tile-host failure substitutes the style silently**~~ — **closed** in §13.11.
+   The map now reports the style it adopted and the layers panel names the difference
+   between what was asked for and what is drawn.
 3. **Chrome covers ~98% of the viewport** at phone portrait (§7 gap 10).
 4. **Nothing has run on physical hardware** (§7 gap 1). No further work here
    closes it.
 
 **Closed since this section was written.** The two entries this list used to carry at
 the top — the ETA reading `0 m` while route remained, and cross-region routing being
-wrong — are both fixed, in §3.17 and §3.18. They were left in place in the list above
-only long enough to be renumbered against the new §7; the substance is in §7's
-"Closed in the §3.17–3.19 pass" table.
+wrong — are both fixed, in §3.17 and §3.18, and the tile-host silence in §13.11. They
+were left in place in the list above only long enough to be renumbered against the new
+§7; the substance is in §7's closed tables and in §13.
 
 #### Two things a second opinion would help with
 
@@ -2464,32 +2516,44 @@ Recorded so they are not lost, with the same reasoning §11.9 uses: these are re
 they were found, and finishing them properly needs more than the time this pass
 had.
 
+**Five of the seven were closed by the boundary pass (§13), and one of them was
+recorded here with the wrong mechanism** — see the note under each. The list is left
+as written because it is a record of what this pass found, and §13.4 records what
+turned out to be true.
+
 1. **`doRoute` has no request sequencing.** Two overlapping route requests both
    write `route`, `provenance` and `fitNonce`, so the preview can show
    destination A's line under destination B's label, and the first `finally`
    clears `routing` while the second request is still outstanding. The
    `trafficProbe` sequence-number pattern already exists in the same file for
-   exactly this.
+   exactly this. → **closed** (§13.6).
 2. **The reroute request has no cancellation.** Pressing Exit mid-reroute lets the
    abandoned response install a route, and its `finally` writes `finishReroute`
    onto freshly reset state — resurrecting `status: 'failed'` for a trip that no
-   longer exists.
+   longer exists. → **closed** (§13.6).
 3. **Two concurrent downloads clobber each other's `AbortController`,** so the
    first becomes uncancellable and the second's progress row is overwritten.
+   → **closed** (§13.10).
 4. **A `.part` file poisoned by a `not-osm` rejection is never cleaned up,** so
    every retry resumes from bad bytes. And `readBinary` returns `null` on an
    out-of-memory base64 decode, which `resumeFrom` reads as "no partial file" and
-   therefore **deletes the user's partial download**.
+   therefore **deletes the user's partial download.** → **both closed** (§13.4).
 5. **`decodePolyline` manufactures `[NaN, NaN]`** from a truncated response, which
    becomes `"NaN hr NaN min"` on the ETA bar and `dist: Infinity` in the off-route
-   tracker — a permanent reroute loop.
+   tracker — a permanent reroute loop. → **closed, and the stated mechanism was
+   wrong.** A truncated polyline cannot produce a non-finite coordinate: `NaN << s`
+   is `0`, so the truncated read contributes a zero delta and appends a *finite*
+   point 30.9 km away. The `NaN hr NaN min` readout was real and came from a
+   summary with no `time`. Both are fixed (§13.1, §13.2).
 6. **The service worker overwrites the precached shell with any 200,** so a
    captive portal's login page becomes the cached `index.html` and the app can
    never boot offline again. It is worse than the `ERR_INTERNET_DISCONNECTED` page
-   §10 was written to fix.
+   §10 was written to fix. → **closed**, and it was the most consequential defect
+   found across any pass (§13.3).
 7. **The stale-position guard refuses to reroute a driver who is moving *away*
    from the destination**, which is exactly what missing an exit looks like. The
    banner says "waiting for a position update" while positions arrive fine.
+   → **closed** (§13.5).
 
 ---
 
@@ -2549,6 +2613,352 @@ failed once while the whole suite was green around it. 120s is above the probe's
 worst case (~20 entries, 4 at a time, 10s deadline each ≈ 50s), so the cause is
 probably the probe competing with the map's tile requests on a cold browser.
 Raising the number until it stopped happening would have hidden the cause.
+
+---
+
+## 13. The boundary pass
+
+§12 audited the engine. This one went after every place where this app meets
+something it does not control — a network, a disk, a service worker, two
+overlapping requests, a GPS fix — and asked one question of each: *what does this
+do when the thing on the other side goes wrong?*
+
+Seven defects, plus two smaller ones. Three are corrections to claims this
+document has been carrying, which is the more interesting half: two were wrong
+about a mechanism, and one was wrong about code that does not exist in the state
+it was described.
+
+---
+
+### 13.1 A truncated polyline decoded to a plausible, wrong destination
+
+`§7 gap 16` and `§12.6` item 5 both recorded: *"A truncated response makes the ETA
+read `NaN hr NaN min` … `decodePolyline` manufactures `[NaN, NaN]`"*.
+
+**The symptom is real. The mechanism is not.** Measured, before changing anything:
+
+```
+'?'.charCodeAt(5)   -> NaN     // past the end of the string
+NaN << 3            -> 0       // the shift coerces to 0
+NaN >= 0x1f         -> false   // so the varint loop stops as if it had finished
+```
+
+The truncated read therefore contributed a delta of **zero** and appended a
+*finite* point. An exhaustive sweep of all 224³ three-character strings over the
+plausible byte range produced **zero** non-finite coordinates. A four-point leg
+trimmed by one character decoded to four points whose last was **30.9 km** from
+the true endpoint.
+
+That is the worse of the two failures. `NaN` is visibly wrong; a plausible wrong
+endpoint draws, reports a distance, and arrives somewhere.
+
+`decodePolyline` now refuses: a truncated stream, a character outside the
+encoding's ASCII 63–126 range, an implausibly long value, and a shape that
+decodes off the planet (latitude beyond ±90, longitude beyond ±180). Those last
+bounds are facts about the world rather than about the format, and the test
+asserts that ±180/±90 and an antimeridian crossing still decode — a check that
+only accepted "somewhere sensible" would one day stop precaching the app's shell
+with no visible failure.
+
+### 13.2 `NaN hr NaN min` was a missing number, not a corrupt one
+
+The symptom the polyline was blamed for has its own cause, and it is a different
+kind of failure: **absent** rather than malformed. A response whose
+`trip.summary` carried a `length` and no `time` left `summary.time` as
+`undefined`, and because every comparison against `undefined` is false the value
+fell through the formatter's branches and printed itself. Measured:
+
+```
+formatDuration(undefined)  -> "NaN hr NaN min"
+formatDuration(NaN)        -> "NaN hr NaN min"
+formatDistance(NaN)        -> "NaN km"
+```
+
+Fixed at three levels, because three levels were each independently sufficient to
+produce it:
+
+- `formatDuration` / `formatDistance` refuse a non-finite value and print `—`.
+  A formatter is the last place that can say "this is not a duration".
+- `parseTrip` validates the summary it is given: a response with no summary is
+  refused with a sentence naming the cause, because `rawSummary.length` was a
+  `TypeError` reaching the driver as an internal message.
+- A summary with a length and no `time` keeps the time **missing**, as `NaN`,
+  deliberately rather than `0`. `0` would be a claim — `<1 min` for a two-hour
+  drive. `NaN` is inert in every consumer, because `NaN || fallback` is the
+  fallback, and the geometry is good so the trip is still worth showing.
+
+`maneuvers` is now defaulted to `[]` rather than passed through as `undefined`,
+for the same reason: the guidance model walks it as an array.
+
+### 13.3 A captive portal could take the app's offline shell away, permanently
+
+`§12.6` item 6, and the most consequential defect in this pass.
+
+The service worker's fetch handler cached **any** 200 over `./index.html`. A
+captive portal answers a navigation with exactly that: HTTP 200, `text/html`, a
+login form. Once that page was in the cache it *was* the app's shell — every
+later offline load served it, and there was nothing the user could do about it
+from inside the app, because the app never opened. Strictly worse than the
+`ERR_INTERNET_DISCONNECTED` page the worker exists to prevent, and the same class
+of defect: a network state nobody handled.
+
+`src/shellcheck.ts` decides, from a redirect check, the status, the content type
+and two independent marks in the body (`<div id="root">` **and** a module
+script — either alone is what any modern page has). It fails closed, because the
+cost of a false positive is permanent and the cost of a false negative is one
+online load that is not precached.
+
+**Verified in a real browser, before and after**, because this one cannot be seen
+by reading code: `npm run swshell` stands up a server that answers every
+navigation with a portal page, loads the app so the real shell is precached, puts
+the portal in front of it, then turns the network off.
+
+```
+before:  OFFLINE launcher tiles: 0    looks like a portal login page: true
+after:   OFFLINE launcher tiles: 5    looks like a portal login page: false
+```
+
+The response is still **returned** to the page. Refusing to cache it is not the
+same as refusing to serve it, and someone in a hotel lobby should get whatever
+the network gave them.
+
+One harness detail worth keeping: `if (isAppShell(fresh))` without the `await`
+compiles, runs, and caches every 200 — a `Promise` is always truthy. That is the
+original defect restored by deleting one character, so the test asserts against
+that spelling as well as the right one.
+
+### 13.4 Two more claims this document was carrying, and a third
+
+**A poisoned part file was permanent — and the poison was detectable at the time.**
+`§12.6` item 4 was half right. A `not-osm` rejection can land *after* bytes are
+already on disk: the sniff only decides once 16 bytes have arrived, so the first
+chunk of a short response is written to the part file before the second one
+settles the verdict. The download then fails correctly and leaves a part file
+holding the head of somebody's HTML error page, beside a `.part.json` that made
+it look resumable.
+
+Every later attempt resumed from those bytes and failed the same way, forever,
+reporting a format problem that named the wrong cause. Two fixes, and the second
+is the one that would have been missed by reading the code: the rejected payload
+now deletes its own prefix, **and** `resumeFrom` sniffs the persisted prefix
+rather than trusting it. The prefix *is* the head of the whole file by
+construction — `PartSink` only ever appends to a path the previous attempt
+cleared — so the sniff that could not be done at the time is available on the
+next attempt.
+
+**An out-of-memory read was destroying the user's download.** `readBinary` returns
+`null` on any failure, and `resumeFrom` read that as "no partial file" and
+deleted it. On a 620 MB province an OOM in the base64 decode therefore threw away
+a transfer that had already transferred most of it, silently. The file exists —
+its size was taken by `fileSize` moments earlier — so a `null` is a statement
+about *this attempt*, not about the bytes on disk. Three ways this can now refuse
+and they are deliberately different: no validator (the bytes cannot be resumed
+safely, so they go), not OSM (worthless, so they go), unreadable (nothing is
+deleted; the next attempt starts from zero and the stale part is cleared when it
+does).
+
+**`RoadGraph.regionOf` was never persisted for a single-region entry.** Gap 12 in
+the previous revision said it was "persisted for every region … the bytes are
+still wasted on single-region entries". There are no bytes: `regionOf` is only
+ever set by `mergeRegions`, the parser never assigns it, and a merged graph lives
+in the library's cache and is never written to storage. Checked by grepping every
+assignment rather than by reading the serialiser. The gap is restated in §7 as the
+cosmetic thing it actually is.
+
+### 13.5 The stale-position guard was refusing the driver it existed to help
+
+`§7 gap 18`: *"The stale-position guard refuses to reroute a driver moving away
+from the destination — which is what missing an exit looks like. The banner says
+'waiting for a position update' while positions arrive perfectly well."*
+
+Two mistakes, both made by the same reasoning and both only findable by measuring.
+
+**The first test was the wrong axis.** `madeProgress` required the candidate start
+to be measurably *nearer the destination* than the last one. That closed the
+frozen-fix loop and it silenced the case the banner exists to speak to: a driver
+who misses an exit is genuinely off-route and their projected start moves *away*
+from the destination as they continue, which is precisely the evidence their
+position is live. Half of all off-route corrections involve moving away from the
+destination, so there is no direction that is right for everyone.
+
+**The replacement test was also the wrong axis, once.** The obvious correction —
+"has the position moved at all" — was first applied to the *projected* start,
+reasoning that the projection is what a reroute would be built from. A projection
+is clamped to the line's extent. Measured against the fixture's 3-vertex route, a
+driver receding perpendicular from it projects to the **same western endpoint**,
+from 111 m of deviation to 594 m:
+
+```
+step  fixDev  origin(=projection)  movedSince
+   0    111m  [-114.06500,51.04500]        -
+   1    167m  [-114.06600,51.04500]   69.9m
+   ...
+   5    389m  [-114.07000,51.04500]   69.9m
+   6    450m  [-114.07000,51.04500]    0.0m   <- 60 m driven, "nothing changed"
+   8    594m  [-114.07000,51.04500]    0.0m
+```
+
+So the baseline is now the **raw fix** (`RerouteState.lastFix`), which has no
+ceiling. A driver stationary in a car park jitters a metre or two and is caught by
+the 10 m floor; a driver 600 m from where they were is not.
+
+The new tests cover both directions, and — the part that matters — a fourth test
+that drives the *frozen* case across six settle windows and asserts exactly one
+request, so it is impossible to satisfy the new tests by deleting the guard.
+
+### 13.6 Two overlapping route requests, and a request that outlived its trip
+
+`§12.6` items 1 and 2, and the clearest instance of a pattern this project has hit
+five times: two places independently writing the same state, neither checking
+whether its answer still mattered.
+
+`resolveRoute` can be outstanding for twenty seconds. Two searches in quick
+succession both wrote `route`, `provenance` and `fitNonce`, so a late answer
+installed itself over a newer one — destination A's geometry under destination B's
+label — and the first `finally` cleared the spinner while the second request was
+still running.
+
+The reroute case is worse. `resetReroute()` runs whenever navigation ends, so
+pressing Exit mid-request *did* clear the state, and then the abandoned response
+arrived, installed a route on the preview screen, and wrote
+`finishReroute(..., ok: false)` over the reset — resurrecting `status: 'failed'`
+and its banner for a trip that no longer existed.
+
+`nav/requests.ts` is a `RequestGate`: a token per request, `assertLive(token)`
+which **throws** rather than returning a boolean, and a `SupersededError` the
+`catch` recognises so an abandoned request reports nothing. Throwing is the point:
+a call site that forgets the check produces the original bug a minute later
+instead of a compile error.
+
+It is a counter and not an `AbortController`, which is the opposite of what a
+reader will expect, and the reason is worth stating: `routeOnGraph` is a
+synchronous A\* walk that no abort can interrupt. Correctness comes from
+discarding the stale answer, not from stopping the work. `resolveRoute` now also
+threads a signal through to `routeOnValhalla`, purely so a twenty-second socket
+the driver has abandoned stops occupying the radio.
+
+### 13.7 The gate that was reporting a network fault as a UI defect
+
+Worth recording because it is the tenth time in this project, and the fastest.
+
+`test/e2e.mjs`'s "every catalogue row has a download control" counted rows whose
+label was `Download`, `Unavailable` or `Downloading`. A row still reading
+`Checking…` was therefore counted as having no control at all — so on a slow link
+the suite reported a UI defect it had just timed out on. The same commit passed and
+failed across runs with nothing changed but how long Geofabrik took to answer
+sixteen HEAD requests. Measured here: **14.6 s** wall clock for sixteen probes
+four at a time, with four of them burning their full 10 s deadline, and the
+catalogue is CORS-blocked in a browser (Geofabrik sends no
+`Access-Control-Allow-Origin` on either the 307 or the 200 — Valhalla sends `*`),
+so on this machine every row settles as `Unavailable` in about half a second *or*
+takes ten seconds, with nothing in between.
+
+The check is now structural — one `.pill-btn` in each row's `.region-actions`
+cluster, which is true or false regardless of the network — and the probe settling
+is a separate claim with its own budget. Three consecutive runs green.
+
+### 13.8 The reflow probe was measuring a state no device is ever in
+
+`§12.7` recorded the banner stack's lower bound as "measured working", quoting
+`tools/reflow.mjs`. The probe did not measure it in the state that ships.
+
+`reflow.mjs` waited for the **root font size** to exceed the threshold rather than
+for the `data-textsize` attribute. The probe itself writes the root size, so that
+condition was satisfied the instant it was checked, and the reflow was measured
+against `data-textsize="normal"` — which `textscale.ts` correctly resets within its
+2 s poll, and which no device with a large font setting is ever in. The
+`[data-textsize="large"] .banner-stack` rule was therefore *never in effect* while
+the probe reported `overflow-y: visible`.
+
+With the probe waiting for the attribute, the real numbers are: **100%** clean;
+**175%** the stack bounded and scrolling, no collision, seven labels still clipped;
+**200%** no collision, the off-route notice scrolled 20 px out of view, the same
+seven labels clipped.
+
+A second probe defect hid behind the first: pieces were measured with
+`getBoundingClientRect`, which reports the *layout* box. For a child of a scrolling
+container that extends past the clip, so the off-route notice was reported as
+overlapping the bottom bar when it was in fact clipped by `.banner-stack`. The
+reported "banner stack x bottom bar (560x20px)" collision was an artefact of the
+same rule. Measuring the *visible* rect — intersected with every clipping ancestor
+— separates the two claims, and "scrolled out of reach" is now its own check rather
+than being folded into the clipping count.
+
+### 13.9 What this pass tried and removed
+
+A column layout for the three pieces of navigation chrome, scoped to
+`[data-textsize="large"]`, making the two bars' heights intrinsic so the banner
+stack takes what is left. It is the right shape and it is what §12.7 asks for.
+
+Measured: it removed one of the two reported collisions and fixed **none** of the
+seven clipped labels — which live *inside* the two bars, so bounding the stack can
+never reach them. Worse, the one collision it removed turned out to be the probe
+artefact of §13.8, so its real effect was nil.
+
+Reverted, and the measurements recorded in `styles.css` beside the rule that ships.
+That is the third time this project has written a layout change down after
+measuring it to be no better, and the conclusion is now the same each time: the
+remaining work is not "add a rule", it is "stop hard-coding a height and deriving
+a layout from it". The `rem` conversion in §7 gap 11 is still the fix.
+
+### 13.10 One handle for every download
+
+`§12.6` item 3, the last of that list still open.
+
+`RegionsScreen` held a single `abortRef` for the whole screen. Two consequences,
+both invisible in a single-download run:
+
+- **The first download became uncancellable.** A second Download tap overwrote the
+  handle, so the Cancel button and the unmount cleanup both reached only the newest
+  transfer. The first kept consuming a metered connection with nothing able to stop
+  it.
+- **A superseded download could wipe the live one's progress row.** `dl` is one
+  value for the screen, and the `finally` cleared it unconditionally — so a slow
+  Alberta download finishing after a fast British Columbia one cleared *its*
+  progress mid-flight.
+
+It is now a `Map<regionId, AbortController>`. Each download owns its handle; the
+`finally` releases the row only if it still owns it (`downloads.current.get(id) ===
+ctrl`), so a superseded transfer cannot clear its replacement's row; unmount aborts
+*every* handle rather than the last one; and Cancel aborts by the row's own id, so
+the control always cancels the thing the driver can see.
+
+A second download of the same region now **replaces** the first rather than racing
+it, which is the honest behaviour for a screen with one progress row and one Cancel
+button. Two downloads of *different* regions can still run concurrently, and that is
+deliberate — downloading two provinces at once is a reasonable thing to want, and
+each now has its own row and its own cancellation.
+
+### 13.11 What this pass also closed
+
+- **A tile-host failure substituted the map style silently.** Correct
+  degradation, no sentence anywhere. `MapView` now reports the style it actually
+  adopted and the layers panel distinguishes what was *asked for* from what is
+  *drawn* — `online && basemap === 'offline'` says the tiles could not be loaded,
+  while a deliberate offline session says what it is drawing. Reported after the
+  boot's cancellation check, so an abandoned boot does not announce a source the
+  map never adopted, and through a ref so a caller that re-creates its callback
+  does not re-boot the style every render.
+- **`resolveRoute` reported a cancelled request as a routing failure.** The abort
+  surfaces as a `RoutingError` from `fetchWithTimeout`, so a cancelled online
+  request fell through to the *next* engine — asking the offline engine for a
+  route nobody wanted, and quite possibly drawing it.
+
+### Closed by the boundary pass (§13)
+
+| Was | Now |
+|---|---|
+| A truncated polyline decoded to a finite endpoint **30.9 km** from the truth | Refused, with the cause carried for the engine trace. §13.1 |
+| A summary with no `time` printed `NaN hr NaN min`; one with no summary threw a `TypeError` into the UI | Validated at three levels; a missing duration stays missing and prints `—`. §13.2 |
+| A captive portal's login page could become the app's shell **permanently** | The shell is verified before it is cached; verified in a browser, before and after. §13.3 |
+| A part file poisoned by a `not-osm` rejection made every retry fail identically, forever | The prefix is sniffed on resume, and a rejected payload deletes its own. §13.4 |
+| An OOM while reading a partial download **deleted the partial download** | Unreadable is not unusable: nothing is deleted, and the next attempt resumes. §13.4 |
+| Two overlapping route requests raced; Exit mid-reroute installed the abandoned route and resurrected `status: 'failed'` | A `RequestGate` that throws on a stale answer and reports nothing. §13.6 |
+| The stale-position guard refused to reroute a driver moving *away* from the destination | It asks whether the position moved, comparing raw fixes so a clamped projection cannot read as motionless. §13.5 |
+| A tile-host failure changed the basemap without saying so | The layers panel names the difference between requested and drawn. §13.11 |
+| An e2e check counted a slow network as a missing UI control | Structural count, with probe settling as its own claim. §13.7 |
+| The reflow probe measured `data-textsize="normal"` at 200% and clipped children as overlaps | It waits for the attribute and measures visible rects. §13.8 |
+| Two concurrent downloads shared one `AbortController`: the first was uncancellable and either could wipe the other's progress row | A handle per region, released only by its owner. §13.10 |
 
 ---
 

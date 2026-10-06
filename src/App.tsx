@@ -518,6 +518,19 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   const rerouteGate = useRef<RequestGate | null>(null);
   if (!rerouteGate.current) rerouteGate.current = new RequestGate('reroute');
 
+  /**
+   * What the basemap is actually drawing, as opposed to what was asked for.
+   *
+   * A tile-host failure substituted the offline style and said nothing, so the
+   * map kept working while the picture behind the route quietly changed source.
+   * The app's rule is that nothing implies data it does not have, and the layers
+   * panel is where someone asks what the map can show.
+   */
+  const [basemap, setBasemap] = useState<'tiles' | 'offline' | null>(null);
+  const onBasemapChange = useCallback((source: 'tiles' | 'offline') => {
+    setBasemap(source);
+  }, []);
+
   // Abandoned work on unmount, so a route request outliving the app does not
   // install itself into a component that is gone.
   useEffect(() => () => {
@@ -645,7 +658,13 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
     {
       id: 'default',
       label: 'Default',
-      detail: online ? 'Online map tiles' : 'Your offline .osm map',
+      detail: basemap === 'offline' && online
+        // `online` is the driver asking for tiles; `basemap` is what the map
+        // actually got. They diverge when the tile host cannot be reached, and the
+        // honest sentence names the difference rather than implying the basemap is
+        // what was requested.
+        ? `The map tiles could not be loaded, so this is your offline map instead`
+        : online ? 'Online map tiles' : 'Your offline .osm map',
       available: true,
     },
     {
@@ -654,7 +673,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
       detail: trafficDetail,
       available: trafficReady,
     },
-  ], [online, trafficDetail, trafficReady]);
+  ], [online, basemap, trafficDetail, trafficReady]);
 
   /** What is on the map right now, spelled out where the driver can read it. */
   const layerName = layer === 'traffic' ? 'Traffic' : 'Default';
@@ -1506,6 +1525,7 @@ const banner = rerouteNotice ?? routeError ?? null;
         maneuverPoints={maneuverPoints}
         focus={focus}
         fitNonce={fitNonce}
+        onBasemapChange={onBasemapChange}
       />
       </Suspense>
 
