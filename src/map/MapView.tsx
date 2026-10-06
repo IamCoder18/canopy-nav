@@ -68,9 +68,13 @@ export interface MapViewProps {
    * route is no longer what the app claims it is — and this app's rule is that
    * nothing implies data it does not have.
    *
-   * `reason` is non-null only when tiles were asked for and could not be
-   * fetched, which is the case worth reporting: a deliberate offline session is
-   * the expected path, not a failure.
+   * Fires on every boot with the style actually adopted, and is worth reporting
+   * only when tiles were asked for and could not be fetched: a deliberate offline
+   * session is the expected path, not a failure.
+   *
+   * This used to document a second `reason` parameter that the signature never had,
+   * so a caller writing to the documented contract would pass one and have it
+   * discarded. The single argument is what `App.tsx` receives.
    */
   onBasemapChange?: (source: 'tiles' | 'offline') => void;
 }

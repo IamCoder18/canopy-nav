@@ -74,8 +74,12 @@ function headers(): HeadersInit {
  *
  * 12 s is comfortably longer than a real request (the live endpoint answers in
  * roughly 0.6 s) and short enough that the app reports failure while the user
- * still cares. The same reasoning, and the same 20 s figure on a different
- * budget, as `VALHALLA_TIMEOUT_MS` in `valhalla.ts`.
+ * still cares.
+ *
+ * The same reasoning as `VALHALLA_TIMEOUT_MS` in `valhalla.ts`, on a **smaller**
+ * budget: routing is the request a driver waits on mid-turn, where 20 s is a long time
+ * to stare at a banner that is not moving. This used to say "the same 20 s figure",
+ * which was true when the constant was 20 s and stopped being true when it was lowered.
  */
 export const GEOCODE_TIMEOUT_MS = 12_000;
 

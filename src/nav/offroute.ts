@@ -18,7 +18,13 @@ import { haversine, snapToPolyline, type LatLng } from '../geo';
 
 /** Deviation (metres) beyond which we consider the driver off route. */
 export function offRouteThreshold(speed: number): number {
-  // 25 m when stationary, growing to ~90 m at 30 m/s (108 km/h).
+  // 25 m when stationary, +2 m per m/s, capped at 90 m.
+  //
+  // The cap is reached at **32.5 m/s (117 km/h)**, not at 30 m/s: at 108 km/h this
+  // returns 85 m. The old comment paired "30 m/s (108 km/h)" with "~90 m" and the "~"
+  // hid a 5 m gap in a number a reader would use to reason about motorway tolerance —
+  // a fix 87 m off the line at 108 km/h trips `suspect` while the prose called that
+  // comfortably on course.
   return 25 + Math.min(65, speed * 2);
 }
 

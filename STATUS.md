@@ -113,7 +113,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1006 unit tests across 52 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1017 unit tests across 53 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -127,7 +127,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1006 passing**, 52 files |
+| Unit tests | `npm test` | **1017 passing**, 53 files |
 | End-to-end | `npm run e2e` | **55 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -205,7 +205,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **52 files, 1006 tests**. The
+retyped by hand. The table is the complete set: **53 files, 1017 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -256,6 +256,7 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `astar-admissible.spec.ts` | 6 | A\*'s heuristic is admissible: the returned route is the cheapest by **time**, checked against Dijkstra on the real fixture |
 | `strict-plan.spec.ts` | 6 | `strict` constrains the plan, not the walk — and the two docstrings now agree |
 | `mapsources.spec.ts` | 6 | every source id the app writes to is one the style declares — a layer id is not a source id |
+| `threshold-prose.spec.ts` | 11 | the numbers a comment states, so a comment cannot disagree with the code quietly |
 | `minheap.spec.ts` | 6 | the heap invariant, plus the broken implementation kept and asserted to fail |
 | `pbfgeo.spec.ts` | 6 | absolute coordinates against the PBF spec, via the real encoder |
 | `streamscale.spec.ts` | 6 | the streaming parse holds a small multiple of the document, not the document |
@@ -1469,9 +1470,9 @@ src/
     engine.worker.ts     1193  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
     pbf.ts                606  .osm.pbf protobuf reader
     engine.ts             403  worker client, format sniff, GeoJSON mirroring
-    regions.ts            444  RegionLibrary, catalogue, bbox helpers, merge cache
+    regions.ts            462  RegionLibrary, catalogue, bbox helpers, merge cache
     merge.ts              318  union-find merge of adjacent extracts
-    mergeguard.ts         170  can a merge be afforded here? three outcomes
+    mergeguard.ts         177  can a merge be afforded here? three outcomes
     tags.ts                36  shared node-tag filter
 
   nav/
@@ -1483,16 +1484,16 @@ src/
     chrome.ts             117  the two bars' measured heights, as --eta-h and --nav-h
     steps.ts               66  why the turn list is empty: three causes, three answers
     engines.ts            239  engine selection, readiness, provenance
-    geocode.ts            231  Nominatim client, 1 req/s throttle
+    geocode.ts            235  Nominatim client, 1 req/s throttle
     location.ts           256  device/browser/simulated location
-    offroute.ts           114  deviation detection primitives, reroute origin
+    offroute.ts           120  deviation detection primitives, reroute origin
     progress.ts           126  ETA policy: monotone, never zero, keep last good
     maneuver.ts            85  Valhalla maneuver codes -> icons
     traffic.ts            163  fastest-of-N-alternates traffic verdict
     voice.ts              125  spoken guidance, deduped per meaning
 
   map/
-    MapView.tsx           510  MapLibre view, tile/offline style switch
+    MapView.tsx           514  MapLibre view, tile/offline style switch
     style.ts              520  Google palette, tile remap, offline LOD style
 
   regions/
@@ -1501,7 +1502,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            1006 unit tests, 52 files
+test/            1017 unit tests, 53 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1782,7 +1783,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1006 unit tests
+npm test             # 1017 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -2217,7 +2218,7 @@ anything is interactive.
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files** (the figures as of that
 > revision), and the boundary pass to
-> **1006 across 52** — see §11, §12 and §13. The figures above are left as written
+> **1017 across 53** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
@@ -4226,6 +4227,9 @@ From the same audit, and each corrected:
   behaviour change and the wrong outcome for a bug fix, which is why this is recorded
   rather than changed: **which one is the defect — the comment or the code — is a
   product decision**, and it changes which regions a loaded pair can route between.
+
+  The comment now describes what the code does, and says plainly that the criterion is
+  available and unapplied, so the decision is visible in the file rather than only here.
 
 - **`offRouteThreshold`'s "growing to ~90 m at 30 m/s (108 km/h)".** The code returns
   `25 + Math.min(65, speed * 2)`, which at 30 m/s is **85 m**. The 90 m ceiling is only

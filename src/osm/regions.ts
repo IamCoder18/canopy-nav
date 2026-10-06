@@ -296,7 +296,25 @@ export class RegionLibrary {
       }
     }
 
-    // Fall back to whichever single region covers the most of the span.
+    // Single-region fallback: whichever one contains the ORIGIN, `a` first.
+    //
+    // This used to say "whichever single region covers the most of the span", and no
+    // such computation exists here or anywhere else — the two lines below are an
+    // unconditional origin-first preference. `bboxOverlapFrac` is exported from this
+    // same file, unit-tested, and **called by nothing in `src/`**, so the criterion the
+    // comment described was available the whole time and unused.
+    //
+    // The gap between comment and code is real: a journey 1 km inside one province's
+    // edge and then 2 500 km into its neighbour's returns *this* province, and `route`
+    // then asks its graph for a destination it has never heard of.
+    //
+    // **Which one is the defect is a product decision, so it is not resolved here.**
+    // `test/regions.spec.ts` pins the origin-first behaviour deliberately — a test named
+    // "falls back to a single plan when the two regions are not neighbours" asserts the
+    // origin's region — so implementing the comment would fail the suite. That is the
+    // correct outcome for a behaviour change and the wrong one for a bug fix, and
+    // changing it would alter which of two loaded regions a journey is planned against.
+    // Recorded in STATUS.md §14.15.
     if (a) return { kind: 'single', region: a, from, to };
     if (b) return { kind: 'single', region: b, from, to };
     throw new Error('No downloaded region covers this route. Download the relevant province or state.');

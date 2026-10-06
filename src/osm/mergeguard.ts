@@ -5,8 +5,15 @@
  * for a route that crosses a regional boundary. It is also the most expensive
  * thing this app does: `mergeRegions` holds every source graph, a full
  * JavaScript `Map`/`Array` copy of the nodes and edges, *and* the typed-array
- * result at the same time, so peak is on the order of two to three times one
- * graph rather than one. For two provinces that is not a question of speed.
+ * result at the same time. That is **7.5× the source bytes**, not the "two to three
+ * times" this paragraph used to claim — `TRANSIENT_MULTIPLIER` (2.5, the boxed copy) and
+ * `PEAK_MULTIPLIER` (3, sources plus the result) are composed *multiplicatively*, so the
+ * sources and the boxed copy are each counted once on top of the other's basis.
+ *
+ * The over-count is deliberate and conservative — it refuses a merge that would fit,
+ * rather than starting one that would not — and `test/mergeguard.spec.ts` pins the 7.5
+ * directly. So the number the driver is shown is 2.5× the requirement the prose used to
+ * justify, and the prose is what was wrong.
  *
  * So the decision is made from static size, before any of it runs, and it has
  * three outcomes rather than two:
