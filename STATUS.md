@@ -302,6 +302,14 @@ the one configuration a value check cannot see and a *disagreement* check catche
 immediately. Nothing about that failure was subtle; it was that no check existed for
 the shape of error that had just occurred twice already.
 
+Two further claims have since turned out to be wrong about *code* rather than about a
+number, and both are recorded where they were stated: §14.10's note that a serialiser
+branch was "currently unreachable" when a test covers it, and §14.9's premise about how
+Android delivers a font setting, which Chromium's own documentation contradicts. The
+shape is the same and it is the shape §13.16 is about: **a claim, written once, about
+something nobody re-reads.** What is new is that two of the six were about code, which
+no amount of testing the code would have caught.
+
 Writing that new check produced two more instances of the fault it exists to catch,
 both inside twenty minutes. It first excluded historical figures by paragraph, and a
 prose note three rows above the §2 table — about a count being wrong *in the previous
@@ -1501,7 +1509,7 @@ tools/textscale-check.mjs 269 does the app notice a text scale that leaves
 tools/focus.mjs         297 15 keyboard/focus checks in a real browser (§11)
 tools/shots.mjs         195 screenshot every screen + computed styles (§11)
 tools/sw-shellcheck.mjs  99 offline boot after a captive portal (§13.3) — a gate
-tools/status-audit.mjs   305 STATUS.md checked against the files it describes
+tools/status-audit.mjs   310 STATUS.md checked against the files it describes
 tools/diag-route.mjs     55 throwaway used to read a failing e2e check (§3.19)
 ```
 
@@ -1648,14 +1656,29 @@ or "gap 18" are to the *old* numbering and say so; the current numbers are 1–1
 
     What remains unverifiable is the confirmation this cannot get: §7 gap 1, that none
     of it has been seen on a physical device.
-12. **`RoadGraph.regionOf` is a merged-graph-only field that the persistence
-    layer still knows about.** Recorded here because the previous revision
-    claimed it "is persisted for every region … the bytes are still wasted on
-    single-region entries". **That was wrong, and it is corrected in §13.4**: the
-    parser never sets the field, `mergeRegions` is the only thing that does, and a
-    merged graph is never written to storage. There are no bytes to waste. The
-    remaining observation is cosmetic — the serialiser has a branch that is
-    currently unreachable.
+12. ~~**`RoadGraph.regionOf` is a merged-graph-only field that the persistence
+    layer still knows about.**~~ **Closed as a misdescription**, and it took two
+    corrections to get to the bottom of it.
+
+    The original claim was that it "is persisted for every region … the bytes are
+    still wasted on single-region entries". **False** — §13.4 established the parser
+    never sets the field, so there are no bytes to waste.
+
+    What replaced it was that "the serialiser has a branch that is currently
+    unreachable". **Also false.** The branch is reachable through the public API and
+    is covered: `test/persist.spec.ts` asserts *"restores a merged graph including the
+    optional regionOf array"*, round-tripping a real `mergeRegions` output through
+    write and read and comparing the array. It is live code with a test over it.
+
+    What is true, and all there is: **no app flow ever persists a merged graph**, so
+    that path is defensive rather than exercised in the running app. That is a
+    statement about the caller, not about the serialiser — and the alternative,
+    deleting the field, would silently remove the only thing that would let a merged
+    graph round-trip if §3.18's merge cache were ever made persistent.
+
+    Two corrections to one two-sentence note, in four passes. It is the cheapest item
+    in this document and it took longest to describe accurately, which is the
+    argument for measuring a claim before writing it down rather than after.
 
 ### Closed in the §3.17–3.19 pass
 

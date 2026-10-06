@@ -97,9 +97,14 @@ one(fileTotals, 'current spec-file totals');
 /* ------------------------------ §7 gap refs ------------------------------ */
 
 const gapsSection = doc.slice(doc.indexOf('## 7. Known gaps'), doc.indexOf('### Closed in the §3.17'));
-// Items 4, 11 and 12 wrap over several lines, so the title is matched loosely: a
-// numbered list item that starts bold is a gap.
-const maxGap = Math.max(...[...gapsSection.matchAll(/^(\d+)\.\s+\*\*/gm)].map((m) => Number(m[1])));
+// Items wrap over several lines, so a title is matched loosely: a numbered list item
+// that starts bold is a gap. `~~**` is allowed too, because a gap that has been closed
+// is struck through in place rather than deleted, and without this the list read as
+// ending two entries early -- which is what happened when §7 gaps 11 and 12 were
+// closed, and the gate reported the document's own cross-references as dangling.
+const maxGap = Math.max(
+  ...[...gapsSection.matchAll(/^(\d+)\.\s+(?:~~)?\*\*/gm)].map((m) => Number(m[1])),
+);
 for (const m of doc.matchAll(/§7 gaps? (\d+)(?:[–-](\d+))?/g)) {
   // §7 renumbered from 18 entries to 12, and the file deliberately refers back to
   // the old numbers where it records history. Only a *bare* high number is a bug.
