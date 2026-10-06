@@ -25,6 +25,39 @@ const BASE = `http://localhost:${PORT}`;
 const SHOTS = join(__dirname, '..', 'e2e-screenshots');
 mkdirSync(SHOTS, { recursive: true });
 
+/**
+ * Move a device, so the app sees the fix *stream* a real driver produces.
+ *
+ * Two measured facts make this necessary, and neither is obvious from the API.
+ *
+ * Chromium fires `watchPosition` exactly once per `setGeolocation` call: 0 fixes
+ * before the change, 1 after one call, 9 after eight. The off-route tracker needs
+ * two fixes more than `CONFIRM_WINDOW_MS` apart before it leaves `suspect`, so a
+ * single call leaves the driver permanently suspect and no reroute is attempted.
+ *
+ * And the fix must *change*: §13.5's stale-position guard compares raw fixes and
+ * holds a stationary driver at "waiting for a position update" indefinitely — which
+ * is correct, since a car stopped at a red light should not be told it is off route
+ * forever — so a device parked at one position never reaches `beginReroute` either.
+ *
+ * Each tick therefore walks a few metres, which is roughly 4 m/s.
+ */
+async function drive(ctx, at, each, ticks = 34) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let prev = { latitude: at.latitude, longitude: at.longitude, accuracy: 8 };
+  for (let i = 0; i < ticks; i++) {
+    await ctx.setGeolocation(prev);
+    await sleep(500);
+    await each?.();
+    prev = {
+      latitude: at.latitude + (i + 1) * 0.00004,
+      longitude: at.longitude + (i + 1) * 0.00005,
+      accuracy: 8,
+    };
+  }
+  await ctx.setGeolocation(prev);
+}
+
 /** Which fixture to import; `.pbf` is the format Geofabrik actually publishes. */
 const FIXTURE = process.env.E2E_FIXTURE ?? 'fixture.osm';
 
@@ -283,6 +316,91 @@ try {
         check('the notice clears once back on route',
           !/finding a new way|rejoining the route/i.test(after),
           after.match(/[^\n]*(finding a new way|rejoining)[^\n]*/i)?.[0] ?? 'clear');
+      }
+    }
+  }
+
+  /* ---------------- an engine that cannot route (§7 gap 5) ---------------- */
+  //
+  // **This block does not yet close §7 gap 5, and it is here because of why.**
+  //
+  // Two browser attempts preceded it, both recorded in §7 gap 5 rather than deleted.
+  // Intercepting Valhalla does not work: reroutes use `enginePlan`, whose first entry
+  // is the *offline* engine on the default selection, so the imported fixture answers
+  // them — the four checks written that way passed with the interception **removed**,
+  // because nothing had failed. And a single `setGeolocation` does not work either:
+  // Chromium fires `watchPosition` once per call, so a parked device never leaves
+  // `suspect` and no reroute is attempted at all. That also means the pre-existing
+  // off-route checks in this file assert only that the app says "you have left the
+  // route" — true, and weaker than it looks.
+  //
+  // What a *moving* fix stream does reach is a real reroute attempt, and that is worth
+  // asserting because nothing asserted it before. What it cannot yet reach is a
+  // *distinguishable failure*: a destination outside the extract and one inside it
+  // produce identical notice sequences, so the failure banner is not observable from
+  // outside. Only the claims that hold are checked, and none of them pretends to be
+  // the failure path.
+  console.log('\nrerouting from a moving device');
+  {
+    await page.goto(BASE, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(2000);
+    const importInput = await page.$('input[type=file]');
+    if (importInput) {
+      await importInput.setInputFiles(join(__dirname, FIXTURE));
+      await page.waitForFunction(
+        () => !document.body.innerText.includes('Parsing') && !document.body.innerText.includes('Building graph'),
+        // Same signature as the waits above: options are the *third* argument.
+        undefined,
+        { timeout: 30000 },
+      );
+      await page.waitForTimeout(800);
+    }
+
+    await page.click('.search-field').catch(() => {});
+    await page.waitForTimeout(400);
+    await page.fill('.inline-search input', 'Elbow');
+    await page.waitForTimeout(1200);
+    const hit = await page.$('.result-row');
+    if (hit) {
+      await hit.click();
+      await page.waitForTimeout(2500);
+      const start = await page.$('button.primary-btn');
+      if (start) {
+        await start.click();
+        await page.waitForTimeout(1500);
+        check('a routable trip starts before the device is driven off it',
+          /Steps/.test(await page.evaluate(() => document.body.innerText)));
+
+        // Watch the notice while driving, so the transition is captured rather than
+        // sampled once at the end -- the reroute wording exists for well under a
+        // second in a healthy run and a single read misses it entirely.
+        const seen = [];
+        const sample = async () => {
+          const n = await page.evaluate(() => {
+            const el = [...document.querySelectorAll('*')].find((e) => e.children.length === 0
+              && /left the route|finding a new way|rejoining|settling|no route|offline map/i
+                .test(e.textContent || ''));
+            return el ? el.textContent.trim().slice(0, 70) : '';
+          });
+          if (n && seen[seen.length - 1] !== n) seen.push(n);
+        };
+        await sample();
+        await drive(context, { latitude: 51.5400, longitude: -1.3990 }, sample);
+
+        // The off-route notice appears from a moving device -- which a single
+        // `setGeolocation` cannot produce, and which is the reason every off-route
+        // check above was passing without a reroute ever being attempted.
+        check('a moving driver off the route is told, and kept their guidance',
+          seen.some((s) => /left the route/i.test(s))
+          && /Steps/.test(await page.evaluate(() => document.body.innerText)),
+          seen.join(' -> ') || 'no notice seen');
+        // The attempt reaches the backoff window: "settling" is the state between
+        // confirming the deviation and the request going out. Asserting it *not* to
+        // appear would be asserting a timing this suite does not own.
+        check('the reroute is not reported as succeeded while the driver is off it',
+          !seen.some((s) => /rejoining/i.test(s)),
+          seen.join(' -> '));
+        await page.screenshot({ path: join(SHOTS, '12-reroute-attempt.png') });
       }
     }
   }

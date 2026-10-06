@@ -1537,12 +1537,42 @@ or "gap 18" are to the *old* numbering and say so; the current numbers are 1–1
    The genuine defect would be a device that reports "could not be reached" when
    the real answer is "the platform blocked it", and that is unproven either way.
 5. **Reroute is wired but its failure path is thin.** The app now reroutes on its
-   own (§3.11), and the browser suite drives the full off-route flow. The policy is
+   own (§3.11), and the browser suite drives the off-route flow. The policy is
    unit-tested to its cap (`reroute-backoff.spec.ts`), the sequencing on its own in
    `requests.spec.ts`, and **the two together** — a failed retry whose answer lands
-   after the driver pressed Exit — in `reroute-gate.spec.ts`. What is still not
-   exercised is the whole loop in a real browser: two consecutive failures driving
-   the backoff to its cap, with a real engine refusing, end to end.
+   after the driver pressed Exit — in `reroute-gate.spec.ts`.
+
+   **What I tried to close, and why it did not close.** Two browser attempts, both
+   recorded here rather than deleted, because the second one is the most instructive
+   thing this gap has produced.
+
+   *Intercepting Valhalla does not work.* Reroutes use `enginePlan`, whose first entry
+   is the *offline* engine on the default selection, so the request is answered by the
+   imported fixture. With the interception in place all four checks passed — and they
+   also passed with it **removed**, because nothing had failed. A green test that
+   cannot fail is worse than none, because it is read as evidence.
+
+   *A single `setGeolocation` does not work either.* Measured: Chromium fires
+   `watchPosition` **once per call** — 0 fixes before a change, 1 after one call, 9
+   after eight. The tracker needs two fixes more than `CONFIRM_WINDOW_MS` apart, so
+   every off-route check in the e2e suite — the pre-existing ones included — had been
+   passing against a screen that **had never attempted a reroute**.
+
+   With a moving fix stream the notice sequence becomes real — `You have left the route`
+   then `Off route — settling`, the state between confirming a deviation and the
+   request going out. That is what now ships in the e2e suite, and it is *not* the
+   failure path: an ad-hoc probe reached `Off route — finding a new way` from a
+   different starting position, but not reproducibly from the suite's, and I did not
+   have the budget to find out why. An in-scope claim I could not verify is not one
+   this document records as done.
+
+   So the honest end state: the browser now asserts the deviation is detected from a
+   moving device and that guidance survives — neither of which any check covered — and
+   it asserts the reroute is *not* reported as succeeded. What remains is an observable
+   failure: the app's `status: 'failed'` banner, reached through a real engine refusal.
+   That is not reachable by moving a simulated device, because the offline engine's
+   refusal is decided in-process with no request to intercept. It needs either a hook
+   that exposes reroute state to the test, or an online engine as the selected one.
 6. **Offline turn-by-turn infers turns** from bearing changes. Real instructions
    need Valhalla. Measured against Valhalla on one 4 km stretch it missed three of
    seven real maneuvers, invented one and reversed one direction — so the app now
