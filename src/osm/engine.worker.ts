@@ -948,9 +948,27 @@ export function routeOnGraph(g: RoadGraph, from: LatLng, to: LatLng): RouteResul
   const cameEdge = new Int32Array(n).fill(-1);
   const closed = new Uint8Array(n);
 
-  // Optimistic speed for admissibility: the fastest class in the network.
-  // Using the true max keeps h a lower bound, so the result stays optimal.
-  const OPT_SPEED = 60 * 0.27778; // 60 m/s
+  // Optimistic speed for admissibility: the **fastest class in the network**, derived
+  // from the table so it cannot drift from it.
+  //
+  // This used to read `60 * 0.27778` with the comment `// 60 m/s`. It is 16.667 m/s,
+  // which is 60 **km/h** — and the fastest class here is `motorway` at 105 km/h
+  // (29.167 m/s). So `h` assumed 0.0600 s/m while a motorway edge really costs
+  // 0.0343 s/m: the heuristic **overestimated** on motorway, trunk and primary edges,
+  // which is inadmissible, and A\* is only guaranteed optimal when `h` never
+  // overestimates.
+  //
+  // Measured on the repo's own `test/fixture.osm` graph before the fix: 12 of 3000
+  // random pairs returned a route up to **7.4% slower** than Dijkstra's optimum
+  // (532.1 s against 495.5 s). On a 6x6 grid mixing 105 and 25 km/h edges, 5 of 4000
+  // pairs were 19-32% slower. `test/minheap.spec.ts` proved the queue was a real heap,
+  // so the optimality guarantee it restored was void for a different reason.
+  //
+  // `test/engine.spec.ts` asserted closeness to "the grid optimum" in **metres**, which
+  // is why a time regression of this size passed: a faster road that is a few metres
+  // longer is the *right* answer by distance and the *wrong* answer by time, and the
+  // cost model is time.
+  const OPT_SPEED = Math.max(...Object.values(SPEED)) / 3.6; // m/s, from the table above
   const gx = goalPt[0], gy = goalPt[1];
   const heur = (i: number) => haversineM(g.coords[i * 2], g.coords[i * 2 + 1], gx, gy) / OPT_SPEED;
 

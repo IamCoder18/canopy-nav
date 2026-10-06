@@ -83,6 +83,8 @@ evaluated, which a pass or fail result does not tell you.
    — [the largest gap in this document rested on a false premise](#149-the-largest-gap-in-this-document-rested-on-a-false-premise)
    — [a reroute cannot be refused by moving the driver](#1410-a-reroute-cannot-be-refused-by-moving-the-driver-and-a-reason-that-vanished)
    — [five defects in the regions screen](#1411-five-defects-in-the-regions-screen-from-reading-it-rather-than-running-it)
+   — [A\*'s optimality guarantee was void for a different reason](#1412-as-optimality-guarantee-was-void-for-a-different-reason-than-121-fixed)
+   — [two more stale claims, and one real gap](#1413-two-more-claims-that-were-stale-and-one-that-is-a-real-gap)
 
 ---
 
@@ -109,7 +111,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 988 unit tests across 49 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 994 unit tests across 50 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -123,7 +125,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **988 passing**, 49 files |
+| Unit tests | `npm test` | **994 passing**, 50 files |
 | End-to-end | `npm run e2e` | **55 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -201,7 +203,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **49 files, 988 tests**. The
+retyped by hand. The table is the complete set: **50 files, 994 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -249,6 +251,7 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `reroute-strict.spec.ts` | 9 | strict mode bounds the plan rather than aborting it |
 | `styletiles.spec.ts` | 9 | tile-style order-comparison guard: the actual shield filter, idempotency |
 | `basemap.spec.ts` | 6 | a basemap substitution is reported rather than silent |
+| `astar-admissible.spec.ts` | 6 | A\*'s heuristic is admissible: the returned route is the cheapest by **time**, checked against Dijkstra on the real fixture |
 | `minheap.spec.ts` | 6 | the heap invariant, plus the broken implementation kept and asserted to fail |
 | `pbfgeo.spec.ts` | 6 | absolute coordinates against the PBF spec, via the real encoder |
 | `streamscale.spec.ts` | 6 | the streaming parse holds a small multiple of the document, not the document |
@@ -1454,14 +1457,14 @@ src/
   settings.ts             347  typed, validated, quota-safe persistence
   theme.ts                219  AAOS design tokens (colour, type, layout, shape)
   icons.tsx               421  29 maneuver kinds + system icons, hand-drawn SVG
-  geo.ts                  352  polyline codec, haversine, formatting, snapping,
+  geo.ts                  364  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt
   styles.css             2181  layout, insets, responsive rules
 
   osm/
-    engine.worker.ts     1175  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
+    engine.worker.ts     1193  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
     pbf.ts                606  .osm.pbf protobuf reader
-    engine.ts             391  worker client, format sniff, GeoJSON mirroring
+    engine.ts             403  worker client, format sniff, GeoJSON mirroring
     regions.ts            444  RegionLibrary, catalogue, bbox helpers, merge cache
     merge.ts              318  union-find merge of adjacent extracts
     mergeguard.ts         170  can a merge be afforded here? three outcomes
@@ -1494,7 +1497,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            988 unit tests, 49 files
+test/            994 unit tests, 50 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1775,7 +1778,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 988 unit tests
+npm test             # 994 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -2210,7 +2213,7 @@ anything is interactive.
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files** (the figures as of that
 > revision), and the boundary pass to
-> **988 across 49** — see §11, §12 and §13. The figures above are left as written
+> **994 across 50** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
@@ -4000,6 +4003,98 @@ A comment is a claim about code, so it needs the same treatment as a number: re-
 or checked. §2's `npm run status` now checks the shapes it can, and four of these five
 turned out to be checkable as source invariants — which is not the same as true, and is
 why the fifth is recorded rather than asserted.
+
+### 14.12 A\*'s optimality guarantee was void for a different reason than §12.1 fixed
+
+§12.1 found that the priority queue was not a heap — one slot per *node* rather than per
+entry, so a stale entry compared as the re-priced one and `pop()` stopped returning the
+minimum. `test/minheap.spec.ts` proves that, and keeps the broken implementation in the
+file asserting that it does not pass.
+
+A correct queue is necessary and not sufficient. A\* also needs `h` never to
+overestimate, and that half had no test and was broken:
+
+```ts
+const OPT_SPEED = 60 * 0.27778; // 60 m/s
+```
+
+**It is 16.667 m/s, which is 60 km/h**, and the fastest class in the table is `motorway`
+at 105 km/h — 29.167 m/s. So the heuristic assumed 0.0600 s/m while a motorway edge
+really costs 0.0343 s/m: it **overestimated on motorway, trunk and primary edges**, which
+is inadmissible, and the route A\* returned was not the cheapest.
+
+`OPT_SPEED` is now derived from the table, so it cannot drift from it again:
+
+```ts
+const OPT_SPEED = Math.max(...Object.values(SPEED)) / 3.6;
+```
+
+Measured on the repo's own `test/fixture.osm` graph: **2 of 593** random node pairs came
+back suboptimal before the fix, 0 after. Small, and on the *default* engine.
+
+#### Why `test/engine.spec.ts` never saw it
+
+Its quality assertion compares against "the grid optimum" in **metres**. But the cost
+model is travel **time**, and the two disagree exactly where this bug lives: a motorway
+detour a few metres longer is the right answer by distance and the wrong answer by time.
+Measured in metres, the defect is invisible.
+
+#### Writing the test took four corrections, all recorded in the file
+
+Worth listing, because each looked like a passing test:
+
+1. **A synthetic grid could not reproduce the violation at all.** With a regular lattice
+   the overestimate is uniform across nodes, so the pop order — and the answer — usually
+   comes out right. The grid passed with the broken value in place, at both a 4.2× and a
+   10.5× speed spread. Irregular geometry is what makes it bite.
+2. **The grid fixture was malformed.** `edgeStart` is per *node*, not per edge; the
+   first version pushed one offset per edge, giving 121 entries for 36 nodes, and a
+   quarter of the pairs reported "no route" — which reads like a heuristic failure.
+3. **The first flags were `1` and `2`**, which are the engine's one-way bits, so half the
+   grid became one-way.
+4. **The reference was wrong twice, and both times in the direction of a false pass.**
+   Its nearest-node lookup disagreed with `index.nearest` on a quarter of the pairs, and
+   it then walked every edge **ignoring one-way flags** — reporting a cheaper optimum
+   than the engine could legally reach, as 41 "suboptimal" routes that were not. A
+   reference that is wrong in the permissive direction makes the subject look worse.
+
+The file's own header says the grid section is a regression net rather than the thing
+that catches the bug, and says where the bug is actually caught: the real fixture, with
+one-ways, where the engine's own `stepCost` and the reference agree.
+
+### 14.13 Two more claims that were stale, and one that is a real gap
+
+From the same pass, both cheap:
+
+- **`roadsToGeoJSON`'s "Default 0 means no filtering"** was stale, and stale in the
+  dangerous direction. `RENDER_MIN_ZOOM` drops every class above the supplied zoom, so the
+  default keeps only what is drawable at zoom 0 — **one class of fifteen**. Measured on a
+  dataset of one `residential`, one `service` and one `motorway`: the no-argument call
+  returns the motorway alone. The *code* is right, and `test/renderzoom.spec.ts` asserts
+  it; a caller who read the comment would render a motorway-only map and believe it
+  complete. Comment corrected.
+- **`simplify` promises "at most `max` points"** and delivers `max + 1`, because the
+  strided loop yields up to `max` and the final-point guarantee then appends one.
+  `test/geo.spec.ts` permits it. Left as it is and the comment corrected: the extra point
+  is the *destination*, and tightening the bound would let a caller drop it.
+
+**Still open, and it is a real code defect:** `resolveRoute`'s `strict` option does not
+do what its docstring says. The comment claims it "stops the walk after the first real
+attempt so a pinned engine fails loudly instead of quietly answering from somewhere
+else", and that it will "never append the offline engine". In the code, `strict` is read
+in exactly **one** place — inside the closing `throw` — with no `break`, no `return` and
+no plan filtering in the loop. So `resolveRoute({ plan: ['valhalla-custom', 'local'],
+strict: true })` walks past the pinned engine and lets `local` **serve** the route, and
+the legacy derivation that builds a plan from a bare `provider` appends `'local'`
+regardless of `strict`.
+
+It survives because `test/engines.spec.ts` states the assumption as if it were a
+guarantee: *"a strict plan never contains the offline engine — hand-writing one with
+'local' in it describes a state the selection model cannot produce."* Both call sites in
+the app build plans through `planRoute`, so the app is correct today; the defect is in the
+API's contract, and the tests avoid the input that breaks it. Recorded rather than fixed
+here because the fix changes which routes an existing configuration can serve, and that
+deserves its own pass rather than the last twenty minutes of one.
 
 ---
 

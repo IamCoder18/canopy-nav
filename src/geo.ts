@@ -341,7 +341,19 @@ export function bboxOf(pts: LatLng[]): [number, number, number, number] {
   return [w, s, e, n];
 }
 
-/** Downsample a polyline to at most `max` points (Douglas-Peucker-lite by stride). */
+/**
+ * Downsample a polyline by stride, preserving the first and last point.
+ *
+ * "At most `max` points" is what this used to promise and is **one more than it
+ * delivers**: the strided loop already yields up to `max`, and the final-point
+ * guarantee can then append one. `simplify(10 points, 1)` returns 2, `max = 2` returns
+ * 3, `max = 3` returns 4. `test/geo.spec.ts` permits it (`toBeLessThanOrEqual(101)` for
+ * `max = 100`), so the code and its test agree and only the prose was stale.
+ *
+ * Left as it is, and the comment corrected rather than the bound tightened: the extra
+ * point is the *destination*, and a caller that dropped it would draw a route that
+ * stops short of where it was going. `simplify` has no callers in `src/`.
+ */
 export function simplify(line: LatLng[], max = 4000): LatLng[] {
   if (line.length <= max) return line;
   const stride = Math.ceil(line.length / max);

@@ -332,7 +332,19 @@ function routeSync(ds: OsmDataset, from: LatLng, to: LatLng): RouteResult | null
  * where the graph is built; this re-reads that same table so the two cannot
  * disagree about which class is which.
  *
- * Default 0 means "no filtering" — the map layer supplies the current zoom.
+ * The default is **not** "no filtering". `RENDER_MIN_ZOOM` gives each class the
+ * lowest zoom at which it is worth drawing, and `min > minClassZoom` drops everything
+ * above the supplied zoom — so the default of 0 keeps only what is drawable at zoom 0
+ * and drops the other thirteen classes of the fifteen.
+ *
+ * Measured on a dataset of one `residential`, one `service` and one `motorway`:
+ * `roadsToGeoJSON(ds)` returns the motorway alone, while `roadsToGeoJSON(ds, 16)`
+ * returns all three.
+ *
+ * That is *correct* — a residential street at zoom 0 is the sub-pixel noise the filter
+ * exists to drop, and `test/renderzoom.spec.ts` asserts it — so only this comment was
+ * wrong, and it was wrong in the dangerous direction: a caller who read "no filtering"
+ * would render a motorway-only map and believe it complete.
  */
 export function roadsToGeoJSON(ds: OsmDataset, minClassZoom = 0): GeoJSON.FeatureCollection {
   const feats: GeoJSON.Feature[] = [];
