@@ -3282,7 +3282,7 @@ measurements corrected, and the defects found underneath three of them.
 | An OOM while reading a partial download **deleted the partial download** | Unreadable is not unusable: nothing is deleted, and the next attempt resumes. §13.4 |
 | Two overlapping route requests raced; Exit mid-reroute installed the abandoned route and resurrected `status: 'failed'` | A `RequestGate` that throws on a stale answer and reports nothing. §13.6 |
 | The stale-position guard refused to reroute a driver moving *away* from the destination | It asks whether the position moved, comparing raw fixes so a clamped projection cannot read as motionless. §13.5 |
-| A tile-host failure changed the basemap without saying so | The layers panel names the difference between requested and drawn. §13.11 |
+| A tile-host failure changed the basemap without saying so | The layers panel names the difference between requested and drawn. §13.17 |
 | An e2e check counted a slow network as a missing UI control | Structural count, with probe settling as its own claim. §13.7 |
 | The reflow probe measured `data-textsize="normal"` at 200% and clipped children as overlaps | It waits for the attribute and measures visible rects. §13.8 |
 | Two concurrent downloads shared one `AbortController`: the first was uncancellable and either could wipe the other's progress row | A handle per region, released only by its owner. §13.10 |
