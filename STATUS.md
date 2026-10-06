@@ -19,7 +19,7 @@ with **fully offline OpenStreetMap routing**.
   an import forever, and four leaks.
 - **§13** — the boundary pass: everything that crosses a boundary — a network, a disk, a
   service worker, two overlapping requests, a GPS fix — and refuses to be wrong quietly.
-  Ten defects, **three of them corrections to claims this document had been carrying**.
+  Eleven defects, **three of them corrections to claims this document had been carrying**.
 
 Each pass also had to fix defects **it introduced**, which are recorded in §11.5, §12.8 and
 §13.6 rather than quietly corrected.
@@ -72,7 +72,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 919 unit tests across 43 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 927 unit tests across 44 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -86,7 +86,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **919 passing**, 43 files |
+| Unit tests | `npm test` | **927 passing**, 44 files |
 | End-to-end | `npm run e2e` | **46 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -162,7 +162,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **43 files, 919 tests**. The
+retyped by hand. The table is the complete set: **44 files, 927 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -199,6 +199,7 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `reroute-failure.spec.ts` | 13 | a failed reroute leaves the route and its guidance alone |
 | `catalogue-row.spec.ts` | 8 | the unavailable reason is one line until asked otherwise, and reachable without a mouse |
 | `probebound.spec.ts` | 6 | the catalogue probe is bounded, and every entry reaches a verdict |
+| `steps.spec.ts` | 8 | why the turn list is empty — three causes, three honest explanations |
 | `pbf.spec.ts` | 11 | PBF vs XML parser equivalence on a hand-built file and the whole fixture |
 | `theme.spec.ts` | 11 | `theme.ts` ↔ `styles.css` token-name agreement, fallbacks present, no bare literals |
 | `reroute-strict.spec.ts` | 9 | strict mode bounds the plan rather than aborting it |
@@ -1038,7 +1039,9 @@ was wrong by 3×** — see the note on each, and §13.12.
   inference loop needs at least seventeen. The honest "No turn-by-turn" empty
   state is correct behaviour for data that has no turns; a route whose geometry
   is too sparse to infer from should either produce steps some other way or say
-  so more plainly. **Still open.**
+  so more plainly. **Closed** (§13.14) — the empty state was right and its
+  *explanation* was wrong, which is the more damaging direction: it sent the
+  driver to Settings to change a setting that would not have changed the answer.
 - The primary CTAs and the bottom search controls have no pressed state yet. A
   focus ring exists on every control; the press-down visual is the first thing an
   AAOS designer adds and is the first thing a screen reader assistant does not.
@@ -1389,6 +1392,7 @@ src/
     reroute.ts            394  reroute policy: when to act, backoff, banner
     providers.ts          390  provider chain, attempt trace, connectivity
     requests.ts           112  RequestGate: one live route request at a time
+    steps.ts               66  why the turn list is empty: three causes, three answers
     engines.ts            239  engine selection, readiness, provenance
     geocode.ts            231  Nominatim client, 1 req/s throttle
     location.ts           256  device/browser/simulated location
@@ -1408,7 +1412,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            919 unit tests, 43 files
+test/            927 unit tests, 44 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1619,7 +1623,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 919 unit tests
+npm test             # 927 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -1707,7 +1711,7 @@ than by planning, and those found more than the plan did.
 | 11 | ETA readout: monotone, and `0 m` means arrived | req #19, §7 gap 12 | **Done** (§3.17) |
 | 12 | Wire cross-region merging, behind a memory guard | req #10, §7 gap 1 | **Done** (§3.18) |
 | 13 | *Added by the crash of block 11:* gates for render-time failures | — | **Done** (§3.19) |
-| 14 | Every boundary: network, disk, service worker, request sequencing, a GPS fix | req #19, §7 gaps 11–18 | **Ten closed; the layout half of gap 11 left open, and not attempted again** (§13) |
+| 14 | Every boundary: network, disk, service worker, request sequencing, a GPS fix | req #19, §7 gaps 11–18 | **Eleven closed; the layout half of gap 11 left open, and not attempted again** (§13) |
 
 Block 14 was also not planned. It came from a single question applied to every
 place this app meets something it does not control — *what does this do when the
@@ -2048,7 +2052,7 @@ anything is interactive.
 
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files**, and the boundary pass to
-> **919 across 43** — see §11, §12 and §13. The figures above are left as written
+> **927 across 44** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
@@ -2678,7 +2682,7 @@ something it does not control — a network, a disk, a service worker, two
 overlapping requests, a GPS fix — and asked one question of each: *what does this
 do when the thing on the other side goes wrong?*
 
-Ten defects. Three are corrections to claims this
+Eleven defects. Three are corrections to claims this
 document has been carrying, which is the more interesting half: two were wrong
 about a mechanism, and one was wrong about code that does not exist in the state
 it was described.
@@ -3069,7 +3073,39 @@ check dispatching a synthetic Tab). The general form is worth keeping: **a numbe
 attached to a specific element is a claim about a measurement, and the measurement
 has to name the thing it measured.**
 
-### 13.14 What this pass also closed
+### 13.14 An empty turn list that blamed the wrong thing
+
+§3.19's first deferred item, and the last one open.
+
+The empty state said, for every route with no steps:
+
+> `<engine> answered this route but does not supply turn-by-turn guidance.`
+
+That is correct for exactly one of the three situations that produce an empty list.
+The other two are about the **route**, not the engine — and the offline engine emits
+no maneuvers *ever*, so an empty list offline always means one of them:
+
+- the route is too coarse for the inference to read any bend from (fewer than 17
+  vertices, and the sampler needs 8 either side of a candidate), or
+- the inference ran and found no turn worth stopping for.
+
+Both were reported as a missing engine capability. The cost is concrete: a driver
+whose route simply has nothing in it is told to go and change their routing engine,
+and on the sparse route is told to go and change an engine for a route that is too
+short to have turns in the first place. §11's own principle — nothing implies data
+it does not have — applies to *reasons* as much as to values.
+
+`nav/steps.ts` now decides the copy, as a pure function with all three branches
+tested. The sparse case offers both routes out, because both are real: a longer
+route gives the inference more to work with, and a Valhalla engine gives real
+instructions regardless. The "nothing here" case offers neither, because no setting
+would help.
+
+It is a separate module rather than three branches of JSX for the reason §12.7 gives:
+a decision that is not testable without React is a decision nobody will test, and
+this one had been wrong for the life of the feature.
+
+### 13.15 What this pass also closed
 
 - **A tile-host failure substituted the map style silently.** Correct
   degradation, no sentence anywhere. `MapView` now reports the style it actually
@@ -3102,6 +3138,7 @@ has to name the thing it measured.**
 | A catalogue row ballooned to **1139dp** against a nominal 116dp, one line per reason paragraph | One line, expandable, reachable without a mouse. §13.11 |
 | The Regions screen could show sixteen "Checking…" rows indefinitely, and looked identical to a hang | Bounded at 75 s, derived; every entry reaches a verdict with a reason. §13.12 |
 | Two sibling cards with the same fill and different corners, read as one panel split in two | The notice matches the card's 16px radius. §13.13 |
+| An empty turn list blamed the engine for a route that had no turns in it | Three causes, three honest explanations, in a tested function. §13.14 |
 
 ---
 

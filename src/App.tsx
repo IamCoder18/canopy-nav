@@ -24,6 +24,7 @@ import {
   createRerouteState, type RerouteState,
 } from './nav/reroute';
 import { RequestGate, isSuperseded } from './nav/requests';
+import { stepsEmptyReason } from './nav/steps';
 import {
   formatDistance, formatDuration, formatClock, lineLength,
   snapToPolyline, vertexAt, type LatLng,
@@ -1194,6 +1195,22 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
      * distance. Since the offline engine is the *default*, that made the largest
      * number on the navigation screen meaningless for most users.
      */
+    /**
+     * Whether the inference could run at all.
+     *
+     * The loop below samples every 8th vertex and needs 8 either side, so a route
+     * with fewer than 17 points has no window to look at — it produces zero steps
+     * for a reason that has nothing to do with turns. That is the case §3.19 calls
+     * "unreachable on the fixture": the offline engine returns a 2-3 point geometry
+     * for a short route, so the honest empty state is correct but for the wrong
+     * stated reason, and the driver is told their *engine* cannot help them when
+     * what actually happened is that this particular route is too short to read.
+     *
+     * Reported rather than guessed at, so the Steps screen can say which of the two
+     * it is.
+     */
+    const tooSparseToInfer = geometry.length < 17;
+
     const steps: LegStep[] = [];
     for (let i = 8; i < geometry.length - 8; i += 8) {
       const inB = bearingBetween(geometry[i - 8], geometry[i]);
@@ -1222,6 +1239,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
     return {
       snap, remainingM, totalM, steps, idx,
       nextStep, distToNext,
+      tooSparseToInfer,
       // The dimmed "already driven" portion is derived from the same
       // placement as the ETA, so the drawn line and the number can no longer
       // disagree about where the car is.
@@ -1670,6 +1688,7 @@ const banner = rerouteNotice ?? routeError ?? null;
           inferred={!guidance && !!localGuidance}
           engineLabel={provenance ? describeProvenance(provenance.used, provenance.fellBack) : null}
           destination={destination}
+          tooSparseToInfer={!guidance && !!localGuidance?.tooSparseToInfer}
         />
       )}
 
@@ -2785,6 +2804,14 @@ export interface LocalGuidanceModel {
    */
   nextStep: LegStep | null;
   distToNext: number;
+  /**
+   * The route is too coarse for the inference to look at any window of it.
+   *
+   * Fewer than 17 vertices, and the sampler needs 8 either side of each candidate.
+   * Distinct from "the inference ran and found no turns", and the Steps screen
+   * says which happened rather than implying the engine cannot help.
+   */
+  tooSparseToInfer: boolean;
 }
 
 /* ----------------------------- NavPanel ---------------------------- */
@@ -3431,7 +3458,7 @@ function SearchScreen(props: {
 /* ---------------------------- StepsScreen --------------------------- */
 
 function StepsScreen({
-  steps, onBack, inferred, engineLabel, destination, headingRef,
+    steps, onBack, inferred, engineLabel, tooSparseToInfer, destination, headingRef,
 }: {
   steps: LegStep[];
   onBack: () => void;
@@ -3443,6 +3470,14 @@ function StepsScreen({
   inferred?: boolean;
   /** The engine that produced the route, for the same reason. */
   engineLabel?: string | null;
+  /**
+   * The offline route was too coarse to infer any turns from.
+   *
+   * §3.19's deferred item: the empty state was correct but for the wrong stated
+   * reason, telling the driver their engine cannot supply guidance when what
+   * actually happened is that this route has too few points to read turns from.
+   */
+  tooSparseToInfer?: boolean;
   /** Names the final row, which is the one a driver scans for. */
   destination?: { label: string } | null;
   /** This screen's heading, focused on arrival. */
@@ -3473,11 +3508,7 @@ function StepsScreen({
           <div className="hint-card">
             <div style={T.body3m}>No turn-by-turn instructions for this route</div>
             <div style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1 }}>
-              {engineLabel
-                ? `${engineLabel} answered this route but does not supply turn-by-turn guidance.`
-                : 'The engine that answered this route does not supply turn-by-turn guidance.'}{' '}
-              Choose a Valhalla engine in Settings → Routing → Engines for detailed instructions.
-              The distance and ETA remain available on the navigation screen.
+              {stepsEmptyReason({ inferred: !!inferred, tooSparseToInfer: !!tooSparseToInfer, engineLabel })}
             </div>
           </div>
         )}
