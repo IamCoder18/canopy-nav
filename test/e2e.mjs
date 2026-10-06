@@ -467,16 +467,23 @@ try {
       // Reported below by the row count, which is the more useful detail.
     }
     // Then wait for the probe itself to settle, separately and with its own budget.
-    // Geofabrik answers sixteen HEAD requests four at a time with a 10 s deadline
-    // each, and CORS blocks the rest instantly, so the worst case is four batches
-    // of 10 s. Under a slow link that is the whole budget and the check below
-    // reports it as what it is — a probe that did not finish in time — rather than
-    // folding it into a UI assertion.
+    //
+    // The budget is derived from the app's, not guessed: `RegionsScreen` stops
+    // waiting for stragglers after 75 s and reports whatever it has, so the screen
+    // cannot stay undecided longer than that by construction. 150 s is that bound
+    // plus slack for a loaded machine — not a number raised until it stopped
+    // happening.
+    //
+    // This budget was 90 s and it flaked roughly one run in four, which is worth
+    // recording because the cause was not latency. `setAvailability` is called once
+    // after every worker finishes, so the rows are atomic: a probe that took 95 s
+    // showed sixteen "Checking…" and zero decided rows, which is indistinguishable
+    // on screen from a hang. The app is now bounded; this follows from that.
     try {
       await page.waitForFunction(
         () => ![...document.querySelectorAll('.pill-btn')]
           .some((b) => b.textContent.trim() === 'Checking…'),
-        { timeout: 90000, polling: 500 },
+        { timeout: 150000, polling: 500 },
       );
     } catch {
       // Reported by the probe-settles check below.

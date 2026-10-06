@@ -1405,14 +1405,62 @@ code {
 /* Why a catalogue row cannot be downloaded, on screen rather than in a `title`
    attribute — a head unit has no hover, so a tooltip is a message nobody reads.
    Word-wrapped and full-width: the reason is long by nature. */
+/*
+ * Why a catalogue row cannot be downloaded.
+ *
+ * It used to be a plain `<span>` printing the whole sentence. The sentences are
+ * long — the failure text names the URL, the HTTP status and what to try instead —
+ * and at 20px in a 412dp column one of them measured **868dp**, making the row
+ * 1139dp against a nominal 116dp. Sixteen of those is a screen of nothing but red
+ * paragraphs, and the row a driver actually needed was in the middle of it.
+ *
+ * A button rather than a `title`, because §11.2's finding is that a hover
+ * affordance is unreachable on the only kind of device this app has. One line by
+ * default, ellipsised; `aria-expanded` so the state is announced rather than
+ * guessed at, and the full sentence is the button's own accessible name, so it is
+ * read aloud either way.
+ */
 .unavailable-reason {
   display: block;
   width: 100%;
   margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  /* Inherits the row's text alignment; a button defaults to `center`. */
+  text-align: left;
+  font: inherit;
   font-size: 20px;
   line-height: 28px;
   color: #F28B82;
+  cursor: pointer;
+  min-height: 28px;
 }
+.unavailable-reason:hover { color: #F6B3AC; }
+/* The focus ring is a sandwich in `styles.css`; this inherits it, so the control
+   is visible on both the card and the map. */
+.unavailable-reason:focus-visible { outline: 3px solid #8AB4F8; outline-offset: 2px; }
+.unavailable-reason-text {
+  display: block;
+  /* Expanded: read it in full, however many lines that takes. */
+  overflow-wrap: anywhere;
+}
+/* The way back. One line, quiet, and only when something was expanded. */
+.reason-collapse {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgba(255, 255, 255, 0.7);
+  font: inherit;
+  font-size: 16px;
+  line-height: 24px;
+  text-decoration: underline;
+  cursor: pointer;
+  min-height: 24px;
+}
+.reason-collapse:focus-visible { outline: 3px solid #8AB4F8; outline-offset: 2px; }
 
 /* The app bar is absolutely positioned, so it overlays the top of these
    scroll containers — pad past it or the first heading is hidden. */

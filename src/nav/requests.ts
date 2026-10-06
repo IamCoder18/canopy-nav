@@ -63,11 +63,6 @@ export class RequestGate {
     return token !== this.seq;
   }
 
-  /** The token of the request currently in flight, or 0 when there is none. */
-  get live(): number {
-    return this.seq;
-  }
-
   /**
    * Throw if this answer no longer matters.
    *

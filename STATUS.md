@@ -19,7 +19,7 @@ with **fully offline OpenStreetMap routing**.
   an import forever, and four leaks.
 - **§13** — the boundary pass: everything that crosses a boundary — a network, a disk, a
   service worker, two overlapping requests, a GPS fix — and refuses to be wrong quietly.
-  Seven defects, **three of them corrections to claims this document had been carrying**.
+  Nine defects, **three of them corrections to claims this document had been carrying**.
 
 Each pass also had to fix defects **it introduced**, which are recorded in §11.5, §12.8 and
 §13.6 rather than quietly corrected.
@@ -72,7 +72,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 904 unit tests across 41 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 918 unit tests across 43 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -86,12 +86,12 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **904 passing**, 41 files |
+| Unit tests | `npm test` | **918 passing**, 43 files |
 | End-to-end | `npm run e2e` | **46 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
 | Offline shell | `npm run swshell` | a captive portal answered 2 navigations, then the network went off: the app still boots, 5 launcher tiles |
-| Reflow at large text | `npm run reflow` | **3 checks fail** — a diagnostic, not a gate. §12.7, §13.5 |
+| Reflow at large text | `npm run reflow` | **3 checks fail** — a diagnostic, not a gate. §12.7, §13.8 |
 | Bundle budget | `npm run bundle` | entry 112.0 kB / 130, initial 117.5 / 150, largest 282.0 / 300, total JS 417.8 / 460 (gzip) |
 | Offline cold start | verified in-browser | reload with the network off renders the app: 5 tiles, map sized, 0 console errors |
 | Release | v0.11.3 tag | **CI green, Release green**, APK attached |
@@ -162,7 +162,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **41 files, 904 tests**. The
+retyped by hand. The table is the complete set: **43 files, 918 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -197,6 +197,8 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `attribution.spec.ts` | 13 | the ODbL credit is present, well-formed, and not re-suppressed |
 | `mergeguard.spec.ts` | 13 | merge memory guard: three outcomes, the boundary at ratio 1, scaling with region count |
 | `reroute-failure.spec.ts` | 13 | a failed reroute leaves the route and its guidance alone |
+| `catalogue-row.spec.ts` | 8 | the unavailable reason is one line until asked otherwise, and reachable without a mouse |
+| `probebound.spec.ts` | 6 | the catalogue probe is bounded, and every entry reaches a verdict |
 | `pbf.spec.ts` | 11 | PBF vs XML parser equivalence on a hand-built file and the whole fixture |
 | `theme.spec.ts` | 11 | `theme.ts` ↔ `styles.css` token-name agreement, fallbacks present, no bare literals |
 | `reroute-strict.spec.ts` | 9 | strict mode bounds the plan rather than aborting it |
@@ -219,7 +221,7 @@ Browser gates, measured the same way:
 | `tools/sw-shellcheck.mjs` | 1 (offline boot after a captive portal) | `npm run swshell` |
 | `tools/reflow.mjs` | 3 failing — a diagnostic, §12.7 | `npm run reflow` |
 
-**Five counts in this document have now been wrong at least once, and each was wrong the
+**Six counts in this document have now been wrong at least once, and each was wrong the
 same way.** The e2e count (§2). The screen figure, recorded as both "29 × 3 = 87" and "50 × 3
 = 150" in different sections of *this* file while the true value was 51 × 3 = 153 — §2 was
 right and §6 and §9.2 were stale, which is the more awkward direction, because the correct
@@ -236,6 +238,11 @@ That is now mechanical rather than aspirational: the breakdown table is generate
 `vitest --reporter=json` grouped by file, and the browser counts are counted from `PASS`
 lines of an actual run. A stale count can still be typed, but it now has to be typed
 deliberately against a table that was machine-written.
+
+The sixth is the one that should have been caught by that: this revision's first pass at
+the numbers left §2 saying 904 while the table said 901, because the two were edited in
+separate steps and only one of them was re-read. The machinery above reduces the cost of
+that error; it does not remove the need to look.
 
 ---
 
@@ -1023,22 +1030,30 @@ imminent-turn dimming that was computed and never consumed (the same shape as th
 §4.6 dead affordances), and the catalogue button whose accessible name read as a
 single word. All verified in a live probe before they were declared fixed.
 
-Deferred by name, so they are not lost:
+Deferred by name, so they are not lost. **Two are now closed and one of the estimates
+was wrong by 3×** — see the note on each, and §13.12.
 
 - The offline **inferred guidance is unreachable on the fixture**, because the
   local engine returns a 2–3 point geometry for a short route and the step
   inference loop needs at least seventeen. The honest "No turn-by-turn" empty
   state is correct behaviour for data that has no turns; a route whose geometry
   is too sparse to infer from should either produce steps some other way or say
-  so more plainly.
+  so more plainly. **Still open.**
 - The primary CTAs and the bottom search controls have no pressed state yet. A
   focus ring exists on every control; the press-down visual is the first thing an
   AAOS designer adds and is the first thing a screen reader assistant does not.
+  **Closed** in an earlier revision — see the §11.8 table.
 - The Regions catalogue repeats an unavailable entry's reason as a multi-line red
   paragraph that balloons the row to ~365dp at 412dp; row height is nominally
-  116dp. Fold the reason into one line and expand on demand.
+  116dp. Fold the reason into one line and expand on demand. **Closed** (§13.11) —
+  and the estimate was low: the row measured **1139dp**, and the reason paragraph
+  868dp of it. Measuring it needs the probes stubbed, because the real catalogue is
+  CORS-blocked and the measurement would otherwise depend on the network.
 - The off-route notice touches the maneuver banner's edge at 1280×720. A 0-gap
   border-to-border look, on a surface that has a 12–16dp radius elsewhere.
+  **Still open**, and re-measurement is owed: §13.8 established that the reflow
+  probe's overlap arithmetic could not tell a genuine collision from a clipped
+  child, so this figure was taken by a probe with a known defect.
 
 ---
 
@@ -1383,7 +1398,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            904 unit tests, 41 files
+test/            918 unit tests, 43 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1431,11 +1446,41 @@ Ordered by how much they matter.
    arterials branch on class at low zoom), and the only extract available offline
    is the tiny fixture, which cannot show what a province looks like at zoom 6.
    See that section for why the claims are worded the way they are.
-4. **SAF file import untested on device.** The picker UI was not automatable over
-   adb; browser-tested only. Re-confirmed while building the engine screen: the
-   file picker cannot be driven through `adb shell input`, so device runs start
-   with no map loaded and the offline engine correctly reports
-   "No offline map loaded".
+4. **SAF file import untested on device, and one-tap download is CORS-blocked
+   everywhere.** Two things, and they are the reason device runs have never
+   produced a map.
+
+   *The picker.* The file picker cannot be driven through `adb shell input`, so
+   device runs start with no map loaded and the offline engine correctly reports
+   "No offline map loaded". Browser-tested only.
+
+   *The catalogue.* Measured, from Node (no CORS involved) against the real URL:
+
+   ```
+   status 200 · 351,019,667 bytes · accept-ranges: bytes
+   Access-Control-Allow-Origin: null
+   ```
+
+   Geofabrik serves the file perfectly and sends **no** CORS header, so a
+   cross-origin `fetch` is blocked before any response is formed. Valhalla, the
+   working routing provider, sends `*`. In a browser this is total: one-tap region
+   download cannot work, ever, from any code.
+
+   **On device this is unverified, and the likely answer is that it is also
+   blocked** — the Capacitor WebView's origin is `https://localhost`, so the same
+   rule applies, and `CapacitorHttp` is *not* enabled in `capacitor.config.ts`.
+   The documented bypass is not a safe one either: Capacitor's own documentation
+   says large transfers over the bridge cause issues and points at
+   `@capacitor/file-transfer` instead. Enabling `CapacitorHttp` patches
+   `window.fetch` *globally*, which would replace this app's streaming 900 MB
+   download — the thing §3.12 exists to make survivable — with a whole-body bridge
+   transfer. That is a trade, not a fix, and it is not one to take blind.
+
+   The app already handles the browser case honestly: `networkMessage` names the
+   block, says the connection is fine, and offers the route that works — download
+   the file yourself and use Import. So this is a **capability** gap, not a defect.
+   The genuine defect would be a device that reports "could not be reached" when
+   the real answer is "the platform blocked it", and that is unproven either way.
 5. **Reroute is wired but its failure path is thin.** The app now reroutes on its
    own (§3.11), and the browser suite drives the full off-route flow. Not yet
    exercised: two consecutive failures driving the backoff to its cap *in the
@@ -1467,7 +1512,7 @@ Ordered by how much they matter.
     that should not be made without one.
 11. **The platform's font-size setting does nothing, and the navigation screen
     cannot cope when the text is large anyway.** One defect, two causes — see
-    §12.7 and §13.5. Detection ships; the banner-stack lower bound ships and is
+    §12.7 and §13.8. Detection ships; the banner-stack lower bound ships and is
     re-measured; the layout that responds to it does not. **This is the largest
     single piece of work left in the app**, and the `rem` conversion is the fix.
 12. **`RoadGraph.regionOf` is a merged-graph-only field that the persistence
@@ -1564,7 +1609,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 904 unit tests
+npm test             # 918 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -1652,7 +1697,7 @@ than by planning, and those found more than the plan did.
 | 11 | ETA readout: monotone, and `0 m` means arrived | req #19, §7 gap 12 | **Done** (§3.17) |
 | 12 | Wire cross-region merging, behind a memory guard | req #10, §7 gap 1 | **Done** (§3.18) |
 | 13 | *Added by the crash of block 11:* gates for render-time failures | — | **Done** (§3.19) |
-| 14 | Every boundary: network, disk, service worker, request sequencing, a GPS fix | req #19, §7 gaps 11–18 | **Seven closed; the layout half of gap 11 left open, and not attempted again** (§13) |
+| 14 | Every boundary: network, disk, service worker, request sequencing, a GPS fix | req #19, §7 gaps 11–18 | **Nine closed; the layout half of gap 11 left open, and not attempted again** (§13) |
 
 Block 14 was also not planned. It came from a single question applied to every
 place this app meets something it does not control — *what does this do when the
@@ -1993,7 +2038,7 @@ anything is interactive.
 
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files**, and the boundary pass to
-> **904 across 41** — see §11, §12 and §13. The figures above are left as written
+> **918 across 43** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
@@ -2623,7 +2668,7 @@ something it does not control — a network, a disk, a service worker, two
 overlapping requests, a GPS fix — and asked one question of each: *what does this
 do when the thing on the other side goes wrong?*
 
-Seven defects, plus two smaller ones. Three are corrections to claims this
+Nine defects. Three are corrections to claims this
 document has been carrying, which is the more interesting half: two were wrong
 about a mechanism, and one was wrong about code that does not exist in the state
 it was described.
@@ -2929,7 +2974,62 @@ button. Two downloads of *different* regions can still run concurrently, and tha
 deliberate — downloading two provinces at once is a reasonable thing to want, and
 each now has its own row and its own cancellation.
 
-### 13.11 What this pass also closed
+### 13.11 A catalogue row was 1139dp against a nominal 116dp
+
+`§3.19` deferred this with an estimate: *"repeats an unavailable entry's reason as a
+multi-line red paragraph that balloons the row to ~365dp at 412dp; row height is nominally
+116dp. Fold the reason into one line and expand on demand."*
+
+Measured rather than assumed, with every catalogue probe answered deterministically (a
+500) so the number does not depend on the network:
+
+| | recorded | measured |
+|---|---|---|
+| row height at 412dp | ~365dp | **1139dp** |
+| the reason alone | — | **868dp** |
+| same row at 1280dp | — | 255dp |
+
+Nearly ten times the row, sixteen times over. The screen was nothing but red paragraphs
+and the row a driver needed was in the middle of it. Measuring this against the live
+Geofabrik URLs does not work at all, because those probes are CORS-blocked (§7 gap 4), so
+whether a reason exists depends on the network — and a layout measurement that depends on
+the network is a number that will be stale.
+
+The reason is now a `<button>` carrying the whole sentence, folded to one line with
+`aria-expanded`, expandable and collapsible. A button rather than the `title` attribute
+the note might have suggested, because §11.2's entire finding is that a `title` is
+unreachable on the only kind of device this app has. Result: **1139dp → 299dp**, and the
+reason one line.
+
+299 rather than 116 is the row's real content — four text lines (name, size and country,
+URL, reason) at this type scale — so that part is layout, not ballooning.
+
+### 13.12 The screen could stay undecided forever, and look like a hang
+
+The e2e gate I added in §13.7 failed roughly one run in four. The obvious reading is
+"slow network, raise the budget", which §12.8 explicitly warns against. Instrumenting the
+probe instead showed it takes **12.2 s, 18.2 s and 40.0 s** on three consecutive runs of the
+same build against the same network — the 40 s being the worst case the app can already
+produce: 16 entries, 4 at a time, each burning its full 10 s deadline.
+
+The real defect is one level up. **Every individual probe was bounded; the screen was
+not.** And because `setAvailability` is called once, after every worker finishes, the rows
+are *atomic*: a probe that took 95 s showed sixteen "Checking…" and zero decided rows. On
+screen that is indistinguishable from a probe that has hung, which is exactly what the
+suite reported.
+
+So the screen now stops waiting for stragglers after 75 s — derived from the catalogue
+size and the per-probe deadline, not chosen — and reports whatever the deadline caught as
+unavailable *with a reason*, because "we do not know" must not become "yes, you can
+download this", and a row with no verdict is the one state the screen cannot represent.
+The gate's budget then follows from the app's own bound rather than being tuned.
+
+Four consecutive e2e runs green afterwards. Worth recording that the *gate* was the
+symptom and the *product* was the defect: a driver looking at sixteen "Checking…" rows
+had been told nothing, and no test in the project asserted that the screen ever reaches a
+verdict.
+
+### 13.13 What this pass also closed
 
 - **A tile-host failure substituted the map style silently.** Correct
   degradation, no sentence anywhere. `MapView` now reports the style it actually
@@ -2959,6 +3059,8 @@ each now has its own row and its own cancellation.
 | An e2e check counted a slow network as a missing UI control | Structural count, with probe settling as its own claim. §13.7 |
 | The reflow probe measured `data-textsize="normal"` at 200% and clipped children as overlaps | It waits for the attribute and measures visible rects. §13.8 |
 | Two concurrent downloads shared one `AbortController`: the first was uncancellable and either could wipe the other's progress row | A handle per region, released only by its owner. §13.10 |
+| A catalogue row ballooned to **1139dp** against a nominal 116dp, one line per reason paragraph | One line, expandable, reachable without a mouse. §13.11 |
+| The Regions screen could show sixteen "Checking…" rows indefinitely, and looked identical to a hang | Bounded at 75 s, derived; every entry reaches a verdict with a reason. §13.12 |
 
 ---
 

@@ -135,6 +135,22 @@ export function RegionsScreen(props: RegionsScreenProps) {
    * "Unavailable" with no explanation and nothing the user could act on.
    */
   const [unavailableReason, setUnavailableReason] = useState<Record<string, string>>({});
+  /**
+   * Catalogue rows whose reason is expanded past one line.
+   *
+   * The reasons are long sentences — the failure text names the URL, the HTTP
+   * status and what to try instead — and a row is 116dp by design. Printing one
+   * in full at 20px in a 412dp column measured **1139dp**, nearly ten times the
+   * row: sixteen such rows is a screen of nothing but red paragraphs, and the one
+   * row a driver needed was somewhere in the middle of it.
+   *
+   * Folded to a single line, with the expansion on demand rather than on a `title`
+   * attribute, because §11.2's whole finding is that a `title` is unreachable on
+   * a touch device. The row's own `aria-label` carries the same sentence, so the
+   * reason is still announced either way — this is about the *layout*, not about
+   * reachability.
+   */
+  const [expandedReason, setExpandedReason] = useState<ReadonlySet<string>>(() => new Set());
 
   const groups = catalogByCountry();
 
@@ -291,36 +307,69 @@ export function RegionsScreen(props: RegionsScreenProps) {
     let cancelled = false;
     const CONCURRENCY = 4;
     const PROBE_TIMEOUT_MS = 10_000;
+    /**
+     * How long the whole screen may stay undecided.
+     *
+     * Every individual probe is bounded, but the *screen* was not. Sixteen entries
+     * four at a time, each burning its full 10 s deadline, is 40 s of "Checking…"
+     * before the first row says anything — measured at 12.2 s, 18.2 s and 40.0 s on
+     * three consecutive runs of the same build against the same network. And
+     * because `setAvailability` is called once, after every worker finishes, the
+     * rows are *atomic*: a slow run shows sixteen "Checking…" and not one decided
+     * row, which is indistinguishable on screen from a probe that has hung.
+     *
+     * So the screen now stops waiting for stragglers and says what it knows. The
+     * bound is derived, not chosen: the worst case this app can already produce is
+     * 16 entries / 4 concurrent x 10 s, and this allows for a second request per
+     * entry (`checkRegionAvailable` falls back to a one-byte ranged GET when HEAD
+     * fails) plus a batch of latency, which is the shape of the slow runs.
+     */
+    const OVERALL_TIMEOUT_MS = 75_000;
     void (async () => {
       const entries = catalogByCountry().flatMap((g) => g.entries);
       const results: Array<readonly [string, Awaited<ReturnType<typeof checkRegionAvailable>>]> = [];
       // A simple worker pool rather than a batched chunk: a slow probe holds one
       // slot, not the whole batch behind it.
       let next = 0;
-      await Promise.all(
-        Array.from({ length: Math.min(CONCURRENCY, entries.length) }, async () => {
-          while (!cancelled) {
-            const i = next++;
-            if (i >= entries.length) return;
-            const entry = entries[i];
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
-            try {
-              results.push([entry.id, await checkRegionAvailable(entry, { signal: ctrl.signal })]);
-            } catch {
-              // A probe that timed out is simply "not available", which is what
-              // the row will say — with the reason, from `unavailableReason`.
-              results.push([entry.id, {
-                ok: false, status: 0, bytes: null, resumable: false,
-                etag: null, modified: null, error: 'No response in 10 s',
-              } satisfies Availability]);
-            } finally {
-              clearTimeout(timer);
+      await Promise.race([
+        Promise.all(
+          Array.from({ length: Math.min(CONCURRENCY, entries.length) }, async () => {
+            while (!cancelled) {
+              const i = next++;
+              if (i >= entries.length) return;
+              const entry = entries[i];
+              const ctrl = new AbortController();
+              const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
+              try {
+                results.push([entry.id, await checkRegionAvailable(entry, { signal: ctrl.signal })]);
+              } catch {
+                // A probe that timed out is simply "not available", which is what
+                // the row will say — with the reason, from `unavailableReason`.
+                results.push([entry.id, {
+                  ok: false, status: 0, bytes: null, resumable: false,
+                  etag: null, modified: null, error: 'No response in 10 s',
+                } satisfies Availability]);
+              } finally {
+                clearTimeout(timer);
+              }
             }
-          }
-        }),
-      );
+          }),
+        ),
+        new Promise<void>((resolve) => setTimeout(resolve, OVERALL_TIMEOUT_MS)),
+      ]);
       if (cancelled) return;
+      // Whatever the deadline caught mid-flight is reported as unknown rather than
+      // left pending. Silently dropping it would show a row with no verdict at all,
+      // which is the one state the screen cannot represent.
+      const seen = new Set(results.map(([id]) => id));
+      for (const entry of entries) {
+        if (seen.has(entry.id)) continue;
+        results.push([entry.id, {
+          ok: false, status: 0, bytes: null, resumable: false,
+          etag: null, modified: null,
+          error: `No answer within ${Math.round(OVERALL_TIMEOUT_MS / 1000)} s of opening this screen`,
+        } satisfies Availability]);
+      }
       setAvailability(Object.fromEntries(results.map(([id, r]) => [id, r.ok])));
       setUnavailableReason(Object.fromEntries(
         results.filter(([, r]) => !r.ok && r.error).map(([id, r]) => [id, r.error as string]),
@@ -710,9 +759,39 @@ export function RegionsScreen(props: RegionsScreenProps) {
                     </span>
                     <span className="truncate" style={{ ...T.sub2, color: ink.tertiary }} title={e.pbfUrl}>{e.pbfUrl}</span>
                     {/* The reason, on screen. A `title` is unreachable on a
-                        touch device, which is the only kind this app has. */}
+                        touch device, which is the only kind this app has — so it is
+                        printed here, folded to one line, and expanded on request
+                        rather than on hover. */}
                     {unavailableReason[e.id] && (
-                      <span className="unavailable-reason">{unavailableReason[e.id]}</span>
+                      <>
+                        <button
+                          type="button"
+                          className="unavailable-reason"
+                          aria-expanded={expandedReason.has(e.id)}
+                          onClick={() => setExpandedReason((cur) => {
+                            const next = new Set(cur);
+                            if (next.has(e.id)) next.delete(e.id); else next.add(e.id);
+                            return next;
+                          })}
+                        >
+                          <span className={expandedReason.has(e.id) ? 'unavailable-reason-text' : 'truncate'}>
+                            {unavailableReason[e.id]}
+                          </span>
+                        </button>
+                        {expandedReason.has(e.id) && (
+                          <button
+                            type="button"
+                            className="reason-collapse"
+                            onClick={() => setExpandedReason((cur) => {
+                              const next = new Set(cur);
+                              next.delete(e.id);
+                              return next;
+                            })}
+                          >
+                            Hide reason
+                          </button>
+                        )}
+                      </>
                     )}
                   </span>
                   <span className="region-actions">
