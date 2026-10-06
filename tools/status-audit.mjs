@@ -136,6 +136,50 @@ if (listed.length !== onDisk.length) {
   problems.push(`§2 breakdown lists ${listed.length} spec files, disk has ${onDisk.length}`);
 }
 
+/* ---------------------- §2 breakdown counts vs disk ---------------------- */
+
+/**
+ * Each spec file's row in the §2 breakdown, against the run.
+ *
+ * The table says its counts come from `vitest --reporter=json` rather than being
+ * retyped. That is only true if something checks it, and until now nothing did —
+ * the file-name column was compared against `test/` but the number beside it was
+ * taken on trust, which is the part that goes stale.
+ *
+ * `npm test` would mean running the whole suite inside a check whose job is to be
+ * cheap, so the report is used when one is present and skipped when it is not, with
+ * that stated in the output rather than passing silently.
+ */
+const reportPath = process.env.VITEST_JSON ?? '/tmp/canopy-vitest.json';
+let ranSuite = false;
+if (existsSync(reportPath)) {
+  ranSuite = true;
+  const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+  const actual = {};
+  for (const file of report.testResults) {
+    const name = file.name.replace(/.*\//, '');
+    actual[name] = (actual[name] ?? 0) + (file.assertionResults ?? []).length;
+  }
+  for (const m of doc.matchAll(/^\| `([\w.-]+\.spec\.ts)` \| (\d+) \|/gm)) {
+    const [, f, claimed] = m;
+    if (actual[f] === undefined) continue;   // already reported as missing from disk
+    if (actual[f] !== Number(claimed)) {
+      problems.push(`§2 breakdown counts ${f} at ${claimed}, the run has ${actual[f]}`);
+    }
+  }
+  const sum = Object.values(actual).reduce((a, b) => a + b, 0);
+  // Every phrasing this file uses for the current total, so a re-derivation in one
+  // place cannot leave another claiming a different number.
+  const statedTotals = [
+    ...stated(/\*\*(\d{3}) unit tests across \d+ files\*\*/g),
+    ...stated(/\*\*\d+ files, (\d{3}) tests\*\*/g),
+    ...stated(/\*\*(\d{3}) passing\*\*/g),
+  ];
+  for (const t of statedTotals) {
+    if (Number(t) !== sum) problems.push(`§2 states ${t} unit tests in total, the run has ${sum}`);
+  }
+}
+
 /* --------------------------- browser counts --------------------------- */
 
 /**
@@ -249,6 +293,10 @@ for (const m of doc.matchAll(/(\d+) checks × (\d+) viewports = (\d+)/g)) {
 /* ------------------------------- report ------------------------------- */
 
 console.log(`STATUS.md audit: ${listed.length} spec files listed, §7 gap list ends at ${maxGap}`);
+if (!ranSuite) {
+  console.log('per-file test counts NOT checked — no vitest JSON report found.');
+  console.log('  to include them: VITEST_JSON=/tmp/r.json npx vitest run --reporter=json');
+}
 if (problems.length === 0) {
   console.log('all checks passed');
   process.exit(0);

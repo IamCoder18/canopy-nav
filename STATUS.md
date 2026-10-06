@@ -24,6 +24,13 @@ with **fully offline OpenStreetMap routing**.
 Each pass also had to fix defects **it introduced**, which are recorded in §11.5, §12.8 and
 §13.6 rather than quietly corrected.
 
+**The pass that dominated §13 was not the defects it closed but the four measurements it
+found were wrong** — §13.16. Three made the app look worse than it is and one made it look
+better, and in every case the probe was measuring something other than the thing it named.
+A boundary bug is one that stays quiet at a boundary, and so is a test that stays green
+because it was never really testing: both are found by asking what the check actually
+evaluated, which a pass or fail result does not tell you.
+
 ---
 
 ## Table of contents
@@ -1455,7 +1462,7 @@ tools/reflow.mjs        343 chrome overlap at 100/175/200% text (§13.8) — a
 tools/focus.mjs         297 15 keyboard/focus checks in a real browser (§11)
 tools/shots.mjs         195 screenshot every screen + computed styles (§11)
 tools/sw-shellcheck.mjs  99 offline boot after a captive portal (§13.3) — a gate
-tools/status-audit.mjs   257 STATUS.md checked against the files it describes
+tools/status-audit.mjs   305 STATUS.md checked against the files it describes
 tools/diag-route.mjs     55 throwaway used to read a failing e2e check (§3.19)
 ```
 
@@ -1677,6 +1684,8 @@ npm run focus        # 15 keyboard and focus checks in a real browser
 npm run swshell      # offline boot after a captive portal (a gate)
 npm run reflow       # large-text reflow — a DIAGNOSTIC, it fails (§13.9)
 npm run status       # STATUS.md checked against disk
+# with per-file test counts, feed it a real run:
+VITEST_JSON=/tmp/r.json npx vitest run --reporter=json && VITEST_JSON=/tmp/r.json npm run status
 npm run serve        # LAN server for on-device testing (see below)
 ```
 
