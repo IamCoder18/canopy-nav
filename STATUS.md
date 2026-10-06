@@ -5,11 +5,21 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v0.11.3 (APK attached); main is ahead with §3.11.1, §4.1, §4.6–4.8, and
-§3.17–3.18. **Requirement #10 is now implemented** — cross-region routing merges the extracts
-rather than stitching them at a bounding-box midpoint (§3.18), and §3.5.2's correction is
-superseded. §3.17 closes the ETA gap that this document called the most dangerous readout in
-the app.
+**Latest release:** v0.11.3 (APK attached). Main is ahead by four passes, each recorded below:
+
+- **§3.17–3.18** — §3.17 closes the ETA gap this document once called the most dangerous
+  readout in the app. **Requirement #10 is implemented**: cross-region routing merges the
+  extracts rather than stitching them at a bounding-box midpoint (§3.18), superseding
+  §3.5.2's correction.
+- **§10** — the audit pass: the service worker, real voice, attribution, and ~20 defects
+  found by agents reading the built app in Chromium.
+- **§11** — the third pass: focus and announcements, which turned out to be missing almost
+  entirely, plus six contrast ratios measured against Google's published automotive numbers.
+- **§12** — the engine audit: a priority queue that was not a heap, a parser that could hang
+  an import forever, and four leaks.
+
+Each pass also had to fix defects **it introduced**, which are recorded in §11.5 and §12.8
+rather than quietly corrected.
 
 ---
 
@@ -27,6 +37,10 @@ the app.
 9. [The plan, and what happened to it](#9-the-plan-and-what-happened-to-it)
 10. [The audit pass](#10-the-audit-pass)
    — [claims that were false](#101-claims-that-were-false)
+11. [The third pass: what a driver actually gets](#11-the-third-pass-what-a-driver-actually-gets)
+   — [measured against the published numbers](#114-measured-against-the-published-numbers)
+12. [The engine audit](#12-the-engine-audit)
+   — [a priority queue that was not a heap](#121-a-priority-queue-that-was-not-a-heap)
 
 ---
 
@@ -53,7 +67,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 702 unit tests across 30 files, plus 2 browser suites | `test/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 828 unit tests across 38 files, plus 5 browser suites | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -1268,7 +1282,10 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx                2873  screens, navigation state, keyboard shortcuts
+  App.tsx                3832  screens, navigation state, focus + announcements,
+                               keyboard shortcuts, Home/Work places
+  textscale.ts             92  detects the platform's font scale (§12.7)
+  errors.ts                67  describeError: a message for any thrown value
   theme.ts                177  AAOS design tokens (colour, type, layout, shape)
   icons.tsx               345  29 maneuver kinds + system icons, hand-drawn SVG
   geo.ts                  272  polyline codec, haversine, formatting, snapping,
@@ -1297,22 +1314,27 @@ src/
     maneuver.ts            85  Valhalla maneuver codes -> icons
 
   map/
-    MapView.tsx           330  MapLibre view, tile/offline style switch
+    MapView.tsx           471  MapLibre view, tile/offline style switch
     style.ts              520  Google palette, tile remap, offline LOD style
 
   regions/
-    RegionsScreen.tsx     548  manage, catalogue, cross-region route test
-    store.ts              265  RegionLibrary singleton, per-region workers
-    persist.ts            615  IndexedDB caching of parsed datasets
+    RegionsScreen.tsx     864  manage, catalogue, cross-region route test
+    store.ts              285  RegionLibrary singleton, per-region workers
+    persist.ts            650  IndexedDB caching of parsed datasets
     download.ts          1317  streaming downloader
 
-test/            792 unit tests, 36 files
-test/e2e.mjs           44 browser checks, built bundle
+test/            828 unit tests, 38 files
+test/e2e.mjs           40 browser checks, built bundle
 test/screens.mjs        53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        XML -> PBF encoder (builds the test fixtures;
                             extract slicing is done by osmium on a desktop)
 tools/serve.mjs         LAN static server for on-device manual testing
 tools/diag-route.mjs    throwaway used to read a failing e2e check (§3.19)
+tools/focus.mjs         17 keyboard/focus checks in a real browser (§11)
+tools/shots.mjs         screenshot every screen + computed styles (§11)
+tools/reflow.mjs        chrome overlap at 100/175/200% text (§12.7) — a
+                            diagnostic, NOT a gate: it fails, and a gate that
+                            always fails is one people learn to ignore
 ```
 
 `App.tsx` at 2873 lines is the largest file in the project and is now the main obstacle to
@@ -1384,6 +1406,39 @@ Ordered by how much they matter.
     meaningful for merged graphs (§3.5.2). Reachable now that the app can build a
     merged graph, but the bytes are still wasted on single-region entries.
 
+Added by the engine audit (§12). Each is written up in §12.6; they are listed here
+because a gap that lives only in the section that found it is a gap that gets
+forgotten.
+
+13. **The platform's font-size setting does nothing, and the navigation screen
+    cannot cope when the text is large anyway.** One defect, two causes — see
+    §12.7. The setting reaches a WebView by scaling the root font size, and every
+    token here emits an absolute `px`. At 200% text, measured:
+    `tools/reflow.mjs` finds the banner stack and the off-route notice
+    intersecting the bottom bar and seven chrome labels clipped. **The
+    instruction — the only thing on that screen — is unreadable.** Half the layout
+    fix ships; the control column's does not, because writing it made that column
+    worse. The `rem` conversion is the real fix.
+14. **The reroute has no cancellation, and `doRoute` has no request sequencing.**
+    Pressing Exit mid-reroute lets the abandoned response install a route and
+    writes its outcome onto freshly reset state. Two overlapping route requests
+    can show destination A's line under destination B's label, and the first
+    `finally` clears the spinner while the second is still running.
+15. **A poisoned `.part` file is permanent, and an out-of-memory base64 decode
+    deletes the user's partial download.** `readBinary` returns `null` on failure
+    and `resumeFrom` reads that as "no partial file", so an OOM on a 620 MB
+    province silently restarts a transfer that had already transferred most of it.
+16. **A truncated response makes the ETA read "NaN hr NaN min"** and the off-route
+    tracker see `dist: Infinity`, which is a permanent reroute loop.
+    `decodePolyline` manufactures `[NaN, NaN]` from a cut polyline.
+17. **The service worker can cache a captive portal's login page as the app
+    shell**, after which the app never boots offline again. Strictly worse than
+    the `ERR_INTERNET_DISCONNECTED` page §10 was written to fix, and the same
+    class of defect — an unhandled failure state.
+18. **The stale-position guard refuses to reroute a driver moving *away* from the
+    destination** — which is what missing an exit looks like. The banner says
+    "waiting for a position update" while positions arrive perfectly well.
+
 ### Closed in the §3.17–3.19 pass
 
 | Was gap | Now |
@@ -1392,6 +1447,20 @@ Ordered by how much they matter.
 | `merge.ts` was 318 lines of dead code plus ~800 lines of unreachable tests | Called by `RegionLibrary.route()`; requirement #10 implemented |
 | The ETA could read `0 m` while route remained, and increase while driving forwards (§7 gap 12, "the most dangerous readout in the app") | Three properties as pure policy, asserted as properties. §3.17 |
 | A `useMemo` closing over a later-declared ref broke the whole app with all 747 unit tests green | `test/tdz.spec.ts` and `test/app-render.spec.ts`. §3.19 |
+
+### Closed by the engine audit (§12)
+
+| Was | Now |
+|---|---|
+| **The A\* priority queue was not a heap.** One priority slot per *node*, and A\* pushes a node once per relaxation — so the stale entry compared as the re-priced one, `pop()` stopped returning the minimum, and the optimality guarantee was void. The default engine. | Priorities travel with their entry. `test/minheap.spec.ts` asserts the invariant **and keeps the broken implementation in the file asserting it does not pass**. §12.1 |
+| **A crashed parser hung the import forever.** `onerror` logged and returned, so an OOM on a 900 MB extract left `buildPromise` pending: no error, no retry, no way out but force-quitting. | `onerror`, `onmessageerror` and `dispose()` all settle the build through one helper, and take the progress card down. §12.2 |
+| **The banner said "In 0 m, turn left onto a road already turned onto"** for the whole final leg — `?? active` is a maneuver *behind* the driver, so the measured leg collapsed to a single point. | Falls back to the last leg, which measures to the destination vertex. §12.3 |
+| **A stored record missing `counts` crashed the app on launch**, in a `useState` initialiser during render, with no Settings screen to recover from | Validated on read like every sibling field. Verified to fail without the fix. §12.4 |
+| The GPS watch was never cleared — the receiver stayed hot for the life of the WebView | `clearWatch` on the captured id. §12.5 |
+| `speak()` latched its dedup key before calling the platform, so a WebView with no TTS engine swallowed every instruction once and never retried, while the button read "Mute" | The key is released on failure. §12.5 |
+| `DEFAULT_ENGINE_IDS` listed three ids that do not exist, so any caller relying on it silently reverted a saved hosted engine to `local` | The real ids. §12.5 |
+| A blank place label round-tripped as lowercase `"home"` | Capitalised fallback, matching `readPlaces`. §12.5 |
+| The platform's font setting did nothing, and the navigation screen overlapped itself when the text was large | **Half.** Detection ships; the banner-stack fix ships and is re-measured; the control column's does not, because it made that column worse. §12.7, §7 gap 13 |
 
 ### Closed by the third pass (§11)
 
@@ -1455,8 +1524,8 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 702 unit tests
-npm run e2e          # 39 browser checks against the built bundle
+npm test             # 828 unit tests
+npm run e2e          # 40 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
 npm run sync         # build, clear android assets, cap sync
@@ -1873,6 +1942,11 @@ MapLibre and the region manager are `React.lazy`. Neither is needed to render th
 first frame, and the entry chunk is parsed on a phone's main thread before
 anything is interactive.
 
+> These are the numbers as of §10. Two further passes added work and, in the
+> engine audit, took the total to **828 across 38 files** — see §11 and §12. The
+> figures above are left as written because §10.4 is a record of what that pass
+> changed, and editing them would make it a record of something else.
+
 ### 10.5 Everything the audits changed, and everything they left
 
 The audits produced 8 written reports (two of ten agents timed out; both were
@@ -2094,8 +2168,9 @@ knowing about the previous five.
 ### 11.7 What the new gates are
 
 ```bash
-npm run focus   # 13 keyboard and focus checks in a real browser
+npm run focus   # 17 keyboard and focus checks in a real browser
 npm run shots   # every screen, 3 viewports, computed styles recorded
+npm run reflow  # chrome overlap at 100% / 175% / 200% text  (a diagnostic, not a gate)
 ```
 
 `shots.mjs` writes the *computed* style of named elements beside the image, so a
@@ -2106,7 +2181,9 @@ is wider than its box, which is the commonest polish defect and the least visibl
 in a screenshot.
 
 `test/audit-regressions.spec.ts` holds 25 source-level guards for the defects
-above, each verified to fail when its defect is reintroduced. It strips comments
+above, each verified to fail when its defect is reintroduced (the mute shortcut,
+the orphaned CSS declarations and the padding-shorthand rule were all put back
+deliberately to confirm the gates bit). It strips comments
 and string literals before matching, because several of these files quote the old
 code in the note explaining the fix — a test that fails on a correct file trains
 people to delete the explanation.
@@ -2192,6 +2269,286 @@ people to delete the explanation.
 
 None of the remaining items blocks ordinary use at the design system's own type
 sizes.
+
+---
+
+## 12. The engine audit
+
+§11 audited the interface. This one went back to the engine and its supporting
+modules — the graph, the worker, the queue, the persistence layer — and found
+nine live defects. Three of them are serious enough to lead with, and all three
+share a property that is worth naming: **each was invisible to every existing
+gate, and each was invisible to the driver too.**
+
+---
+
+### 12.1 A priority queue that was not a heap
+
+`MinHeap` in `osm/engine.worker.ts` stored its priorities in a `Float64Array`
+indexed by **node id** — one slot per node, shared by every entry for that node:
+
+```ts
+private p: Float64Array;
+constructor(n: number) { this.p = new Float64Array(n); }
+push(node: number, pri: number) {
+  this.p[node] = pri;      // <-- overwrites the previous entry's priority
+  this.a.push(node);
+  ...
+}
+```
+
+A\* pushes a node once per relaxation, so the sequence the search actually
+performs is:
+
+```
+push(X, 100)   // p[X] = 100,  heap holds (X, 100)
+push(X,  50)   // p[X] =  50,  heap holds (X, 100) and (X, 50)
+```
+
+Every comparison in `sift-up` and `sift-down` reads through `p[node]`, so the
+stale entry at 100 now **compares as 50**. The array is no longer ordered by the
+priority it will report, `pop()` does not return the minimum, and A\*'s expansion
+order is invalid.
+
+That voids the optimality guarantee the heuristic directly above it is explicitly
+built to preserve. The engine is the app's **default** — it is what
+`DEFAULT_SELECTION` selects and what an offline driver always gets — so the
+practical effect was the difference between a shortest path and a merely plausible
+one, on any network where a node is re-relaxed. That is to say on essentially all
+of them.
+
+**Nothing detected it.** A suboptimal route is still a route: still drawn, still
+plausible, still arriving at the destination. It is wrong by a few percent and
+looks correct. Neither the unit suite nor the 40 browser checks route far enough
+for the difference to show, and no test asserted optimality — the suite asserted
+that a route *exists*.
+
+Fixed by giving each entry its own priority in two parallel arrays, so each
+travels with its node through every swap.
+
+`test/minheap.spec.ts` asserts the invariant directly, and — this is the part that
+matters — **keeps the broken implementation in the file and asserts that it does
+not pass.** A guard nobody has seen fail is not a guard. That is the ninth time
+this project has written that sentence down, and the ninth time it has been the
+reason a defect was caught rather than shipped.
+
+One honest note on writing it: the first version of the third test asserted that
+the popped *node sequence* matched a stable sort. It failed, and the failure was
+not a heap bug — a heap makes no promise about the order of equal-priority
+entries. The test now asserts what is actually specified: priorities come out
+**non-decreasing**, and every entry pushed is popped exactly once. Asking for more
+than the structure promises produces a red that looks like a defect and is not.
+
+---
+
+### 12.2 A parser that could hang forever
+
+`OsmEngine`'s worker error handler logged and returned:
+
+```ts
+this.worker.onerror = (e) => { console.error('OSM worker error', e); };
+```
+
+Every failure that arrives as a **worker-level** error rather than as a
+`postMessage` therefore left `buildPromise` pending forever:
+
+| Failure | How it arrives |
+|---|---|
+| A throw during the worker's module initialisation | `onerror` |
+| An OOM on a 900 MB parse | `onerror` — in a Worker this is not a catchable exception |
+| The worker's own chunk failing to load | `onerror` |
+
+`importRegionFile` awaits `engine.build(file)`. So nothing returned, `onError`
+never fired, `onProgress(null)` never fired, the previously-loaded region was
+never restored (`store.ts` restores it in a branch that was unreachable), and the
+user's only recourse was force-quitting. The progress card sat at whatever stage
+it had reached — usually "Reading extract, 0%" — with no error and no retry.
+
+**An error that is caught and merely logged is not caught.**
+
+Two holes are now closed by one helper, so all three paths leave the same state:
+
+- `onerror` and `onmessageerror` both settle the build. The second matters for a
+  message that cannot be *deserialised*, which is also not a catchable throw in
+  the worker.
+- `dispose()` settles any in-flight build. `terminate()` does not fire `onerror`,
+  so a build interrupted by *replacing* a region hung the same way — reached by a
+  different route, with the same symptom.
+- `onProgress?.(null)` is sent on the way out, so the progress card comes down. The
+  handler's type had to admit `null` for that: it already did at the call site
+  (`store.ts` passes `BuildProgress | null`), and `null` is how the import screen
+  learns to take its card away.
+
+---
+
+### 12.3 `?? active` made the banner say "In 0 m, turn left"
+
+Still live after §11's arrival fix, as a consequence of the same line.
+
+Valhalla's last maneuver before the destination is **not** the destination
+maneuver — it is the final turn onto the destination road. So on any route with a
+real final leg (a river crossing, a motorway, "continue for 30 km"):
+
+```
+legs.slice(activeIdx + 1).find((m) => m.type !== 4)  →  undefined
+next = undefined ?? active                            →  a maneuver behind the driver
+```
+
+and then:
+
+```ts
+const leg = geometry.slice(here, Math.max(here, next.begin_shape_index) + 1);
+```
+
+`next.begin_shape_index` is behind `here`, so `Math.max` collapses to `here`, so
+`leg` is a single point, so `distToNext` is **0**. Three consequences at once:
+
+- `imminent` (`distToTurn < 40`) was true, so the instruction rendered
+  **dimmed-as-imminent** for an entire motorway;
+- the voice effect said **"In 0 m, turn left onto *a road already turned onto*`**,
+  assertively, repeatedly, for the whole final leg;
+- and the live region announced the same sentence every bucket boundary.
+
+It now falls back to the **last leg**, which measures to the destination vertex.
+That is the honest answer when there are no more turns: what remains is the rest
+of the drive. The index is also clamped to the geometry's end, so a maneuver index
+from a malformed response cannot measure from a point that does not exist.
+
+---
+
+### 12.4 A stored record missing `counts` crashed the app on launch
+
+`counts` was the one field in a stored region record that was **not** validated,
+and it is also the one field read without a guard — `counts.routable
+.toLocaleString()` on the launcher, `counts.ways` on Settings, both during render.
+
+Every sibling in `deserializeDataset` is defensively defaulted. `bbox` gets a
+degenerate-but-true box. `gaz`, `roads`, `water` and `green` each get `[]`.
+
+So a record written by an older build, or truncated by a crash mid-`put`,
+deserialised with `counts === undefined`, and `HomeScreen` threw
+`TypeError: Cannot read properties of undefined (reading 'routable')` **during the
+first render** — the top-level `ErrorBoundary`, on launch, with the message naming
+an internal field and no Settings screen to reach.
+
+The crash card's own reassurance that "your imported maps are still saved" was
+**true and useless**.
+
+The tell was in the same file: `toMeta` already defaulted `counts`. The meta
+mirror and the dataset disagreed about whether the field was trustworthy, and only
+one of them was read by a render path.
+
+`test/persist.spec.ts` now reaches past the module's own API and deletes the field
+from the record on disk — because a test that goes through the same writer it is
+testing cannot produce malformed input for it. Verified to fail without the fix.
+
+---
+
+### 12.5 Four leaks, each with a consequence
+
+None of these crash anything. Each costs something a driver would notice, or
+battery they would notice.
+
+| Leak | Consequence |
+|---|---|
+| `watchPosition`'s id was discarded, so only `cancelled` stopped the *callback* | The platform location provider stays active and the GNSS receiver stays hot for the life of the WebView. On a head unit that is a measurable battery drain — and `useLocation` takes an `enabled` flag whose entire purpose is to release the GPS on screens that do not need it. A browser StrictMode double-mount opened two watches and cleaned up one. |
+| `speak()` latched `lastKey` **before** calling the platform | A WebView exposing `speechSynthesis` with no TTS engine installed — the common Android-without-Google-TTS case — throws on every call while `isVoiceAvailable()` still reports `true`. The mute button read "Mute voice guidance", nothing was ever said, and each instruction was swallowed exactly once and never retried. That is the precise lie `voice.ts` says it exists to prevent. |
+| `DEFAULT_ENGINE_IDS` listed `'valhalla'`, `'simplerouting'`, `'custom'` | None of those are real ids — the real ones are `valhalla-fossgis`, `valhalla-simplerouting`, `valhalla-custom`. Any caller relying on the default had every saved hosted engine validated as unknown and **silently rewritten to `'local'`** on restart, with no message. `App` passes the live list, so production was never affected; the default was the trap for the next call site, and its doc comment asserted the ids matched. |
+| A place saved with a blank label fell back to `|| slot` | It round-tripped as lowercase `"home"`, because `readPlaces` only substitutes a capitalised name when the stored label is *empty* — and `"home"` is not empty. The launcher tile read "home". |
+
+---
+
+### 12.6 What this pass did not fix
+
+Recorded so they are not lost, with the same reasoning §11.9 uses: these are real,
+they were found, and finishing them properly needs more than the time this pass
+had.
+
+1. **`doRoute` has no request sequencing.** Two overlapping route requests both
+   write `route`, `provenance` and `fitNonce`, so the preview can show
+   destination A's line under destination B's label, and the first `finally`
+   clears `routing` while the second request is still outstanding. The
+   `trafficProbe` sequence-number pattern already exists in the same file for
+   exactly this.
+2. **The reroute request has no cancellation.** Pressing Exit mid-reroute lets the
+   abandoned response install a route, and its `finally` writes `finishReroute`
+   onto freshly reset state — resurrecting `status: 'failed'` for a trip that no
+   longer exists.
+3. **Two concurrent downloads clobber each other's `AbortController`,** so the
+   first becomes uncancellable and the second's progress row is overwritten.
+4. **A `.part` file poisoned by a `not-osm` rejection is never cleaned up,** so
+   every retry resumes from bad bytes. And `readBinary` returns `null` on an
+   out-of-memory base64 decode, which `resumeFrom` reads as "no partial file" and
+   therefore **deletes the user's partial download**.
+5. **`decodePolyline` manufactures `[NaN, NaN]`** from a truncated response, which
+   becomes `"NaN hr NaN min"` on the ETA bar and `dist: Infinity` in the off-route
+   tracker — a permanent reroute loop.
+6. **The service worker overwrites the precached shell with any 200,** so a
+   captive portal's login page becomes the cached `index.html` and the app can
+   never boot offline again. It is worse than the `ERR_INTERNET_DISCONNECTED` page
+   §10 was written to fix.
+7. **The stale-position guard refuses to reroute a driver who is moving *away*
+   from the destination**, which is exactly what missing an exit looks like. The
+   banner says "waiting for a position update" while positions arrive fine.
+
+---
+
+### 12.7 The reflow, shipped half
+
+The one item from §11.9 that moved, and it moved partly on purpose.
+
+`src/textscale.ts` **ships**: it measures the resolved root font size and sets
+`<html data-textsize="large">` above one documented threshold, reacts to a change
+made while the app is open, and costs one measurement when nothing moved. That
+part is correct and worth having on its own — the app no longer silently ignores a
+setting whose entire audience is the one AAOS's 24dp minimum type size exists for.
+
+The layout that responds to it is **half shipped**. The banner stack's lower bound
+works, and is measured working twice: `tools/reflow.mjs` reports
+`{"overflowY":"auto","bottom":"96px"}` and the banner stack no longer intersects
+the bottom bar.
+
+The control-column override is not there, because writing it made that column
+*worse*. The base rule's `flex-wrap: wrap` and its `max-height` mean a row
+override wraps inside the column's own 168px width and grows **upward** out of the
+viewport — `y=-296` in a 412px viewport, 604px tall, where before the change it was
+merely cramped. Reverted.
+
+`tools/reflow.mjs` is deliberately **not** in `npm run check`. It fails, and a
+gate that always fails is a gate people learn to ignore — the same conclusion §10.3
+reached about a green result nobody re-derives. It is a diagnostic;
+`styles.css` carries the measurements and this section carries the reasoning.
+
+Two things it still reports as failing, honestly: the control column, and seven
+clipped chrome labels. The labels are clipped *because* the tokens are absolute
+`px`, which is the other half of the same defect — and fixing it means `rem`.
+
+---
+
+### 12.8 On the probes themselves
+
+Both new browser harnesses reported success before they were capable of failing,
+and both were caught by asking a more basic question than "did it report green?".
+
+- `focus.mjs` checked that Tab moved focus by dispatching a synthetic
+  `KeyboardEvent` from the page. The browser's own key handling implements Tab, so
+  nothing moved and the check passed. It went through `page.keyboard.press`.
+- `reflow.mjs` scaled `:root { font-size }` and reported "chrome does not overlap
+  itself" three times over — because every token emits an absolute `px`, so the
+  stimulus never arrived. It now scales what the tokens actually render, sets the
+  attribute the way the app sets it, and verifies the attribute stuck before
+  measuring.
+
+Forcing `data-textsize` directly does not work at all: `textscale.ts` re-measures
+every two seconds and **correctly** resets it, because the root size really was
+16px. A harness that fights the app's own detection measures a state the app could
+never be in.
+
+One flaky check, recorded rather than hidden: `test/e2e.mjs`'s catalogue wait has
+failed once while the whole suite was green around it. 120s is above the probe's
+worst case (~20 entries, 4 at a time, 10s deadline each ≈ 50s), so the cause is
+probably the probe competing with the map's tile requests on a cold browser.
+Raising the number until it stopped happening would have hidden the cause.
 
 ---
 

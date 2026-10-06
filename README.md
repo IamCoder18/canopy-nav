@@ -46,7 +46,7 @@ record, including what is *not* finished.
 ```bash
 npm install
 npm run dev          # dev server
-npm test             # 821 unit tests
+npm test             # 828 unit tests
 npm run build        # typecheck + production build
 npm run serve        # LAN server, so a phone can load the built app
 ```
@@ -173,7 +173,7 @@ data, which is the honest limit of it.
 
 ```bash
 npm run check        # typecheck + lint + unit tests
-npm test             # 821 unit tests
+npm test             # 828 unit tests
 npm run lint         # type-aware ESLint, ratcheted at 27 warnings
 npm run bundle       # gzip size budget on the built output; fails on regression
 npm run e2e          # 40 browser checks against the built bundle
