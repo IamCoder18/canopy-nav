@@ -23,7 +23,8 @@
     "shots": "node tools/shots.mjs",
     "reflow": "node tools/reflow.mjs",
     "reflow:note": "node tools/reflow.mjs || true",
-    "swshell": "node tools/sw-shellcheck.mjs"
+    "swshell": "node tools/sw-shellcheck.mjs",
+    "status": "node tools/status-audit.mjs"
   },
   "engines": {
     "node": ">=20"

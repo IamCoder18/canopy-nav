@@ -90,6 +90,7 @@ stands. **Bold** = fully working and verified.
 | End-to-end | `npm run e2e` | **46 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
+| Document audit | `npm run status` | every `wc -l`, cross-reference, current total and `npm run` in this file checked against disk |
 | Offline shell | `npm run swshell` | a captive portal answered 2 navigations, then the network went off: the app still boots, 5 launcher tiles |
 | Reflow at large text | `npm run reflow` | **3 checks fail** — a diagnostic, not a gate. §12.7, §13.8 |
 | Bundle budget | `npm run bundle` | entry 112.0 kB / 130, initial 117.5 / 150, largest 282.0 / 300, total JS 417.8 / 460 (gzip) |
@@ -236,9 +237,16 @@ re-derived is a claim, not a measurement, and every one of these was found by re
 the gate rather than by reading harder.
 
 That is now mechanical rather than aspirational: the breakdown table is generated from
-`vitest --reporter=json` grouped by file, and the browser counts are counted from `PASS`
-lines of an actual run. A stale count can still be typed, but it now has to be typed
-deliberately against a table that was machine-written.
+`vitest --reporter=json` grouped by file, the browser counts are counted from `PASS`
+lines of an actual run, and `npm run status` checks the whole document against disk.
+
+**That gate exists because this file was found wrong six times**, and its limit is
+worth stating so it is not over-trusted: it checks *forms*, not *claims*. Every count
+in it has been wrong at some point while sitting in the right format. What caught
+those was re-deriving, and three of the corrections in §13 came from a measurement
+rather than from a gate — a polyline that could not produce the `NaN` it was blamed
+for, a field that was never persisted, and a "0-gap collision" that was an 8px gap.
+A check that cannot read prose for truth is worth having and is not sufficient.
 
 The sixth is the one that should have been caught by that: this revision's first pass at
 the numbers left §2 saying 904 while the table said 901, because the two were edited in
@@ -1365,7 +1373,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx                3936  screens, navigation state, focus + announcements,
+  App.tsx                3967  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts             84  detects the platform's font scale (§12.7)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
@@ -1376,7 +1384,7 @@ src/
   icons.tsx               421  29 maneuver kinds + system icons, hand-drawn SVG
   geo.ts                  352  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt
-  styles.css             2061  layout, insets, responsive rules
+  styles.css             2125  layout, insets, responsive rules
 
   osm/
     engine.worker.ts     1175  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
@@ -1391,7 +1399,7 @@ src/
     valhalla.ts           502  Valhalla /route client, response validation
     reroute.ts            394  reroute policy: when to act, backoff, banner
     providers.ts          390  provider chain, attempt trace, connectivity
-    requests.ts           112  RequestGate: one live route request at a time
+    requests.ts           107  RequestGate: one live route request at a time
     steps.ts               66  why the turn list is empty: three causes, three answers
     engines.ts            239  engine selection, readiness, provenance
     geocode.ts            231  Nominatim client, 1 req/s throttle
@@ -1408,7 +1416,7 @@ src/
 
   regions/
     download.ts          1420  streaming downloader, resume, part-file handling
-    RegionsScreen.tsx     864  manage, catalogue, cross-region route test
+    RegionsScreen.tsx     983  manage, catalogue, cross-region route test
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
@@ -1425,6 +1433,7 @@ tools/reflow.mjs        343 chrome overlap at 100/175/200% text (§13.8) — a
 tools/focus.mjs         297 17 keyboard/focus checks in a real browser (§11)
 tools/shots.mjs         195 screenshot every screen + computed styles (§11)
 tools/sw-shellcheck.mjs  99 offline boot after a captive portal (§13.3) — a gate
+tools/status-audit.mjs   148 STATUS.md checked against the files it describes
 tools/diag-route.mjs     55 throwaway used to read a failing e2e check (§3.19)
 ```
 
@@ -1439,7 +1448,10 @@ now precisely so that it is not rediscovered as if it were new.
 
 ## 7. Known gaps
 
-Ordered by how much they matter.
+Ordered by how much they matter. **This list is renumbered** — it ran to 18 in the
+previous revision and now has 12 entries, because gaps closed here were removed rather
+than left as struck-through tombstones. References elsewhere in this file to "gap 16"
+or "gap 18" are to the *old* numbering and say so; the current numbers are 1–12.
 
 1. **Never run on physical hardware.** Everything is browser-verified plus one
    Android 14 emulator. WebView behaviour, real GPS quality, SAF file import and
@@ -1566,7 +1578,7 @@ Ordered by how much they matter.
 | `speak()` latched its dedup key before calling the platform, so a WebView with no TTS engine swallowed every instruction once and never retried, while the button read "Mute" | The key is released on failure. §12.5 |
 | `DEFAULT_ENGINE_IDS` listed three ids that do not exist, so any caller relying on it silently reverted a saved hosted engine to `local` | The real ids. §12.5 |
 | A blank place label round-tripped as lowercase `"home"` | Capitalised fallback, matching `readPlaces`. §12.5 |
-| The platform's font setting did nothing, and the navigation screen overlapped itself when the text was large | **Half.** Detection ships; the banner-stack fix ships and is re-measured; the control column's does not, because it made that column worse. §12.7, §7 gap 13 |
+| The platform's font setting did nothing, and the navigation screen overlapped itself when the text was large | **Half.** Detection ships; the banner-stack fix ships and is re-measured; the control column's does not, because it made that column worse. §12.7, §7 gap 11 |
 
 ### Closed by the third pass (§11)
 
@@ -1641,6 +1653,7 @@ npm run screens      # screen coverage at 3 viewports
 npm run focus        # 15 keyboard and focus checks in a real browser
 npm run swshell      # offline boot after a captive portal (a gate)
 npm run reflow       # large-text reflow — a DIAGNOSTIC, it fails (§13.9)
+npm run status       # STATUS.md checked against disk
 npm run serve        # LAN server for on-device testing (see below)
 ```
 
@@ -1718,7 +1731,7 @@ than by planning, and those found more than the plan did.
 | 11 | ETA readout: monotone, and `0 m` means arrived | req #19, §7 gap 12 | **Done** (§3.17) |
 | 12 | Wire cross-region merging, behind a memory guard | req #10, §7 gap 1 | **Done** (§3.18) |
 | 13 | *Added by the crash of block 11:* gates for render-time failures | — | **Done** (§3.19) |
-| 14 | Every boundary: network, disk, service worker, request sequencing, a GPS fix | req #19, §7 gaps 11–18 | **Eleven closed; the layout half of gap 11 left open, and not attempted again** (§13) |
+| 14 | Every boundary: network, disk, service worker, request sequencing, a GPS fix | req #19, §7 gaps 11–18 *(the previous numbering; the list is now 1–12)* | **Eleven closed; the layout half of gap 11 left open, and not attempted again** (§13) |
 
 Block 14 was also not planned. It came from a single question applied to every
 place this app meets something it does not control — *what does this do when the
@@ -2039,6 +2052,7 @@ were actually fetched.
 | Settings | `test/settings.spec.ts` | Every setting round-trips; a malformed endpoint is not "Ready" |
 | XML safety | `test/xmlentities.spec.ts` | Entity expansion is structurally impossible; hostile documents terminate |
 | Crash safety | `test/errorboundary.spec.ts` | A render throw shows a recovery card rather than a blank screen |
+| Document | `npm run status` | Every line count, cross-reference, current total and `npm run` in this file, checked against the files it describes |
 
 The bundle budget and the lint ratchet are both *ratchets*: raising a number is a
 deliberate edit to a file, not drift. That is the same reasoning as the screen
@@ -2058,7 +2072,8 @@ first frame, and the entry chunk is parsed on a phone's main thread before
 anything is interactive.
 
 > These are the numbers as of §10. Two further passes added work and, in the
-> engine audit, took the total to **828 across 38 files**, and the boundary pass to
+> engine audit, took the total to **828 across 38 files** (the figures as of that
+> revision), and the boundary pass to
 > **927 across 44** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
@@ -2702,7 +2717,8 @@ it was described.
 
 ### 13.1 A truncated polyline decoded to a plausible, wrong destination
 
-`§7 gap 16` and `§12.6` item 5 both recorded: *"A truncated response makes the ETA
+`§7 gap 16` in the *previous* numbering (there is no gap 16 now — the list is
+renumbered and this one is closed) and `§12.6` item 5 both recorded: *"A truncated response makes the ETA
 read `NaN hr NaN min` … `decodePolyline` manufactures `[NaN, NaN]`"*.
 
 **The symptom is real. The mechanism is not.** Measured, before changing anything:
@@ -2837,7 +2853,8 @@ cosmetic thing it actually is.
 
 ### 13.5 The stale-position guard was refusing the driver it existed to help
 
-`§7 gap 18`: *"The stale-position guard refuses to reroute a driver moving away
+`§7 gap 18` in the previous numbering — renumbered since, and closed by this
+section — recorded: *"The stale-position guard refuses to reroute a driver moving away
 from the destination — which is what missing an exit looks like. The banner says
 'waiting for a position update' while positions arrive perfectly well."*
 
