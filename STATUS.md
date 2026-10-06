@@ -20,16 +20,20 @@ with **fully offline OpenStreetMap routing**.
 - **§13** — the boundary pass: everything that crosses a boundary — a network, a disk, a
   service worker, two overlapping requests, a GPS fix — and refuses to be wrong quietly.
   Eleven defects, **three of them corrections to claims this document had been carrying**.
-- **§14** — the type-scale pass: the last layout defect, and the one four passes had
-  ranked by a measurement that was measuring the wrong thing. Leading was a length and
-  did not scale; the bars' heights were constants nobody measured; and a warning about
-  being lost was invisible at ordinary text sizes.
+  §14 closes a twelfth and a thirteenth, and corrects two more claims of this document's
+  own — one of them the premise the largest gap in it rested on.
+- **§14** — the type-scale pass. Leading was a length and did not scale; the bars'
+  heights were constants nobody measured; a warning about being lost was invisible at
+  ordinary text sizes; and the detector that was supposed to notice large text watched
+  the one value the platform never changes. Along the way it **struck the largest gap in
+  this document**, because the premise underneath it is contradicted by Chromium's own
+  WebView documentation.
 
 Each pass also had to fix defects **it introduced**, which are recorded in §11.5, §12.8 and
 §13.6 rather than quietly corrected.
 
 **The last two passes were both about measurements, and not in the way they were
-expected to be.** §13 found five probes measuring something other than what they named,
+expected to be.** §13 found six probes measuring something other than what they named,
 and §14 found that the "five clipped labels" this document had ranked its largest gap by
 were five line boxes shorter than their own glyphs — a defect with a one-line cause that
 four passes of reading had not suspected, because the probe's name for it was accurate
@@ -67,7 +71,7 @@ evaluated, which a pass or fail result does not tell you.
    — [a priority queue that was not a heap](#121-a-priority-queue-that-was-not-a-heap)
 13. [The boundary pass](#13-the-boundary-pass)
    — [two more claims this document was carrying, and a third](#132-two-more-claims-this-document-was-carrying-and-a-third)
-   — [five probes measured something other than what they named](#1316-five-probes-measured-something-other-than-what-they-named)
+   — [six probes measured something other than what they named](#1316-six-probes-measured-something-other-than-what-they-named)
 14. [The type-scale pass: the last layout defect](#14-the-type-scale-pass-the-last-layout-defect)
    — [the leading was a length, so it did not follow the type](#141-the-leading-was-a-length-so-it-did-not-follow-the-type)
    — [the bars were measured by nobody](#142-the-bars-were-measured-by-nobody)
@@ -77,6 +81,7 @@ evaluated, which a pass or fail result does not tell you.
    — [what is still open](#146-what-is-still-open)
    — [the detector was watching for the wrong thing](#148-the-detector-was-watching-for-the-wrong-thing)
    — [the largest gap in this document rested on a false premise](#149-the-largest-gap-in-this-document-rested-on-a-false-premise)
+   — [a reroute cannot be refused by moving the driver](#1410-a-reroute-cannot-be-refused-by-moving-the-driver-and-a-reason-that-vanished)
 
 ---
 
@@ -103,7 +108,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 973 unit tests across 48 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 984 unit tests across 49 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -117,8 +122,8 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **973 passing**, 48 files |
-| End-to-end | `npm run e2e` | **49 checks** against the built bundle |
+| Unit tests | `npm test` | **984 passing**, 49 files |
+| End-to-end | `npm run e2e` | **55 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
 | Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
@@ -195,7 +200,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **48 files, 973 tests**. The
+retyped by hand. The table is the complete set: **49 files, 984 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -231,6 +236,7 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `textscale-layout.spec.ts` | 13 | the type scale's leading is a multiplier, the bars are measured not assumed, and the alert precedes the instruction |
 | `chrome.spec.ts` | 10 | the bar-height observer: it publishes, it republishes on a resize, it cleans up |
 | `textscale.spec.ts` | 16 | the large-text detector sees either way a platform can scale text |
+| `reroute-reason.spec.ts` | 11 | a failed reroute keeps saying why, for as long as the driver is lost |
 | `attribution.spec.ts` | 13 | the ODbL credit is present, well-formed, and not re-suppressed |
 | `mergeguard.spec.ts` | 13 | merge memory guard: three outcomes, the boundary at ratio 1, scaling with region count |
 | `reroute-failure.spec.ts` | 13 | a failed reroute leaves the route and its guidance alone |
@@ -253,7 +259,7 @@ Browser gates, measured the same way:
 
 | Suite | Checks | Command |
 |---|---|---|
-| `test/e2e.mjs` | 49 | `npm run e2e` |
+| `test/e2e.mjs` | 55 | `npm run e2e` |
 | `test/screens.mjs` | 159 (53 × 3 viewports) | `npm run screens` |
 | `tools/focus.mjs` | 15 | `npm run focus` |
 | `tools/sw-shellcheck.mjs` | 1 (offline boot after a captive portal) | `npm run swshell` |
@@ -1454,7 +1460,8 @@ src/
 
   nav/
     valhalla.ts           502  Valhalla /route client, response validation
-    reroute.ts            394  reroute policy: when to act, backoff, banner
+    reroute.ts            415  reroute policy: when to act, backoff, banner,
+                                        and why a refusal keeps saying why (§14.10)
     providers.ts          390  provider chain, attempt trace, connectivity
     requests.ts           107  RequestGate: one live route request at a time
     chrome.ts             117  the two bars' measured heights, as --eta-h and --nav-h
@@ -1478,7 +1485,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            973 unit tests, 48 files
+test/            984 unit tests, 49 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1568,42 +1575,23 @@ or "gap 18" are to the *old* numbering and say so; the current numbers are 1–1
    the file yourself and use Import. So this is a **capability** gap, not a defect.
    The genuine defect would be a device that reports "could not be reached" when
    the real answer is "the platform blocked it", and that is unproven either way.
-5. **Reroute is wired but its failure path is thin.** The app now reroutes on its
-   own (§3.11), and the browser suite drives the off-route flow. The policy is
-   unit-tested to its cap (`reroute-backoff.spec.ts`), the sequencing on its own in
-   `requests.spec.ts`, and **the two together** — a failed retry whose answer lands
-   after the driver pressed Exit — in `reroute-gate.spec.ts`.
+5. **A reroute that is *refused* cannot be produced in a browser.** Everything around it
+   is covered; this one case is not, and §14.10 records why with the measurements. The
+   policy is unit-tested to its cap (`reroute-backoff.spec.ts`), the sequencing on its
+   own (`requests.spec.ts`), the two together (`reroute-gate.spec.ts`), and the *reason*
+   a failure keeps reporting itself (`reroute-reason.spec.ts` — which closed a real
+   defect found while chasing this).
 
-   **What I tried to close, and why it did not close.** Two browser attempts, both
-   recorded here rather than deleted, because the second one is the most instructive
-   thing this gap has produced.
+   The browser suite asserts the three properties around it that *are* reachable: the
+   driver is told, the reroute is answered **by the offline map with no network request
+   at all**, and nothing ever claims a new way was found.
 
-   *Intercepting Valhalla does not work.* Reroutes use `enginePlan`, whose first entry
-   is the *offline* engine on the default selection, so the request is answered by the
-   imported fixture. With the interception in place all four checks passed — and they
-   also passed with it **removed**, because nothing had failed. A green test that
-   cannot fail is worse than none, because it is read as evidence.
-
-   *A single `setGeolocation` does not work either.* Measured: Chromium fires
-   `watchPosition` **once per call** — 0 fixes before a change, 1 after one call, 9
-   after eight. The tracker needs two fixes more than `CONFIRM_WINDOW_MS` apart, so
-   every off-route check in the e2e suite — the pre-existing ones included — had been
-   passing against a screen that **had never attempted a reroute**.
-
-   With a moving fix stream the notice sequence becomes real — `You have left the route`
-   then `Off route — settling`, the state between confirming a deviation and the
-   request going out. That is what now ships in the e2e suite, and it is *not* the
-   failure path: an ad-hoc probe reached `Off route — finding a new way` from a
-   different starting position, but not reproducibly from the suite's, and I did not
-   have the budget to find out why. An in-scope claim I could not verify is not one
-   this document records as done.
-
-   So the honest end state: the browser now asserts the deviation is detected from a
-   moving device and that guidance survives — neither of which any check covered — and
-   it asserts the reroute is *not* reported as succeeded. What remains is an observable
-   failure: the app's `status: 'failed'` banner, reached through a real engine refusal.
-   That is not reachable by moving a simulated device, because the offline engine's
-   refusal is decided in-process with no request to intercept. It needs either a hook
+   **Correction to an earlier note here.** A previous revision recorded that "reroutes
+   use `enginePlan`, whose first entry is the offline engine on the default selection,
+   so the request is answered by the imported fixture", and concluded that a refusal was
+   therefore unreachable. The first half is right — `local` is first in
+   `planRoute` — and the conclusion was wrong twice over, because the offline engine
+   does answer, and it succeeds. §14.10 has the measurements. It needs either a hook
    that exposes reroute state to the test, or an online engine as the selected one.
 6. **Offline turn-by-turn infers turns** from bearing changes. Real instructions
    need Valhalla. Measured against Valhalla on one 4 km stretch it missed three of
@@ -1754,7 +1742,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 973 unit tests
+npm test             # 984 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -2189,7 +2177,7 @@ anything is interactive.
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files** (the figures as of that
 > revision), and the boundary pass to
-> **973 across 48** — see §11, §12 and §13. The figures above are left as written
+> **984 across 49** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
@@ -3325,7 +3313,7 @@ were needed, but intrinsic *leading* was what the five labels needed: their line
 were shorter than their own glyphs, which no bar height could fix. §14.9 removed the
 `rem` conversion from consideration entirely: it would have addressed neither.
 
-### 13.16 Five probes measured something other than what they named
+### 13.16 Six probes measured something other than what they named
 
 The clearest pattern across this pass and the next, and worth one section of its own
 because the instances are independent and the conclusions are the same. The fifth row was
@@ -3338,14 +3326,16 @@ added by §14, forty minutes after the other four.
 | §11.9 | a synthetic `Tab` dispatch | whether focus moves on real input |
 | §13.12 | a 30 s default timeout, reported as "the probe never settles" | whether the app overruns its own 75 s bound |
 | §14.7 | a stubbed `ResizeObserver` whose callback the test called directly | whether the module observed anything at all |
+| §14.10 | an interception that was never reached, asserted as a refusal | whether a reroute can fail at all |
 
 Three of these made a screen look **worse** than it is — a clipped child counted as an
 overlap, a scrollable label counted as clipped, an unreachable one that was reachable.
-Two made it look **better**, and both were mine: a gate with its budget silently reverted
+Three made it look **better**, and all three were mine: a gate with its budget silently reverted
 to 30 s called a screen unsettled that was merely not finished, and a test whose stub
-called its own callback made a module that observed nothing look tested. The first was
-caught by a wall clock that read `30003 ms`; the second only by deleting the code and
-watching the test stay green.
+called its own callback made a module that observed nothing look tested, and an
+interception nothing ever hit made an unreachable failure look like a detected one. The
+first was caught by a wall clock that read `30003 ms`; the other two only by deleting the
+code and watching the test stay green.
 
 The general form is the one worth keeping, because each instance looked like a product
 defect until measured: **a probe's failure and a product's failure look identical from
@@ -3737,6 +3727,110 @@ platform scales **text** and not **layout**, a scale leaves every box the same s
 the glyphs inside it grow. That is not a bug to work around — it is the behaviour to
 design against, and §14's floors, measured bounds and scrolling stack are the response to
 it.
+
+### 14.10 A reroute cannot be refused by moving the driver — and a reason that vanished
+
+§7 gap 5's open half. Four attempts, and the first three were all reasonable. What they
+established is more useful than a green check would have been.
+
+#### Attempt 1: intercept the engine
+
+Installed a 500 from Valhalla before starting. All four checks passed — **and they also
+passed with the interception removed**, because nothing had failed. The conclusion drawn
+at the time was "reroutes use the offline engine, so the request is answered locally",
+recorded in §7 gap 5. The premise was right and the conclusion was still wrong.
+
+#### Attempt 2: drive the device somewhere unreachable
+
+Two things were wrong with this, and both are about the harness rather than the app.
+
+**Chromium fires `watchPosition` once per `setGeolocation`.** Measured: 0 fixes before a
+change, 1 after one call, 9 after eight. The tracker needs two fixes more than
+`CONFIRM_WINDOW_MS` apart, so **every off-route check in the e2e suite had been passing
+against a screen that had never once attempted a reroute** — the pre-existing ones
+included. `drive()` in the suite now emits a moving stream, because of this.
+
+**And §13.5's stale-position guard holds a stationary driver.** It compares raw fixes, so
+a device parked at one position reads as motionless and is told "waiting for a position
+update" for ever — correctly, since a car at a red light should not be told it is off
+route. Each tick therefore walks a few metres.
+
+#### Attempt 3: put the engine away mid-trip
+
+With a working `drive()`, the reroute fired and succeeded — **for a fix in Swindon, ~60 km
+outside the imported extract.** That is the finding, and it is a property of the product
+rather than of the test:
+
+> `rerouteOrigin` returns a point **on the route** — `track.correction`, or
+> `route[snappedIndex + 3]` — never the driver's actual position.
+
+So the engine is asked for a path between two points the route already connects. Moving
+the driver as far as the device can go cannot make that path not exist, and no amount of
+interception will make it fail.
+
+#### Attempt 4: make the graph the one that answers not know the route
+
+The remaining possibility is that the *offline* graph does not contain the pair — so the
+route was produced by Valhalla (asserted, not assumed: the preview says so), and Valhalla
+was then taken away. Measured result: **2 requests intercepted and the reroute still
+succeeded.** The offline extract covers the same roads. Even a route the offline engine
+did not draw is between two real places in the extract, and it can route between them.
+
+A refusal therefore needs the loaded extract not to cover the reroute pair, and the only
+way to arrange that is to change the dataset mid-trip — which means leaving navigation,
+because the Regions screen is not reachable from it. **That is the whole of what is open,
+and it is a harness limit with a specific reason rather than an untried idea.**
+
+#### What the suite asserts instead
+
+Three properties that are reachable, and one of them is the point of the whole app:
+
+```
+PASS  the route came from the offline map - Offline .osm
+PASS  the driver is told they have left the route
+PASS  the reroute is answered by the offline map, with no request leaving the device
+PASS  the app never claims it found a new way
+PASS  guidance survives the reroute
+```
+
+The offline one is verified to bite: putting the online engine first in `localStorage`
+turns it red, reports `Valhalla`, and shows `1 routing requests attempted`.
+
+#### The real defect this turned up
+
+Instrumenting the failure path to find a browser-reachable one found a bug instead.
+
+`finishReroute` keeps *why* an attempt failed in `reason`, and its own comment says:
+
+> The reason outlives the next fix: `message` alone is rebuilt every fix and becomes a
+> bare countdown a second later.
+
+True for the countdown branch. **False for the branch that mattered.** `observeFix`
+checks the tracker's state first, and when a driver who has gone off route comes back
+onto the line and off it again — the tracker returns to `suspect` — it rebuilt `message`
+as a flat `"You have left the route"` without consulting `reason`. Measured in the
+browser: the first refusal showed *"Off route — Could not reach the routing server —
+check your connection"*, and **every fix after it said only "You have left the route".**
+
+So the app told the driver why once, and then stopped, for as long as they drove the
+wrong way — which is exactly when the reason is worth the most. Same shape as §13.14's
+`stepsEmptyReason`: a screen reporting the *situation* and discarding the *cause*.
+
+`observeFix` now carries `reason` into that branch, and `reroute-reason.spec.ts` pins
+four things about it — that it survives the suspect branch, that it survives the
+countdown, that it appears in the **banner** and not only in state, and that it stops
+being reported once a reroute succeeds. Verified to fail on three separate reversions.
+
+#### What the three attempts have in common
+
+Each was a way of asking the *simulator* to behave differently, and the answer was that
+the app's own design already removes the difference: a reroute is asked for between two
+points on a path that exists, by a graph that covers them. The one thing that would make
+it fail — losing the extract — is not something a driver does mid-turn.
+
+That is worth more than the check I went looking for, and it is the same lesson as §14.9
+in a different place: **when a test cannot be made to fail, the first question is whether
+the failure it is looking for is reachable at all.**
 
 ---
 

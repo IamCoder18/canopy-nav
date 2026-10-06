@@ -261,7 +261,25 @@ export function observeFix(
         // route" is. `rerouteBanner` already appends a properly formatted rejoin
         // distance in the user's units, so the precise figure is still available
         // where it is useful and formatted.
-        message: suspect ? 'You have left the route' : null,
+        // Qualitatively, and the *reason* beside it once there is one.
+        //
+        // This used to be a flat `suspect ? 'You have left the route' : null`, and
+        // for a driver who *stays* off route that replaced the explanation on the
+        // very next fix. Measured in a browser: the first failed reroute showed
+        // "Off route — Could not reach the routing server — check your connection"
+        // for one fix interval, and every fix after it said only "You have left the
+        // route". So the app told the driver why once and then stopped telling them
+        // anything, for as long as they drove the wrong way — which is exactly when
+        // the reason is most useful.
+        //
+        // It contradicts `finishReroute`'s own comment, that "the reason outlives the
+        // next fix": `reason` is kept in state and `message` is rebuilt every fix, and
+        // this branch was the one rebuilding it without consulting `reason`.
+        message: !suspect
+          ? null
+          : state.failures > 0 && state.reason
+            ? `You have left the route — ${state.reason}`
+            : 'You have left the route',
       },
       trigger: false,
       origin: null,
@@ -309,6 +327,9 @@ export function observeFix(
         message: state.failures > 0
           ? `Off route — ${state.reason ?? 'no new route'} · retrying in ${Math.ceil((wait - elapsed) / 1000)} s`
           : 'Off route — settling',
+        // `reason` is deliberately *not* cleared here. It is the only place the
+        // driver is told what went wrong, and the branch above would otherwise
+        // discard it one fix after it is set.
       },
       trigger: false,
       origin: null,

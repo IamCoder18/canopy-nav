@@ -405,6 +405,109 @@ try {
     }
   }
 
+  /* ---------------- who answers a reroute (§7 gap 5) ---------------- */
+  //
+  // §7 gap 5's open half is a *refused* reroute in a browser. It is not reachable by
+  // moving the device, and finding that out took three attempts worth recording,
+  // because each of the first two was a reasonable guess and both were wrong in a way
+  // that would have shipped a green check over nothing.
+  //
+  // **1. A driver who is a long way off route still reroutes successfully.** Measured:
+  // a fix in Swindon, ~60 km outside the imported extract, rerouted successfully every
+  // time. The reason is in the product rather than the harness — `rerouteOrigin`
+  // returns a point *on the route* (`track.correction`, or `route[snappedIndex + 3]`),
+  // never the driver's actual position. So the engine is asked for a path between two
+  // points the route already connects, and the request succeeds. This is not a testing
+  // limitation; it is why "drive somewhere unreachable" cannot fail a reroute.
+  //
+  // **2. With the default selection the reroute is answered offline.** The plan puts
+  // `local` first, and the offline graph covers the pair, so **zero** requests leave
+  // the device. Installing an interception and asserting a refusal therefore passes
+  // vacuously — which is what the first version of this block did.
+  //
+  // **3. Taking the engine away only after the trip starts still does not fail it.**
+  // Even with the route produced by Valhalla, the *offline* extract covers the same
+  // roads and answers the reroute. A refusal needs the loaded extract not to cover the
+  // pair, and the only way to arrange that is to change the dataset mid-trip, which
+  // means leaving navigation — the Regions screen is not reachable from it.
+  //
+  // So this block asserts the three things that *are* true and worth protecting:
+  //
+  //   - the reroute is answered **offline**, by the map already on the device, with no
+  //     network request at all — the property that makes the app work in a canyon;
+  //   - the driver is told they have left the route and keeps their guidance;
+  //   - nothing ever claims a new way was found.
+  //
+  // The refusal itself is covered by `test/reroute-reason.spec.ts` and
+  // `test/reroute-backoff.spec.ts`, which can reach states a browser cannot.
+  console.log('\nrerouting on a device with no working engine');
+  {
+    await page.goto(BASE, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(2000);
+    const importInput = await page.$('input[type=file]');
+    if (importInput) {
+      await importInput.setInputFiles(join(__dirname, FIXTURE));
+      await page.waitForFunction(
+        () => /[\d,]+ routable ways/.test(document.body.innerText),
+        undefined,
+        { timeout: 40000 },
+      );
+      await page.waitForTimeout(800);
+    }
+    await page.click('.search-field').catch(() => {});
+    await page.waitForTimeout(400);
+    await page.fill('.inline-search input', 'Elbow');
+    await page.waitForTimeout(1200);
+    const hit = await page.$('.result-row');
+    if (hit) {
+      await hit.click();
+      await page.waitForTimeout(2500);
+      const preview = await page.evaluate(() => document.body.innerText);
+      check('the route came from the offline map', /Offline \.osm/.test(preview),
+        preview.match(/Engine\s*([^\n]+)/)?.[1]?.trim() ?? '(not stated)');
+      const start = await page.$('button.primary-btn');
+      if (start) {
+        await start.click();
+        await page.waitForTimeout(1500);
+        check('a trip is under way before the device is driven off it',
+          /Steps/.test(await page.evaluate(() => document.body.innerText)));
+
+        // Every engine is taken away, and the reroute must still be answered — by the
+        // map on the device, with no request leaving it.
+        let attempted = 0;
+        await context.route('**://valhalla1.openstreetmap.de/**', (r) => { attempted++; r.abort(); });
+
+        const notices = [];
+        const sample = async () => {
+          const n = await page.evaluate(
+            () => document.querySelector('.offroute-banner')?.textContent.trim().slice(0, 120) ?? '',
+          );
+          if (n && notices[notices.length - 1] !== n) notices.push(n);
+        };
+        await sample();
+        await drive(context, { latitude: 51.5400, longitude: -1.3990 }, sample, 40);
+
+        check('the driver is told they have left the route',
+          notices.some((n) => /left the route/i.test(n)),
+          notices.join(' -> ') || 'no notice at all');
+        // The property that makes the app usable offline, and the one that would be
+        // lost silently if the engine order changed.
+        check('the reroute is answered by the offline map, with no request leaving the device',
+          attempted === 0, `${attempted} routing requests attempted`);
+        check('the app never claims it found a new way',
+          !notices.some((n) => /rejoined|back on route|new route found/i.test(n)),
+          notices.join(' -> '));
+        // Guidance survives: a lost driver is not also left without directions.
+        const after = await page.evaluate(() => document.body.innerText);
+        check('guidance survives the reroute',
+          /Steps/.test(after) && /Exit/.test(after));
+        await page.screenshot({ path: join(SHOTS, '13-reroute-offline.png') });
+
+        await context.unroute('**://valhalla1.openstreetmap.de/**');
+      }
+    }
+  }
+
   /* ---------------- search after a loaded region ---------------- */
   console.log('\nsearch with a loaded region');
   // Back out to home. The stack is steps -> navigating -> home, and each screen
