@@ -143,8 +143,31 @@ const MEASURE = (pieces) => {
     .filter((b) => b.right > vw + 1 || b.bottom > vh + 1 || b.x < -1 || b.y < -1)
     .map((b) => `${b.label} (${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.w)}x${Math.round(b.h)} in ${vw}x${vh})`);
   // Any control whose text is clipped by its own box.
-  const clipped = [...document.querySelectorAll('.maneuver-instr, .maneuver-dist, .eta-value, .nav-bottom-btn span')]
-    .filter((el) => el.scrollHeight > el.clientHeight + 2 || el.scrollWidth > el.clientWidth + 2)
+  /**
+   * Text that does not fit — split into the two things that word has been hiding.
+   *
+   * `scrollHeight > clientHeight` on an element inside a *scrolling* ancestor is not
+   * clipping: the text is reachable by scrolling, and the same test called it
+   * clipped. That is §13.8's mistake again, one level down — the overlap
+   * arithmetic was fixed to distinguish a clipped child from a visible one, and this
+   * one still counts a scrollable one as a defect.
+   *
+   * So: clipped by the element's own box is a defect and is reported. Truncated only
+   * because a scrollable ancestor crops it is reachable, and is reported separately
+   * so the two can be told apart rather than summed into one number that hides which
+   * is which.
+   */
+  const hasScrollableAncestor = (el) => {
+    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      if (/auto|scroll/.test(getComputedStyle(p).overflowY + getComputedStyle(p).overflowX)) return true;
+    }
+    return false;
+  };
+  const textPieces = [...document.querySelectorAll('.maneuver-instr, .maneuver-dist, .eta-value, .nav-bottom-btn span')]
+    .filter((el) => el.scrollHeight > el.clientHeight + 2 || el.scrollWidth > el.clientWidth + 2);
+  const clipped = textPieces.filter((el) => !hasScrollableAncestor(el))
+    .map((el) => `"${(el.textContent || '').trim().slice(0, 24)}"`);
+  const scrollable = textPieces.filter((el) => hasScrollableAncestor(el))
     .map((el) => `"${(el.textContent || '').trim().slice(0, 24)}"`);
   /**
    * Content pushed out of a scrolling container.
@@ -163,7 +186,7 @@ const MEASURE = (pieces) => {
       scrolledOut.push(`${label} (${Math.round(layout.height - vis.h)}px out of view)`);
     }
   }
-  return { overlaps, offscreen, clipped, scrolledOut, count: boxes.length };
+  return { overlaps, offscreen, clipped, scrollable, scrolledOut, count: boxes.length };
 };
 
 const browser = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader'] });
@@ -328,7 +351,9 @@ for (const zoom of [1, 1.75, 2]) {
     check(`text ${Math.round(zoom * 100)}%: chrome stays on screen`,
       m.offscreen.length === 0, m.offscreen.join('; ') || 'all within the viewport');
     check(`text ${Math.round(zoom * 100)}%: no instruction text is clipped`,
-      m.clipped.length === 0, m.clipped.join(', ') || 'none clipped');
+      m.clipped.length === 0,
+      `${m.clipped.join(', ') || 'none clipped'}`
+      + (m.scrollable.length ? ` (plus ${m.scrollable.length} scrollable, not clipped: ${m.scrollable.join(', ')})` : ''));
     // Scrollable is not the same as readable. Reported separately, because a card
     // scrolled out of the visible region is a different defect from a control too
     // small for its own text, and folding them into one number hid this one.

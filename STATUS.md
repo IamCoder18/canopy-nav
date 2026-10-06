@@ -1528,7 +1528,14 @@ Ordered by how much they matter.
     cannot cope when the text is large anyway.** One defect, two causes — see
     §12.7 and §13.8. Detection ships; the banner-stack lower bound ships and is
     re-measured; the layout that responds to it does not. **This is the largest
-    single piece of work left in the app**, and the `rem` conversion is the fix.
+    single piece of work left in the app**, and it is two pieces of work: the
+    `rem` conversion, and intrinsic heights for the two chrome bars.
+
+    Corrected in §13.15: the "seven clipped labels" this gap has been ranked by is
+    **five**, and the instruction was never among them — it scrolls and is
+    reachable. What is clipped is chrome: `14 min`, `5.2 km`, `Steps`, `Exit`,
+    `Overview`, all inside bars whose `height` is a fixed token. Still a real
+    defect at 175% and 200%; smaller than this document made it sound.
 12. **`RoadGraph.regionOf` is a merged-graph-only field that the persistence
     layer still knows about.** Recorded here because the previous revision
     claimed it "is persisted for every region … the bytes are still wasted on
@@ -2368,8 +2375,10 @@ people to delete the explanation.
    `styles.css` records what it reports.
 
    Two things the probe still reports as failing, honestly: the control column,
-   and seven clipped chrome labels. The labels are clipped because the tokens are
+   and clipped chrome labels. The labels are clipped because the tokens are
    absolute `px` — which is the *other* cause above, and fixing it means `rem`.
+   (This section's "seven" is corrected in §13.15: it is five, and the instruction
+   was never one of them.)
 
 2. ~~Confirming a region removal loses focus~~ — **closed.** The Remove button
    stays mounted and hidden, focus moves to Confirm, cancelling returns focus to
@@ -2642,9 +2651,11 @@ gate that always fails is a gate people learn to ignore — the same conclusion 
 reached about a green result nobody re-derives. It is a diagnostic;
 `styles.css` carries the measurements and this section carries the reasoning.
 
-Two things it still reports as failing, honestly: the control column, and seven
-clipped chrome labels. The labels are clipped *because* the tokens are absolute
-`px`, which is the other half of the same defect — and fixing it means `rem`.
+Two things it still reports as failing, honestly: the control column, and clipped
+chrome labels. The labels are clipped *because* the tokens are absolute `px`, which
+is the other half of the same defect — and fixing it means `rem`. The count is
+corrected in §13.15: five, not seven, and the instruction is scrollable rather than
+clipped.
 
 ---
 
@@ -2930,9 +2941,10 @@ against `data-textsize="normal"` — which `textscale.ts` correctly resets withi
 the probe reported `overflow-y: visible`.
 
 With the probe waiting for the attribute, the real numbers are: **100%** clean;
-**175%** the stack bounded and scrolling, no collision, seven labels still clipped;
+**175%** the stack bounded and scrolling, no collision, labels still clipped;
 **200%** no collision, the off-route notice scrolled 20 px out of view, the same
-seven labels clipped.
+labels clipped. *How many* labels is corrected in §13.15 — this measurement counted
+the instruction as clipped when it is in fact scrollable.
 
 A second probe defect hid behind the first: pieces were measured with
 `getBoundingClientRect`, which reports the *layout* box. For a child of a scrolling
@@ -2950,9 +2962,10 @@ A column layout for the three pieces of navigation chrome, scoped to
 stack takes what is left. It is the right shape and it is what §12.7 asks for.
 
 Measured: it removed one of the two reported collisions and fixed **none** of the
-seven clipped labels — which live *inside* the two bars, so bounding the stack can
-never reach them. Worse, the one collision it removed turned out to be the probe
-artefact of §13.8, so its real effect was nil.
+clipped labels — which live *inside* the two bars, so bounding the stack can never
+reach them. Worse, the one collision it removed turned out to be the probe artefact
+of §13.8, so its real effect was nil. §13.15 records what the target actually was,
+which is smaller than this section assumed.
 
 Reverted, and the measurements recorded in `styles.css` beside the rule that ships.
 That is the third time this project has written a layout change down after
@@ -3105,7 +3118,44 @@ It is a separate module rather than three branches of JSX for the reason §12.7 
 a decision that is not testable without React is a decision nobody will test, and
 this one had been wrong for the life of the feature.
 
-### 13.15 What this pass also closed
+### 13.15 The "seven clipped labels" were five, and the instruction was never one of them
+
+`§12.7`, `§11.9` and `§3.19` have all carried a figure of **seven clipped chrome
+labels** at large text. Re-measured: it is **five**, and the two that dropped off the
+list are the two that matter most.
+
+The probe's test was `scrollHeight > clientHeight` on each text element. On an element
+inside a *scrolling* ancestor that is not clipping — the text is reachable by
+scrolling. Which produced this:
+
+```
+before:  "14 min", "5.2 km", "310 m", "Turn left.", "Steps", "Exit", "Overview"
+after:   "14 min", "5.2 km", "Steps", "Exit", "Overview"
+         (plus 2 scrollable, not clipped: "310 m", "Turn left.")
+```
+
+So **the instruction — the only thing that screen exists for — was never clipped.**
+It is reachable, and it scrolls. The five that are clipped are chrome: two values in
+the ETA bar and three button labels in the bottom bar, all inside bars whose `height`
+is a fixed token.
+
+This is §13.8's mistake one level down, and the third probe defect of this family in
+this project. There, `getBoundingClientRect` reported a clipped child as a visible
+overlap. Here, `scrollHeight` reports a scrollable child as a clipped one. Both made a
+measurement look worse than the screen is, and in this case it made **the priority
+look wrong**: the document has called this "the largest single piece of work left in
+the app" partly on the strength of a figure that included the reachable parts.
+
+What remains is five labels in two fixed-height bars. That is still a real defect at
+175% and 200%, and it is still not fixable by bounding the banner stack — it would
+take the space the bars need. But it is five chrome labels, not "the instruction is
+unreadable and unreachable", and the fix is the `rem` conversion plus intrinsic bar
+heights: the two halves of §7 gap 11, which is one defect with two causes.
+
+No further CSS was attempted. A second attempt at the same shape, with the same known
+limitation and a now-known-smaller target, is the shape of decision §3.19 warns about.
+
+### 13.16 What this pass also closed
 
 - **A tile-host failure substituted the map style silently.** Correct
   degradation, no sentence anywhere. `MapView` now reports the style it actually
