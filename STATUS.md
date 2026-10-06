@@ -72,7 +72,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 927 unit tests across 44 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 934 unit tests across 45 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -86,7 +86,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **927 passing**, 44 files |
+| Unit tests | `npm test` | **934 passing**, 45 files |
 | End-to-end | `npm run e2e` | **46 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -163,7 +163,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **44 files, 927 tests**. The
+retyped by hand. The table is the complete set: **45 files, 934 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -195,6 +195,7 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `serve.spec.ts` | 16 | test-server path containment and no side effects on import |
 | `renderzoom.spec.ts` | 14 | zoom LOD re-application and reduced motion |
 | `reroute-backoff.spec.ts` | 14 | backoff growth to its cap |
+| `reroute-gate.spec.ts` | 7 | backoff and request sequencing together: an abandoned retry leaves no trace, a real failure leaves one |
 | `attribution.spec.ts` | 13 | the ODbL credit is present, well-formed, and not re-suppressed |
 | `mergeguard.spec.ts` | 13 | merge memory guard: three outcomes, the boundary at ratio 1, scaling with region count |
 | `reroute-failure.spec.ts` | 13 | a failed reroute leaves the route and its guidance alone |
@@ -1420,7 +1421,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            927 unit tests, 44 files
+test/            934 unit tests, 45 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1508,11 +1509,12 @@ or "gap 18" are to the *old* numbering and say so; the current numbers are 1–1
    The genuine defect would be a device that reports "could not be reached" when
    the real answer is "the platform blocked it", and that is unproven either way.
 5. **Reroute is wired but its failure path is thin.** The app now reroutes on its
-   own (§3.11), and the browser suite drives the full off-route flow. Not yet
-   exercised: two consecutive failures driving the backoff to its cap *in the
-   browser*, with the request sequencing of §13.6 also in play. The policy is
-   unit-tested to its cap (`reroute-backoff.spec.ts`) and the sequence is
-   unit-tested; the two together have not been driven end to end.
+   own (§3.11), and the browser suite drives the full off-route flow. The policy is
+   unit-tested to its cap (`reroute-backoff.spec.ts`), the sequencing on its own in
+   `requests.spec.ts`, and **the two together** — a failed retry whose answer lands
+   after the driver pressed Exit — in `reroute-gate.spec.ts`. What is still not
+   exercised is the whole loop in a real browser: two consecutive failures driving
+   the backoff to its cap, with a real engine refusing, end to end.
 6. **Offline turn-by-turn infers turns** from bearing changes. Real instructions
    need Valhalla. Measured against Valhalla on one 4 km stretch it missed three of
    seven real maneuvers, invented one and reversed one direction — so the app now
@@ -1642,7 +1644,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 927 unit tests
+npm test             # 934 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -2074,7 +2076,7 @@ anything is interactive.
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files** (the figures as of that
 > revision), and the boundary pass to
-> **927 across 44** — see §11, §12 and §13. The figures above are left as written
+> **934 across 45** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
