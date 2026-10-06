@@ -111,7 +111,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 994 unit tests across 50 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1000 unit tests across 51 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -125,7 +125,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **994 passing**, 50 files |
+| Unit tests | `npm test` | **1000 passing**, 51 files |
 | End-to-end | `npm run e2e` | **55 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -203,7 +203,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **50 files, 994 tests**. The
+retyped by hand. The table is the complete set: **51 files, 1000 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -252,6 +252,7 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `styletiles.spec.ts` | 9 | tile-style order-comparison guard: the actual shield filter, idempotency |
 | `basemap.spec.ts` | 6 | a basemap substitution is reported rather than silent |
 | `astar-admissible.spec.ts` | 6 | A\*'s heuristic is admissible: the returned route is the cheapest by **time**, checked against Dijkstra on the real fixture |
+| `strict-plan.spec.ts` | 6 | `strict` constrains the plan, not the walk — and the two docstrings now agree |
 | `minheap.spec.ts` | 6 | the heap invariant, plus the broken implementation kept and asserted to fail |
 | `pbfgeo.spec.ts` | 6 | absolute coordinates against the PBF spec, via the real encoder |
 | `streamscale.spec.ts` | 6 | the streaming parse holds a small multiple of the document, not the document |
@@ -1474,7 +1475,7 @@ src/
     valhalla.ts           502  Valhalla /route client, response validation
     reroute.ts            415  reroute policy: when to act, backoff, banner,
                                         and why a refusal keeps saying why (§14.10)
-    providers.ts          390  provider chain, attempt trace, connectivity
+    providers.ts          416  provider chain, attempt trace, connectivity
     requests.ts           107  RequestGate: one live route request at a time
     chrome.ts             117  the two bars' measured heights, as --eta-h and --nav-h
     steps.ts               66  why the turn list is empty: three causes, three answers
@@ -1497,7 +1498,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            994 unit tests, 50 files
+test/            1000 unit tests, 51 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1778,7 +1779,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 994 unit tests
+npm test             # 1000 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -2213,7 +2214,7 @@ anything is interactive.
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files** (the figures as of that
 > revision), and the boundary pass to
-> **994 across 50** — see §11, §12 and §13. The figures above are left as written
+> **1000 across 51** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
@@ -4078,23 +4079,60 @@ From the same pass, both cheap:
   `test/geo.spec.ts` permits it. Left as it is and the comment corrected: the extra point
   is the *destination*, and tightening the bound would let a caller drop it.
 
-**Still open, and it is a real code defect:** `resolveRoute`'s `strict` option does not
-do what its docstring says. The comment claims it "stops the walk after the first real
-attempt so a pinned engine fails loudly instead of quietly answering from somewhere
-else", and that it will "never append the offline engine". In the code, `strict` is read
-in exactly **one** place — inside the closing `throw` — with no `break`, no `return` and
-no plan filtering in the loop. So `resolveRoute({ plan: ['valhalla-custom', 'local'],
-strict: true })` walks past the pinned engine and lets `local` **serve** the route, and
-the legacy derivation that builds a plan from a bare `provider` appends `'local'`
-regardless of `strict`.
+**And `strict` — where reading it carefully inverted the diagnosis.** The audit reported
+that `strict` "never stops the walk" and that the code let `local` serve. The first half
+is a **docstring** problem and the second is real, but they are not the same defect, and
+acting on the report as written would have "fixed" behaviour that is correct.
 
-It survives because `test/engines.spec.ts` states the assumption as if it were a
-guarantee: *"a strict plan never contains the offline engine — hand-writing one with
-'local' in it describes a state the selection model cannot produce."* Both call sites in
-the app build plans through `planRoute`, so the app is correct today; the defect is in the
-API's contract, and the tests avoid the input that breaks it. Recorded rather than fixed
-here because the fix changes which routes an existing configuration can serve, and that
-deserves its own pass rather than the last twenty minutes of one.
+`src/nav/providers.ts` held **two docstrings that disagreed**:
+
+- `RouteRequest.strict` — "Treat the plan as the whole world: **never append** the
+  offline engine… Walking *within* the plan is still allowed — that is what `any-online`
+  means, since its plan is three hosted engines and stopping at the first failure would
+  make the choice a lie."
+- `resolveRoute` — "`strict` **stops the walk** after the first real attempt."
+
+**The field is right.** There are three online providers, so an `any-online` plan has
+three entries, and a strict walk that stopped at the first failure would report
+`fellBack` for a selection the user never made. So `resolveRoute`'s docstring was wrong,
+and wrong in the direction that reads like a *stronger* guarantee than exists — the
+expensive direction, because a reader trusts it. Corrected, and the behaviour it
+described is now stated rather than implied.
+
+The real defect was underneath: `strict` means "never append the offline engine", and
+the legacy call shape — which builds a plan from a bare `provider` when none is supplied
+— appended it unconditionally:
+
+```ts
+meta(req.provider)?.online ? [req.provider, 'local'] : [req.provider]
+```
+
+So `resolveRoute({ provider: 'valhalla-fossgis', strict: true })` built
+`['valhalla-fossgis', 'local']`, and when the pinned engine could not route, **the
+offline engine answered** — the one thing the flag exists to prevent, reached by the one
+call shape that did not consult it. `&& !strict` added.
+
+It survived because the failure is **invisible in the message**: the local engine's own
+failure never reaches `degraded`, so the closing wording is identical whether or not it
+was consulted. That is why the test asserts on the *outcome* — with a routable map, does
+`local` answer? — rather than on the text, which cannot tell.
+
+Both app call sites pass an explicit `plan`, and `planRoute` omits `local` when fallback
+is off, so nothing in the app reached it. `test/engines.spec.ts` missed it for the
+matching reason: it notes that "a strict plan never contains the offline engine", which
+is a true statement about `planRoute`'s output and was being treated as a property of
+`resolveRoute`.
+
+`test/strict-plan.spec.ts` pins both halves — that `strict` confines a *derived* plan,
+and that it does **not** stop a walk through a plan it was handed — plus that the two
+docstrings now agree. Verified to fail on three separate reversals.
+
+Writing it took five corrections, and three of them were the test passing for the wrong
+reason: `from`/`to` are `LatLng` **tuples**, so passing `{lat, lon}` objects made the
+offline engine read `undefined` and return null; `valhalla-custom` is correctly skipped
+without an endpoint, which read as the walk stopping early; and `NoRouteError` carries
+no `attempts`, so scraping the message for evidence of a fallback was never going to
+work.
 
 ---
 

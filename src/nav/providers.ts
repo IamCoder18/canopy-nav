@@ -210,9 +210,20 @@ export function watchConnectivity(cb: ConnectivityListener): () => void {
  *
  * The plan is the visibility surface and the fallback policy in one: each engine
  * is tried in turn, every outcome recorded, and the engine that actually
- * answered is reported as `used` — never the one that was asked for. `strict`
- * stops the walk after the first real attempt so a pinned engine fails loudly
- * instead of quietly answering from somewhere else.
+ * answered is reported as `used` — never the one that was asked for.
+ *
+ * ## What `strict` does, and what it does not
+ *
+ * This used to say "`strict` stops the walk after the first real attempt so a pinned
+ * engine fails loudly instead of quietly answering from somewhere else." **It does
+ * not, and it should not** — `RouteRequest.strict` is the authority, and it says
+ * walking *within* the plan is still allowed, because `any-online`'s plan is three
+ * hosted engines and stopping at the first failure would make the choice a lie.
+ *
+ * So `strict` means two things, and only two: it **never appends** the offline engine
+ * to the plan, and it words the failure as "fallback is off" rather than as a generic
+ * "no route". A caller that supplies a plan containing `local` has supplied it, and
+ * it is honoured.
  */
 export async function resolveRoute(
   req: RouteRequest,
@@ -238,9 +249,24 @@ export async function resolveRoute(
   // the local engine, a local one never does.
   // Normalise unknown ids to the offline engine, which is what an unrecognised
   // provider has always meant: no route is better than a crash.
+  //
+  // The legacy call shape, and the one place `strict` was being ignored entirely.
+  //
+  // `RouteRequest.strict` says "never append the offline engine", and this appended it
+  // unconditionally for an online `provider`. So `resolveRoute({ provider:
+  // 'valhalla-fossgis', strict: true })` — no plan at all — built
+  // `['valhalla-fossgis', 'local']`, and if the pinned engine could not route, the
+  // **offline engine answered** and reported `fellBack: true`. That is precisely what
+  // the flag exists to prevent, reached by the one call shape that did not consult it.
+  //
+  // Both app call sites pass an explicit `plan`, and `planRoute` omits `local` when
+  // fallback is off, so nothing in the app reached this. The tests missed it for a
+  // matching reason: `test/engines.spec.ts` notes that "a strict plan never contains
+  // the offline engine", which is true of `planRoute`'s output and was being treated
+  // as a property of `resolveRoute`.
   const plan: ProviderId[] = (req.plan?.length
     ? req.plan
-    : meta(req.provider)?.online
+    : meta(req.provider)?.online && !strict
       ? [req.provider, 'local' as ProviderId]
       : [req.provider]
   ).map((id) => (meta(id) ? id : ('local' as ProviderId)));
