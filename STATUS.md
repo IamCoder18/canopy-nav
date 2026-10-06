@@ -3068,12 +3068,36 @@ So the screen now stops waiting for stragglers after 75 s — derived from the c
 size and the per-probe deadline, not chosen — and reports whatever the deadline caught as
 unavailable *with a reason*, because "we do not know" must not become "yes, you can
 download this", and a row with no verdict is the one state the screen cannot represent.
-The gate's budget then follows from the app's own bound rather than being tuned.
+The gate's budget is set from the app's own bound rather than tuned: 150 s against a
+75 s bound, so the suite can only fail this if the app overruns the limit it set for
+itself.
 
-Four consecutive e2e runs green afterwards. Worth recording that the *gate* was the
-symptom and the *product* was the defect: a driver looking at sixteen "Checking…" rows
-had been told nothing, and no test in the project asserted that the screen ever reaches a
-verdict.
+Four consecutive e2e runs green afterwards — and then it kept failing, one run in three.
+**The budget was never actually in force.** `page.waitForFunction` takes
+`(pageFunction, arg, options)`, and the options were being passed as `arg`. Every call
+silently fell back to Playwright's default **30 s**, so the "150 s derived from the app's
+bound" was a number in the source and nothing more.
+
+What made it diagnosable rather than another shrug at the network was the wall clock:
+every failing run returned at **30003 ms**. Not 30 s of network, not 29 s — 30.003 s,
+three times running, a number only a default timeout produces. The predicate had timed
+out, the `catch` swallowed it, and the check then measured sixteen live "Checking…" rows
+and correctly called the screen unsettled.
+
+So the defect was the *opposite* of the usual harness failure — the gate was too
+**strict**, reporting a screen that had not yet finished as one that never would. Both
+directions are the same mistake: a probe measuring something other than the thing it
+names. Three previous instances are §13.8's overlap arithmetic, §13.15's `scrollHeight`,
+and §11.9's synthetic Tab. This one is mine, from this pass, in code I had just written.
+
+Verified afterwards on both sides: cutting the budget to 1.5 s makes the check fail with
+`0 decided, 16 still checking`, and restoring it passes. A gate that has only ever
+passed is not known to work. §13.16 collects all four of these.
+
+Worth recording alongside it: the *gate* was the symptom and the *product* was the
+defect. A driver looking at sixteen "Checking…" rows had been told nothing, and no test
+in the project asserted that the screen ever reaches a verdict — which is the assertion
+that took four revisions and a probe defect to make trustworthy.
 
 ### 13.13 A "0-gap" collision that was never a collision — and the defect under it
 
@@ -3174,7 +3198,35 @@ heights: the two halves of §7 gap 11, which is one defect with two causes.
 No further CSS was attempted. A second attempt at the same shape, with the same known
 limitation and a now-known-smaller target, is the shape of decision §3.19 warns about.
 
-### 13.16 What this pass also closed
+### 13.16 Four probes measured something other than what they named
+
+The clearest pattern in this pass, and worth one section of its own because the
+instances are independent and the conclusions are the same.
+
+| | measured | should have measured |
+|---|---|---|
+| §13.8 | a clipped child's rect, reported as a visible overlap | whether two *visible* surfaces collide |
+| §13.15 | `scrollHeight` on a text node, reported as clipping | whether the text is reachable |
+| §11.9 | a synthetic `Tab` dispatch | whether focus moves on real input |
+| §13.12 | a 30 s default timeout, reported as "the probe never settles" | whether the app overruns its own 75 s bound |
+
+Three of these made a screen look **worse** than it is — a clipped child counted as an
+overlap, a scrollable label counted as clipped, an unreachable one that was reachable.
+The fourth made it look **better**: a gate with its budget silently reverted to 30 s
+called a screen unsettled that was merely not finished, and I spent a revision reading it
+as a network fault before the wall clock said `30003 ms`.
+
+The general form is the one worth keeping, because each instance looked like a product
+defect until measured: **a probe's failure and a product's failure look identical from
+the outside.** Both are "the check failed". Distinguishing them means asking what the
+check actually evaluated, which is not a thing a green or red result tells you. In every
+case here the tell was a number that was too round to be real — a `0`-gap collision, a
+count of seven where the instruction was never clipped, a timeout of exactly 30.003 s.
+
+The honest summary of this pass is therefore not "nine defects fixed". It is: four
+measurements corrected, and the defects found underneath three of them.
+
+### 13.17 What this pass also closed
 
 - **A tile-host failure substituted the map style silently.** Correct
   degradation, no sentence anywhere. `MapView` now reports the style it actually
@@ -3206,6 +3258,7 @@ limitation and a now-known-smaller target, is the shape of decision §3.19 warns
 | Two concurrent downloads shared one `AbortController`: the first was uncancellable and either could wipe the other's progress row | A handle per region, released only by its owner. §13.10 |
 | A catalogue row ballooned to **1139dp** against a nominal 116dp, one line per reason paragraph | One line, expandable, reachable without a mouse. §13.11 |
 | The Regions screen could show sixteen "Checking…" rows indefinitely, and looked identical to a hang | Bounded at 75 s, derived; every entry reaches a verdict with a reason. §13.12 |
+| The gate for the above never used its own budget — `waitForFunction`'s options were passed as its argument, so it ran on Playwright's 30 s default and reported a slow probe as a hung one | `undefined` passed explicitly; verified to fail at 1.5 s and pass at 150 s. §13.12 |
 | Two sibling cards with the same fill and different corners, read as one panel split in two | The notice matches the card's 16px radius. §13.13 |
 | An empty turn list blamed the engine for a route that had no turns in it | Three causes, three honest explanations, in a tested function. §13.14 |
 

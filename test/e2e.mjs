@@ -456,8 +456,11 @@ try {
     // cluster — so it is true or false regardless of what the network does. The
     // probe settling is a separate claim, with its own check.
     try {
+      // Same signature, and the same explicit `undefined`: passing the options as
+      // the argument silently reverts to Playwright's 30 s default.
       await page.waitForFunction(
         () => document.querySelectorAll('.region-actions .pill-btn').length >= 16,
+        undefined,
         // `polling: 500`, not the default animation-frame polling: with the OSM
         // worker and MapLibre both busy, rAF ticks are irregular enough to make a
         // 60s timeout behave unpredictably.
@@ -479,10 +482,19 @@ try {
     // after every worker finishes, so the rows are atomic: a probe that took 95 s
     // showed sixteen "Checking…" and zero decided rows, which is indistinguishable
     // on screen from a hang. The app is now bounded; this follows from that.
+    //
+    // `page.waitForFunction(pageFunction, arg, options)` — the options are the
+    // *third* argument. This passed them as `arg`, so the call used Playwright's
+    // default 30 s timeout and the measurement below ran while the probe was still
+    // legitimately going. It showed up as a wall-clock 30003 ms on every failing
+    // run, which is a number no plausible probe would produce; the same class of
+    // mistake as §12.8, where the harness was fine and the thing it measured was
+    // not. `undefined` is the explicit "no argument" below.
     try {
       await page.waitForFunction(
         () => ![...document.querySelectorAll('.pill-btn')]
           .some((b) => b.textContent.trim() === 'Checking…'),
+        undefined,
         { timeout: 150000, polling: 500 },
       );
     } catch {
