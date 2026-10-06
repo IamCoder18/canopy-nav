@@ -75,6 +75,7 @@ evaluated, which a pass or fail result does not tell you.
    — [the alert goes above the instruction](#144-the-alert-goes-above-the-instruction)
    — [what it measures now](#145-what-it-measures-now)
    — [what is still open](#146-what-is-still-open)
+   — [the detector was watching for the wrong thing](#148-the-detector-was-watching-for-the-wrong-thing)
 
 ---
 
@@ -101,7 +102,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 957 unit tests across 47 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 970 unit tests across 48 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -115,13 +116,14 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **957 passing**, 47 files |
+| Unit tests | `npm test` | **970 passing**, 48 files |
 | End-to-end | `npm run e2e` | **49 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
 | Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
 | Offline shell | `npm run swshell` | a captive portal answered 2 navigations, then the network went off: the app still boots, 5 launcher tiles |
 | Reflow at large text | `npm run reflow` | **12 checks, all passing** — was 3 failing at the start of §14 |
+| Text-scale detection | `npm run textscale` | **14 checks** — the large-text layout switches on for every way a platform can scale text (§14.8) |
 | Bundle budget | `npm run bundle` | entry 112.0 kB / 130, initial 117.5 / 150, largest 282.0 / 300, total JS 417.8 / 460 (gzip) |
 | Offline cold start | verified in-browser | reload with the network off renders the app: 5 tiles, map sized, 0 console errors |
 | Release | v0.11.3 tag | **CI green, Release green**, APK attached |
@@ -192,7 +194,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **47 files, 957 tests**. The
+retyped by hand. The table is the complete set: **48 files, 970 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -227,6 +229,7 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `reroute-gate.spec.ts` | 7 | backoff and request sequencing together: an abandoned retry leaves no trace, a real failure leaves one |
 | `textscale-layout.spec.ts` | 13 | the type scale's leading is a multiplier, the bars are measured not assumed, and the alert precedes the instruction |
 | `chrome.spec.ts` | 10 | the bar-height observer: it publishes, it republishes on a resize, it cleans up |
+| `textscale.spec.ts` | 13 | the large-text detector sees either way a platform can scale text |
 | `attribution.spec.ts` | 13 | the ODbL credit is present, well-formed, and not re-suppressed |
 | `mergeguard.spec.ts` | 13 | merge memory guard: three outcomes, the boundary at ratio 1, scaling with region count |
 | `reroute-failure.spec.ts` | 13 | a failed reroute leaves the route and its guidance alone |
@@ -1428,7 +1431,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 src/
   App.tsx                3998  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
-  textscale.ts             84  detects the platform's font scale (§12.7)
+  textscale.ts            192  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
   sw.ts                   264  offline shell service worker
   errors.ts                54  describeError: a message for any thrown value
@@ -1474,16 +1477,19 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            957 unit tests, 47 files
+test/            970 unit tests, 48 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
                              extract slicing is done by osmium on a desktop)
 tools/serve.mjs         140 LAN static server for on-device manual testing
 tools/bundle-budget.mjs 153 gzip size budget; fails on regression
-tools/reflow.mjs        343 chrome overlap at 100/175/200% text (§13.8) — a
-                             diagnostic, NOT a gate: it fails, and a gate that
-                             always fails is one people learn to ignore
+tools/reflow.mjs        368 chrome overlap at 100/175/200% text (§13.8) — a
+                             diagnostic, still not a gate: it needs a
+                             browser and takes minutes, and one that
+                             reports nothing stops being read (§12.7)
+tools/textscale-check.mjs 269 does the app notice a text scale that leaves
+                             the root font size alone (§14.8) — a gate
 tools/focus.mjs         297 15 keyboard/focus checks in a real browser (§11)
 tools/shots.mjs         195 screenshot every screen + computed styles (§11)
 tools/sw-shellcheck.mjs  99 offline boot after a captive portal (§13.3) — a gate
@@ -1737,7 +1743,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 957 unit tests
+npm test             # 970 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -1748,6 +1754,7 @@ npm run screens      # screen coverage at 3 viewports
 npm run focus        # 15 keyboard and focus checks in a real browser
 npm run swshell      # offline boot after a captive portal (a gate)
 npm run reflow       # large-text reflow — a diagnostic; was failing, green as of §14
+npm run textscale    # does the app notice a text scale that leaves the root alone
 npm run status       # STATUS.md checked against disk
 # with per-file test counts, feed it a real run:
 VITEST_JSON=/tmp/r.json npx vitest run --reporter=json && VITEST_JSON=/tmp/r.json npm run status
@@ -2171,7 +2178,7 @@ anything is interactive.
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files** (the figures as of that
 > revision), and the boundary pass to
-> **957 across 47** — see §11, §12 and §13. The figures above are left as written
+> **970 across 48** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
@@ -3516,9 +3523,14 @@ a mechanical sweep of `theme.ts` and `styles.css` with a visual gate to catch it
 
 So the gap is narrower and better described, and not closed:
 
-- ~~the navigation screen cannot cope when the text is large~~ — **closed**, §14.
+- ~~the navigation screen cannot cope when the text is large~~ — **closed**, §14.1–14.4.
 - ~~the `rem` conversion is the fix~~ — it is *a* fix, for the other half.
-- the layout that responds to the platform's font setting does not exist — **open**.
+- **the platform's font scale never reached this app** — **half-closed** in §14.8: the
+  detector was watching only the root font size and was blind to the mechanism Android
+  WebView's `setTextZoom` uses, so the §14 layout would never have been switched on. Both
+  are now read.
+- **the layout that responds to the platform's font setting does not exist** — **open**.
+  This is the `rem` conversion, and it is the whole of what is left of gap 11.
 
 ### 14.7 Two things this pass got wrong on the way
 
@@ -3542,6 +3554,88 @@ observed; with that, deleting `observe()` fails two tests. Worth stating plainly
 this by deliberately breaking the code rather than by reading the test, which is the only
 reason it was found at all.
 
+
+### 14.8 The detector was watching for the wrong thing
+
+§14.6 leaves one thing open: *"The platform's font-size setting still does nothing,
+because every token is an absolute `px`."* That sentence contains a second claim, and
+nobody had checked it:
+
+> On Android, the system font-size setting reaches a WebView by scaling the **root font
+> size**. Absolute `px` lengths are not affected by it.
+
+It is in `textscale.ts`'s own header, and it is the reason the detector watched the root
+font size and nothing else. It could not be checked, because §7 gap 1 is that this app
+has never run on physical hardware.
+
+**It is also only half true, and the half that is false is the dangerous one.** A
+platform has more than one way to scale text, and the two leave *different evidence*:
+
+| how the platform scales it | root font size | a 16px probe's rendered height | old detector |
+|---|---|---|---|
+| nothing | 16px | 19px | `normal` — correct |
+| the root font size is enlarged | 28px | 19px — unchanged | `large` — correct |
+| rendered text is scaled | 16px — **unchanged** | **33px** | **`normal` — blind** |
+| the page is zoomed | 16px — unchanged | **33px** | **`normal` — blind** |
+
+Measured in Chromium at 892×412, with a probe span carrying an inline `font-size: 16px`.
+The third row is `WebSettings.setTextZoom`, which is how Android WebView applies a text
+scale — so under it this app rendered at 175% type with **every large-text rule off**,
+which is exactly the collision §12.7 measured and §14.1 fixed. The layout work was
+necessary and, on its own, insufficient: the app would never have known to use it.
+
+The detector now reads both signals and takes whichever fires, which is the honest
+position when the platform's behaviour is unverified:
+
+```ts
+if (reading.rootPx > TEXT_SCALE_THRESHOLD_PX) return 'large';
+if (reading.probePx !== null && reading.probePx > PROBE_THRESHOLD_PX) return 'large';
+return 'normal';
+```
+
+**Neither signal is treated as necessary**, because the two are *mutually blind* to each
+other — the probe is deliberately absolute so that it cannot mistake a root enlargement
+for no scaling, and the root reading cannot see a text zoom. That is asserted directly.
+
+The probe's threshold is **24px, derived**: an unscaled 16px line box measures 19px here
+and 33px at 1.75×, so 24px sits between them at roughly 125% — which is the same boundary
+`TEXT_SCALE_THRESHOLD_PX` expresses as 20/16. The two thresholds are one scale seen two
+ways, so neither mechanism starts reflowing before the other.
+
+`npm run textscale` is the proof, and it is the only thing in the project that can be:
+14 checks over four scenarios, each of which asserts its *precondition* before asserting
+the outcome — that the root really is still 16px, and that the text really did grow. With
+the probe signal removed it fails **4 checks**, including the two that matter, and the
+failure is reported as a named failure rather than a timeout that kills the process.
+
+#### Three things this got wrong on the way
+
+**The gate's own simulation was worse than the bug.** It scaled text with
+`html, body, body * { font-size: 1.75em }`, which compounds once per ancestor: the root
+went to 28px and a single ETA value to **1407px**. The check that was supposed to prove
+the app notices a scale was itself triggering the mechanism it meant to exclude, and it
+would have passed for the wrong reason. It now multiplies each element's size **from its
+own original**, so nothing compounds.
+
+**The probe was invisible in a way that made it unmeasurable.** `visibility: hidden` is
+laid out, so it measured correctly under a real scale — but `tools/reflow.mjs` skips
+invisible elements, and so did the first version of this gate, so the probe was skipped
+by the very tools meant to test it. It now uses `opacity: 0`, which is equally invisible
+and equally laid out but is not something a measuring loop filters on.
+
+**And then `test/screens.mjs` failed 39 checks**, all of them "no horizontal overflow —
+SPAN@-9999..-9975". The probe was parked off-screen at `left: -9999px`, the usual trick,
+and the screens suite was right: an element 9999px outside the viewport *is* overflow. It
+is `position: fixed` at the origin now, with `pointer-events: none`. Worth recording
+because it is the second time in this project that a new feature's own gate found a real
+problem in something that already existed — the first was the catalogue row in §13.11.
+
+#### What is still unverified
+
+**Which mechanism a real device uses.** This cannot be settled here, and §7 gap 1 stands.
+What §14.8 establishes is weaker and more useful: the app responds correctly to *each*
+mechanism, so whichever one the device uses, the layout turns on. The remaining half of
+gap 11 — making the setting reach the type at all — is still the `rem` conversion.
 
 ---
 
