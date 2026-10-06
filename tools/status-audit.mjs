@@ -136,6 +136,116 @@ if (listed.length !== onDisk.length) {
   problems.push(`§2 breakdown lists ${listed.length} spec files, disk has ${onDisk.length}`);
 }
 
+/* --------------------------- browser counts --------------------------- */
+
+/**
+ * The figures for each browser gate must agree with each other.
+ *
+ * Not verifiable here — running the suites is slow and this gate's job is to be
+ * cheap — but *internal disagreement* is exactly the failure the seventh wrong
+ * count was: §2 and §8 said 15 focus checks while §6 said 17, in the same file.
+ * Two of the three were right, and nobody compared them.
+ *
+ * So this checks that the numbers the document claims for one gate are the same
+ * number everywhere it claims them. When a count is re-derived, the others
+ * become visible as stale here rather than at some later reading.
+ */
+// Each gate's figure, read only from lines that actually name that gate. Cross-
+// matching is how the first version of this check reported "e2e gate is counted 46
+// and 15" — the same mistake the audit is meant to catch, one level up.
+/**
+ * Each gate's figure, and only that gate's.
+ *
+ * Token and number have to be bound together, because the first version of this
+ * check attributed one gate's number to another — a line reading "e2e 44; screens
+ * 53 x 3 = 159" gave the `screens` gate the number 44, since both tokens appear on
+ * it. The same shape as the `waitForFunction` bug: reading a value without reading
+ * what it belongs to.
+ */
+const GATE_FIGURES = [
+  { name: 'e2e', token: /\be2e\b/, res: [/\*\*(\d+) checks/g, /\be2e (\d+)\b/g, /\| `test\/e2e\.mjs` \| (\d+) \|/g] },
+  {
+    name: 'screens',
+    token: /\bscreens\b/,
+    // "53 checks x 3 viewports = 159" and the per-tool breakdown row.
+    // Two quantities here, not one: `53 checks × 3 viewports = 159` states a
+    // per-viewport base, and `test/screens.mjs | 159` states the total. Compared
+    // against each other they are a false positive, so the base is compared with
+    // the base and the total with the total.
+    baseRes: [/(\d+) checks × \d+ viewports/g, /screens (\d+) ×/g],
+    totalRes: [/\| `test\/screens\.mjs` \| (\d+)/g, /\*\*(\d+) checks × \d+ viewports = (\d+)\*\*/g],
+  },
+  {
+    name: 'focus',
+    token: /\bfocus\b/,
+    res: [/\*\*(\d+) checks\*\* in a real browser/g, /(\d+) keyboard\/focus checks/g, /\| `tools\/focus\.mjs` \| (\d+) \|/g],
+  },
+];
+
+const lines = doc.split('\n');
+const gateCounts = (gate) => {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!gate.token.test(line)) continue;
+
+    // A heading can wrap away from the figure it introduces, so the historical
+    // marker is looked for on this line and the one above. Narrow on purpose: a
+    // paragraph-level exclusion swallowed all of §2's table once already, hiding a
+    // wrong e2e figure under a prose note three rows up.
+    if (/re-derived rather than remembered|as of that revision/i.test(line + '\n' + (lines[i - 1] ?? ''))) {
+      continue;
+    }
+    for (const re of gate.res ?? []) {
+      for (const m of line.matchAll(re)) out.push(Number(m[1]));
+    }
+  }
+  return [...new Set(out)].filter((n) => Number.isInteger(n) && n > 0 && n < 500);
+};
+
+const disagree = (label, counts) => {
+  if (counts.length > 1) {
+    problems.push(
+      `the ${label} gate is counted ${counts.join(' and ')} on lines that name it; `
+      + 'the smaller figures are stale',
+    );
+  }
+};
+
+for (const gate of GATE_FIGURES) {
+  if (gate.baseRes) {
+    // Compared like with like: the per-viewport base against itself, and the
+    // total against itself. Mixing them is a false positive — 53 and 159 are not
+    // two answers to the same question.
+    const base = [];
+    const total = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (!gate.token.test(lines[i])) continue;
+      if (/re-derived rather than remembered|as of that revision/i.test(lines[i] + (lines[i - 1] ?? ''))) continue;
+      for (const m of lines[i].matchAll(/(\d+) checks × \d+ viewports = (\d+)/g)) { base.push(Number(m[1])); total.push(Number(m[2])); }
+      for (const m of lines[i].matchAll(/screens (\d+) [x×]/g)) base.push(Number(m[1]));
+      for (const m of lines[i].matchAll(/(\d+) checks x (\d+) viewports \((\d+) total\)/g)) { base.push(Number(m[1])); total.push(Number(m[3])); }
+      for (const m of lines[i].matchAll(/\| `test\/screens\.mjs` \| (\d+)/g)) total.push(Number(m[1]));
+    }
+    const uniq = (a) => [...new Set(a)].filter((n) => n > 0 && n < 500);
+    disagree(`${gate.name} (per viewport)`, uniq(base));
+    disagree(`${gate.name} (total)`, uniq(total));
+    // And the arithmetic itself.
+    for (const m of doc.matchAll(/(\d+) checks [x×] (\d+) viewports = (\d+)/g)) {
+      const [, a, b, c] = m.map(Number);
+      if (a * b !== c) problems.push(`§2 says ${a} × ${b} = ${c}, which is not ${a * b}`);
+    }
+    continue;
+  }
+  disagree(gate.name, gateCounts(gate));
+}
+
+/** Every `checks × N = M` in this file must multiply out. */
+for (const m of doc.matchAll(/(\d+) checks × (\d+) viewports = (\d+)/g)) {
+  const [, a, b, c] = m.map(Number);
+  if (a * b !== c) problems.push(`§2 says ${a} × ${b} = ${c}, which is not ${a * b}`);
+}
+
 /* ------------------------------- report ------------------------------- */
 
 console.log(`STATUS.md audit: ${listed.length} spec files listed, §7 gap list ends at ${maxGap}`);

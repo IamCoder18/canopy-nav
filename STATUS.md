@@ -90,7 +90,7 @@ stands. **Bold** = fully working and verified.
 | End-to-end | `npm run e2e` | **46 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
-| Document audit | `npm run status` | every `wc -l`, cross-reference, current total and `npm run` in this file checked against disk |
+| Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
 | Offline shell | `npm run swshell` | a captive portal answered 2 navigations, then the network went off: the app still boots, 5 launcher tiles |
 | Reflow at large text | `npm run reflow` | **3 checks fail** — a diagnostic, not a gate. §12.7, §13.8 |
 | Bundle budget | `npm run bundle` | entry 112.0 kB / 130, initial 117.5 / 150, largest 282.0 / 300, total JS 417.8 / 460 (gzip) |
@@ -224,7 +224,7 @@ Browser gates, measured the same way:
 | `tools/sw-shellcheck.mjs` | 1 (offline boot after a captive portal) | `npm run swshell` |
 | `tools/reflow.mjs` | 3 failing — a diagnostic, §12.7 | `npm run reflow` |
 
-**Six counts in this document have now been wrong at least once, and each was wrong the
+**Seven counts in this document have now been wrong at least once, and each was wrong the
 same way.** The e2e count (§2). The screen figure, recorded as both "29 × 3 = 87" and "50 × 3
 = 150" in different sections of *this* file while the true value was 51 × 3 = 153 — §2 was
 right and §6 and §9.2 were stale, which is the more awkward direction, because the correct
@@ -253,6 +253,27 @@ The sixth is the one that should have been caught by that: this revision's first
 the numbers left §2 saying 904 while the table said 901, because the two were edited in
 separate steps and only one of them was re-read. The machinery above reduces the cost of
 that error; it does not remove the need to look.
+
+The seventh is the one the gate **missed**, and that is why the gate grew. §6 said 17
+focus checks; §2 and §8 said 15, and 15 was right — counted off an actual run. Two of
+the three figures in the document agreed with each other and were both wrong, which is
+the one configuration a value check cannot see and a *disagreement* check catches
+immediately. Nothing about that failure was subtle; it was that no check existed for
+the shape of error that had just occurred twice already.
+
+Writing that new check produced two more instances of the fault it exists to catch,
+both inside twenty minutes. It first excluded historical figures by paragraph, and a
+prose note three rows above the §2 table — about a count being wrong *in the previous
+revision* — hid a genuinely wrong e2e figure two rows below it. Then it bound each
+gate's name to its number, after the first version attributed one gate's count to
+another: a single line carrying both a historical e2e count and the screens figures
+gave the *screens* gate the e2e number, because both names appear on it. A check is
+code, and code written once and never seen to fail is exactly as much a claim as a
+number written once.
+
+Which is why this paragraph, and §13.16, both describe the failures without quoting
+the stale figures verbatim: reproducing the pattern in order to explain it puts the
+pattern back into the document, and the check is right to object.
 
 ---
 
@@ -1431,10 +1452,10 @@ tools/bundle-budget.mjs 153 gzip size budget; fails on regression
 tools/reflow.mjs        343 chrome overlap at 100/175/200% text (§13.8) — a
                              diagnostic, NOT a gate: it fails, and a gate that
                              always fails is one people learn to ignore
-tools/focus.mjs         297 17 keyboard/focus checks in a real browser (§11)
+tools/focus.mjs         297 15 keyboard/focus checks in a real browser (§11)
 tools/shots.mjs         195 screenshot every screen + computed styles (§11)
 tools/sw-shellcheck.mjs  99 offline boot after a captive portal (§13.3) — a gate
-tools/status-audit.mjs   148 STATUS.md checked against the files it describes
+tools/status-audit.mjs   257 STATUS.md checked against the files it describes
 tools/diag-route.mjs     55 throwaway used to read a failing e2e check (§3.19)
 ```
 
@@ -2054,7 +2075,7 @@ were actually fetched.
 | Settings | `test/settings.spec.ts` | Every setting round-trips; a malformed endpoint is not "Ready" |
 | XML safety | `test/xmlentities.spec.ts` | Entity expansion is structurally impossible; hostile documents terminate |
 | Crash safety | `test/errorboundary.spec.ts` | A render throw shows a recovery card rather than a blank screen |
-| Document | `npm run status` | Every line count, cross-reference, current total and `npm run` in this file, checked against the files it describes |
+| Document | `npm run status` | Every line count, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against the files it describes |
 
 The bundle budget and the lint ratchet are both *ratchets*: raising a number is a
 deliberate edit to a file, not drift. That is the same reasoning as the screen
