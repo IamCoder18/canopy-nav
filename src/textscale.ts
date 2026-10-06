@@ -10,30 +10,59 @@
  *
  * ## Why this watches *two* signals, and used to watch one
  *
- * The first version of this watched **the resolved root font size** and documented
- * the reasoning as: *"On Android, the system font-size setting reaches a WebView by
- * scaling the root font size. Absolute px lengths are not affected by it."*
+ * The first version of this watched **the resolved root font size**, on the reasoning
+ * that: *"On Android, the system font-size setting reaches a WebView by scaling the
+ * root font size. Absolute px lengths are not affected by it."*
  *
- * That is a claim about Android's mechanism, made without a device — §7 gap 1 is
- * that this app has never run on physical hardware. It is unfalsifiable here, and it
- * is only half the story, because **there is more than one way a platform can scale
- * text** and the two do not present the same evidence:
+ * **That premise is false, and it was the load-bearing one** — four passes of this
+ * project nominated converting the type scale to `rem` as "the real fix" on the
+ * strength of it. Chromium's own WebView documentation says the opposite, twice:
+ *
+ * > "Font Scale is only affected by the TextZoom setting."
+ * >
+ * > `setTextZoom` — "Sets the text zoom of the page in percent."
+ * >  — android_webview/docs/web-page-layout.md
+ *
+ * So the platform multiplies **text**, whatever unit it was specified in — `px`
+ * included, which is why the browser-like configuration in the same document is
+ * `setLayoutAlgorithm(TEXT_AUTOSIZING)` — and it does **not** change the CSS root
+ * font size. Which means:
+ *
+ *  - a `rem` conversion would have achieved **nothing** here. Every token is already
+ *    scaled by the platform, because text is scaled and `px` is a unit of text size.
+ *    §14.9 records the correction.
+ *  - what was genuinely broken is **below**: this detector watched the one value the
+ *    platform's mechanism does *not* change, so `data-textsize` never became `large`,
+ *    so the large-text layout never applied — while the screen rendered at whatever
+ *    size the driver asked for. §12.7 measured that collision and §14 fixed it;
+ *    without this detector it would never have been used.
+ *
+ * Two independent measurements agree with the documentation: in Chromium at 892×412 a
+ * probe span carrying an inline `font-size: 16px` measures 19px unscaled and 33px once
+ * the text is scaled, while the root stays at 16px — the signature of a text scale and
+ * not of a root enlargement. No device was available to confirm it on (§7 gap 1), which
+ * is why this rests on the platform's documentation plus two browser measurements
+ * rather than on a phone.
+ *
+ * ## Why this watches *two* signals anyway
+ *
+ * Because the premise above was wrong for four passes, this does not assume one
+ * mechanism. A platform has more than one way to scale text, and the two leave
+ * *different* evidence — which is precisely how the wrong one survived:
  *
  * | how the platform scales it | root font size | a 16px probe's rendered height |
  * |---|---|---|
  * | it enlarges the root font size | **28px** | 19px — unchanged |
  * | it scales rendered text (WebView text zoom) | 16px — unchanged | **33px** |
  *
- * Measured, not assumed: a probe span with an inline `font-size: 16px`, measured in
- * Chromium at 892×412. So the original code saw the first mechanism and was blind to
- * the second, and the second is the one Android WebView's `setTextZoom` implements.
- *
  * Guessing wrong here is not a cosmetic failure: `data-textsize` is the only thing
  * that turns on the large-text layout, so a missed detection means the app renders at
  * 200% type with the layout it uses at 100%, which is the collision §12.7 measured.
  *
  * So this watches both and takes whichever fires. Neither signal is trusted to be
- * sufficient, which is the honest position when the platform's behaviour is unverified.
+ * sufficient, and the root reading is kept even though the documentation says the
+ * platform does not use it: the cost of keeping it is one comparison, and the cost of
+ * having removed it would be a second four passes spent on the wrong fix.
  *
  * ## What it does with the answer
  *
@@ -45,9 +74,10 @@
  * settings change while the app is open, and it is a single attribute — so the CSS
  * stays declarative and the thresholds are two numbers in one place.
  *
- * It is not a general text-scaling system, and it does not make the platform's setting
- * reach the type — the `rem` conversion is still that, and §14.6 keeps it open. What it
- * fixes is the half where the text *is* scaled and the layout did not find out.
+ * It is not a general text-scaling system, and it is not what makes the platform's
+ * setting reach the type — the platform already does that, on `px` as much as on
+ * `rem`. What it does is notice that it happened, so the layout can respond. That is
+ * the whole of the fix, and it was the whole of the defect.
  */
 
 import { useEffect } from 'react';

@@ -124,12 +124,42 @@ describe('rootFontSizePx', () => {
 describe('the detector keeps its documentation honest', () => {
   const src = readFileSync(join(ROOT, 'src', 'textscale.ts'), 'utf8');
 
-  it('states that the platform mechanism is unverified rather than asserting it', () => {
-    // The claim this replaces asserted a platform behaviour with no device to check it
-    // on. That assertion is what made the second mechanism invisible.
-    // "unfalsifiable here" is the load-bearing phrase: the claim was about a
-    // platform this has never run on, and that is why it went unchecked.
-    expect(src).toMatch(/unfalsifiable here/);
+  it('does not assert the false premise any more', () => {
+    // The claim this replaces — "Absolute px lengths are not affected by it" — was
+    // the load-bearing premise of four passes, and Chromium's own WebView
+    // documentation contradicts it: the platform multiplies *text* via TextZoom,
+    // whatever unit it was specified in.
+    //
+    // A source assertion is not a gate on truth, but it is a gate on the claim
+    // coming back. The prose it replaced was accurate about being unverified; the
+    // prose now is accurate about being wrong, and the difference is the whole
+    // correction. See §14.9.
+    // The claim appears once, and only as a quotation being refuted — which is why
+    // this is not a plain `not.toMatch`. Correcting a false premise means writing it
+    // down; the thing to prevent is it being *asserted* again, which is what the
+    // refutation next to it is for.
+    const quoted = src.match(/Absolute px lengths are not affected by it/g) ?? [];
+    expect(quoted, 'the false claim must appear exactly once, as a quotation').toHaveLength(1);
+    expect(src).toMatch(/\*\*That premise is false, and it was the load-bearing one\*\*/);
+    // And the line carrying the quotation must close it as a quotation.
+    expect(src).toMatch(/Absolute px lengths are not affected by it\.("*)/);
+  });
+
+  it('cites the platform documentation it now rests on', () => {
+    // The correction's whole authority is the platform's own words. Without them
+    // quoted in the source, this reads as an assertion again — which is how the last
+    // one survived four passes.
+    expect(src).toMatch(/Font Scale is only affected by the TextZoom setting/);
+    expect(src).toMatch(/android_webview\/docs\/web-page-layout\.md/);
+  });
+
+  it('states what the platform does do, since px tokens are fine', () => {
+    expect(src).toMatch(/TEXT_AUTOSIZING/);
+    expect(src).toMatch(/`rem` conversion would have achieved \*\*nothing\*\*/);
+  });
+
+  it('keeps the consequence stated: the detector, not the units, was the defect', () => {
+    expect(src).toMatch(/never became `large`/);
     expect(src).toMatch(/Guessing wrong here is not a cosmetic failure/);
   });
 

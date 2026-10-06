@@ -76,6 +76,7 @@ evaluated, which a pass or fail result does not tell you.
    — [what it measures now](#145-what-it-measures-now)
    — [what is still open](#146-what-is-still-open)
    — [the detector was watching for the wrong thing](#148-the-detector-was-watching-for-the-wrong-thing)
+   — [the largest gap in this document rested on a false premise](#149-the-largest-gap-in-this-document-rested-on-a-false-premise)
 
 ---
 
@@ -102,7 +103,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 970 unit tests across 48 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 973 unit tests across 48 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -116,7 +117,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **970 passing**, 48 files |
+| Unit tests | `npm test` | **973 passing**, 48 files |
 | End-to-end | `npm run e2e` | **49 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -194,7 +195,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **48 files, 970 tests**. The
+retyped by hand. The table is the complete set: **48 files, 973 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -229,7 +230,7 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `reroute-gate.spec.ts` | 7 | backoff and request sequencing together: an abandoned retry leaves no trace, a real failure leaves one |
 | `textscale-layout.spec.ts` | 13 | the type scale's leading is a multiplier, the bars are measured not assumed, and the alert precedes the instruction |
 | `chrome.spec.ts` | 10 | the bar-height observer: it publishes, it republishes on a resize, it cleans up |
-| `textscale.spec.ts` | 13 | the large-text detector sees either way a platform can scale text |
+| `textscale.spec.ts` | 16 | the large-text detector sees either way a platform can scale text |
 | `attribution.spec.ts` | 13 | the ODbL credit is present, well-formed, and not re-suppressed |
 | `mergeguard.spec.ts` | 13 | merge memory guard: three outcomes, the boundary at ratio 1, scaling with region count |
 | `reroute-failure.spec.ts` | 13 | a failed reroute leaves the route and its guidance alone |
@@ -1431,7 +1432,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 src/
   App.tsx                3998  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
-  textscale.ts            192  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
+  textscale.ts            222  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
   sw.ts                   264  offline shell service worker
   errors.ts                54  describeError: a message for any thrown value
@@ -1477,7 +1478,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            970 unit tests, 48 files
+test/            973 unit tests, 48 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1627,28 +1628,38 @@ or "gap 18" are to the *old* numbering and say so; the current numbers are 1–1
     says so, and none of them is in the wrong place — but a driver looking at this
     sees very little map. The first thing a designer would cut, and the one change
     that should not be made without one.
-11. **The platform's font-size setting does nothing, and the navigation screen
-    could not cope when the text was large anyway.** One coat, two defects, and
-    §14 closed one of them outright.
+11. ~~**The platform's font-size setting does nothing, and the navigation screen
+    cannot cope when the text is large anyway.**~~ **Closed** (§14), and the gap's
+    own premise was wrong.
 
-    - ~~The navigation screen cannot cope when the text is large.~~ **Closed**
-      (§14). The cause was not the one this gap assumed: the type scale's
-      **leading was a px length**, so it did not follow the platform's own text
-      scale, and at 175% every text element on the screen had a line box shorter
-      than its glyphs. The token now emits Google's leading as a *ratio*. The
-      five "clipped labels" §13.15 measured are **zero**, and the two bars' heights
-      are measured rather than assumed, so nothing anchored to them collides.
-      `npm run reflow` is green at all three text sizes for the first time.
-    - **The platform's font-size setting still does nothing**, because every token
-      is an absolute `px`. That is the `rem` conversion, and it is **open**. §14
-      fixed what happens *when* the text is scaled; it did not make the setting
-      reach the type.
+    This was the largest item in this document for four passes, and **both halves of
+    it rested on a false claim** — see §14.9. The claim was that Android's font setting
+    reaches a WebView by scaling the root font size and that "absolute `px` lengths are
+    not affected by it". Chromium's own WebView documentation says the platform
+    multiplies *text*, via `setTextZoom`, whatever unit it was specified in — so the
+    `rem` conversion this gap nominated as "the real fix" **would have achieved
+    nothing**.
 
-    Also closed under this heading, and found while fixing it: the off-route
-    notice was **invisible at 100% text** on a landscape phone (§14.3) — the
-    banner stack had no lower bound outside the large-text rules, so the alert sat
-    entirely behind the navigation controls — and the notice is now above the
-    maneuver card rather than below it (§14.4).
+    What was real, and is now fixed:
+
+    - **The leading was a px length**, so it did not follow the platform's scale, and
+      at 175% every text element had a line box shorter than its own glyphs. The token
+      emits Google's leading as a ratio now (§14.1). Five "clipped labels" → **zero**.
+    - **The bars' heights were constants** next to content-dependent boxes, so anything
+      anchored to them collided once the text grew (§14.2). They are measured now.
+    - **The detector watched the one value the platform does not change.** Root font
+      size stays 16px under a text scale, so `data-textsize` never became `large` and
+      **none of the above would ever have been used**. It reads a rendered probe as
+      well (§14.8).
+    - **The off-route notice was invisible at 100% text** on a landscape phone
+      (§14.3), and is now above the maneuver card rather than below it (§14.4).
+
+    `npm run reflow` is green at all three text sizes and `npm run textscale` covers
+    the detection. **The `rem` conversion is struck**, not deferred: it would not have
+    fixed anything, and §14.9 records why with the sources.
+
+    What remains unverifiable is the confirmation this cannot get: §7 gap 1, that none
+    of it has been seen on a physical device.
 12. **`RoadGraph.regionOf` is a merged-graph-only field that the persistence
     layer still knows about.** Recorded here because the previous revision
     claimed it "is persisted for every region … the bytes are still wasted on
@@ -1743,7 +1754,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 970 unit tests
+npm test             # 973 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -2178,7 +2189,7 @@ anything is interactive.
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files** (the figures as of that
 > revision), and the boundary pass to
-> **970 across 48** — see §11, §12 and §13. The figures above are left as written
+> **973 across 48** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
@@ -3099,7 +3110,9 @@ Reverted, and the measurements recorded in `styles.css` beside the rule that shi
 That is the third time this project has written a layout change down after
 measuring it to be no better, and the conclusion is now the same each time: the
 remaining work is not "add a rule", it is "stop hard-coding a height and deriving
-a layout from it". The `rem` conversion in §7 gap 11 is still the fix.
+a layout from it". **§14 is that work**, and it did not need the `rem` conversion this
+section nominated — the fix was measuring the bars, and a different premise about the
+platform. §14.9.
 
 ### 13.10 One handle for every download
 
@@ -3309,9 +3322,8 @@ limitation and a now-known-smaller target, is the shape of decision §3.19 warns
 
 **Both closed in §14** — and the nominated fix was the wrong one. Intrinsic bar heights
 were needed, but intrinsic *leading* was what the five labels needed: their line boxes
-were shorter than their own glyphs, which no bar height could fix and no `rem` conversion
-would have addressed on its own. The `rem` conversion is still open, for the other half of
-the gap.
+were shorter than their own glyphs, which no bar height could fix. §14.9 removed the
+`rem` conversion from consideration entirely: it would have addressed neither.
 
 ### 13.16 Five probes measured something other than what they named
 
@@ -3514,23 +3526,31 @@ reason has gone with it. It is listed in §2 as a passing row for the first time
 
 ### 14.6 What is still open
 
-Half of §7 gap 11, and it is the half this pass did not touch. **The platform's font-size
-setting still does nothing to this app**, because every token is an absolute `px` and the
-`rem` conversion was never done. What §14 fixes is the *consequence*: when the platform
-does scale the text — as the probe and a real WebView both do — the layout now survives
-it. The remaining work is making the setting reach the type in the first place, and it is
-a mechanical sweep of `theme.ts` and `styles.css` with a visual gate to catch it.
+**Written before §14.8 and §14.9, and superseded by both.** It is left in place because
+the reasoning was coherent and the premise underneath it was false — which is the more
+instructive record, and §14.9 is the correction.
 
-So the gap is narrower and better described, and not closed:
+What it claimed was open: *"The platform's font-size setting still does nothing to this
+app, because every token is an absolute `px` and the `rem` conversion was never done."*
+
+What §14.9 established is that the setting **does** reach this app's type — the platform
+multiplies text, and text is what `px` sizes — so a `rem` conversion would have changed
+nothing, and the remaining work described here as "a mechanical sweep of `theme.ts` and
+`styles.css`" was work that did not need doing. The real remaining item was one line of
+detection (§14.8).
+
+So of the four items this section listed:
 
 - ~~the navigation screen cannot cope when the text is large~~ — **closed**, §14.1–14.4.
-- ~~the `rem` conversion is the fix~~ — it is *a* fix, for the other half.
-- **the platform's font scale never reached this app** — **half-closed** in §14.8: the
-  detector was watching only the root font size and was blind to the mechanism Android
-  WebView's `setTextZoom` uses, so the §14 layout would never have been switched on. Both
-  are now read.
-- **the layout that responds to the platform's font setting does not exist** — **open**.
-  This is the `rem` conversion, and it is the whole of what is left of gap 11.
+- ~~the `rem` conversion is the fix~~ — **struck**, §14.9.
+- **the platform's font scale never reached this app** — **false**, §14.9. It reached the
+  *type*; what it never reached was the *layout*, because the detector watched the wrong
+  value (§14.8).
+- ~~the layout that responds to the platform's font setting does not exist~~ —
+  **closed**, §14.1–14.4, and switched on by §14.8.
+
+Nothing is left of gap 11 except the confirmation no amount of local work can supply:
+§7 gap 1, that none of this has been seen on a physical device.
 
 ### 14.7 Two things this pass got wrong on the way
 
@@ -3636,6 +3656,87 @@ problem in something that already existed — the first was the catalogue row in
 What §14.8 establishes is weaker and more useful: the app responds correctly to *each*
 mechanism, so whichever one the device uses, the layout turns on. The remaining half of
 gap 11 — making the setting reach the type at all — is still the `rem` conversion.
+
+### 14.9 The largest gap in this document rested on a false premise
+
+§14.6 kept one sentence of gap 11 open and described the rest as `rem` conversion work:
+
+> the platform's font-size setting still does nothing, because every token is an
+> absolute `px`
+
+The reasoning underneath it was in `textscale.ts`'s own header, and it had been there
+since the file was written:
+
+> On Android, the system font-size setting reaches a WebView by scaling the **root font
+> size**. Absolute `px` lengths are not affected by it.
+
+If that is true, `rem` is the fix. If it is false, `rem` is a large refactor that changes
+nothing. **It is false**, and Chromium's own documentation says so twice — from
+`android_webview/docs/web-page-layout.md`:
+
+> "Font Scale is only affected by the TextZoom setting."
+
+> `setTextZoom` — "Sets the text zoom of the page in percent."
+
+Which is the whole answer. The platform applies its font setting as a multiplier **on
+text**, and text is what `px` sizes — so the setting reaches this app's type whatever unit
+that type is written in. The same document recommends
+`setLayoutAlgorithm(WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING)` for browser-like
+behaviour, and notes the System WebView Shell uses it. Corroborated from the field:
+developers building Android WebView apps report that *"the Android Web View's font scaling
+mechanism is always enabled in web content and will automatically scale font sizes defined
+using the `px` unit"*, and that the usual workaround people reach for is
+`setTextZoom(100)` — a call you only need if px text is being scaled.
+
+**So: the `rem` conversion is struck rather than deferred.** Four passes of this document
+ranked gap 11 as the largest single piece of work left in the app on the strength of a
+premise that the platform's own documentation contradicts.
+
+#### What was actually wrong, and it was not the units
+
+Three things, and the first is the reason the other two went unnoticed:
+
+1. **The detector watched the wrong value.** `data-textsize` is the only thing that turns
+   on the large-text layout, and it was driven by the root font size — which a text
+   scale leaves at 16px. So the layout never switched on. §14.8 fixed it.
+2. **The leading was a length**, so it did not follow the scale that *was* applied.
+   §14.1 fixed it.
+3. **The bars' heights were constants**, so anything anchored to them collided once the
+   text grew. §14.2 fixed it.
+
+The order matters. (2) and (3) are real layout defects and were worth fixing on their own
+merits — a driver who zooms, or whose platform autosizes text, gets the same collisions
+whether or not the setting is honoured. But on a device they were unreachable: the
+detector never fired, so `data-textsize` never became `large`, so rules (2) and (3) exist
+to handle never applied. **§14's layout work was necessary and not sufficient, and the
+insufficiency was one line of detection.**
+
+#### How a false premise survives four passes
+
+The same shape as §13.16, one level up. A claim is made about a platform, in a comment,
+with a mechanism nobody can check without hardware; it is load-bearing for a large piece
+of work; and every subsequent pass reasons *from* it rather than *about* it. §12.7, §13.8,
+§13.15 and §14.6 all refined *how* to cope with large text and none asked whether the
+platform was producing any.
+
+The correction came from looking for the mechanism's documentation rather than for a
+second opinion on the app — and the answer was in the platform's own repo, in a document
+about layout, under a heading about hardwareness. The lesson worth keeping is narrow and
+usable: **a claim about a platform's mechanism is checkable from the platform's
+documentation, and being unable to run it locally is not a reason to assume it.**
+
+#### What is still not verified
+
+No device. §7 gap 1 stands, and this correction rests on documentation plus two Chromium
+measurements rather than on a phone — so the specific Android version, the specific
+Capacitor WebView configuration and the actual scale factor remain unconfirmed. What the
+correction does settle is the direction: `rem` was not the answer, and the detection was.
+
+It also leaves something genuinely open, and it is the more interesting half: because the
+platform scales **text** and not **layout**, a scale leaves every box the same size while
+the glyphs inside it grow. That is not a bug to work around — it is the behaviour to
+design against, and §14's floors, measured bounds and scrolling stack are the response to
+it.
 
 ---
 
