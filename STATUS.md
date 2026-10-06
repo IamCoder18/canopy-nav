@@ -20,9 +20,23 @@ with **fully offline OpenStreetMap routing**.
 - **§13** — the boundary pass: everything that crosses a boundary — a network, a disk, a
   service worker, two overlapping requests, a GPS fix — and refuses to be wrong quietly.
   Eleven defects, **three of them corrections to claims this document had been carrying**.
+- **§14** — the type-scale pass: the last layout defect, and the one four passes had
+  ranked by a measurement that was measuring the wrong thing. Leading was a length and
+  did not scale; the bars' heights were constants nobody measured; and a warning about
+  being lost was invisible at ordinary text sizes.
 
 Each pass also had to fix defects **it introduced**, which are recorded in §11.5, §12.8 and
 §13.6 rather than quietly corrected.
+
+**The last two passes were both about measurements, and not in the way they were
+expected to be.** §13 found five probes measuring something other than what they named,
+and §14 found that the "five clipped labels" this document had ranked its largest gap by
+were five line boxes shorter than their own glyphs — a defect with a one-line cause that
+four passes of reading had not suspected, because the probe's name for it was accurate
+and its arithmetic was not. Both passes are recorded with their measurements rather than
+their conclusions, and both changed what "done" means here: a number is a claim until it
+is re-derived, and a probe's label is not a finding until someone checks what it
+evaluated.
 
 **The pass that dominated §13 was not the defects it closed but the four measurements it
 found were wrong** — §13.16. Three made the app look worse than it is and one made it look
@@ -52,7 +66,15 @@ evaluated, which a pass or fail result does not tell you.
 12. [The engine audit](#12-the-engine-audit)
    — [a priority queue that was not a heap](#121-a-priority-queue-that-was-not-a-heap)
 13. [The boundary pass](#13-the-boundary-pass)
-   — [what this document got wrong](#134-what-this-document-got-wrong)
+   — [two more claims this document was carrying, and a third](#132-two-more-claims-this-document-was-carrying-and-a-third)
+   — [five probes measured something other than what they named](#1316-five-probes-measured-something-other-than-what-they-named)
+14. [The type-scale pass: the last layout defect](#14-the-type-scale-pass-the-last-layout-defect)
+   — [the leading was a length, so it did not follow the type](#141-the-leading-was-a-length-so-it-did-not-follow-the-type)
+   — [the bars were measured by nobody](#142-the-bars-were-measured-by-nobody)
+   — [a warning the driver could not see](#143-a-warning-the-driver-could-not-see)
+   — [the alert goes above the instruction](#144-the-alert-goes-above-the-instruction)
+   — [what it measures now](#145-what-it-measures-now)
+   — [what is still open](#146-what-is-still-open)
 
 ---
 
@@ -79,7 +101,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 934 unit tests across 45 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 957 unit tests across 47 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -93,13 +115,13 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **934 passing**, 45 files |
-| End-to-end | `npm run e2e` | **46 checks** against the built bundle |
+| Unit tests | `npm test` | **957 passing**, 47 files |
+| End-to-end | `npm run e2e` | **49 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
 | Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
 | Offline shell | `npm run swshell` | a captive portal answered 2 navigations, then the network went off: the app still boots, 5 launcher tiles |
-| Reflow at large text | `npm run reflow` | **3 checks fail** — a diagnostic, not a gate. §12.7, §13.8 |
+| Reflow at large text | `npm run reflow` | **12 checks, all passing** — was 3 failing at the start of §14 |
 | Bundle budget | `npm run bundle` | entry 112.0 kB / 130, initial 117.5 / 150, largest 282.0 / 300, total JS 417.8 / 460 (gzip) |
 | Offline cold start | verified in-browser | reload with the network off renders the app: 5 tiles, map sized, 0 console errors |
 | Release | v0.11.3 tag | **CI green, Release green**, APK attached |
@@ -170,7 +192,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **45 files, 934 tests**. The
+retyped by hand. The table is the complete set: **47 files, 957 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -203,6 +225,8 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `renderzoom.spec.ts` | 14 | zoom LOD re-application and reduced motion |
 | `reroute-backoff.spec.ts` | 14 | backoff growth to its cap |
 | `reroute-gate.spec.ts` | 7 | backoff and request sequencing together: an abandoned retry leaves no trace, a real failure leaves one |
+| `textscale-layout.spec.ts` | 13 | the type scale's leading is a multiplier, the bars are measured not assumed, and the alert precedes the instruction |
+| `chrome.spec.ts` | 10 | the bar-height observer: it publishes, it republishes on a resize, it cleans up |
 | `attribution.spec.ts` | 13 | the ODbL credit is present, well-formed, and not re-suppressed |
 | `mergeguard.spec.ts` | 13 | merge memory guard: three outcomes, the boundary at ratio 1, scaling with region count |
 | `reroute-failure.spec.ts` | 13 | a failed reroute leaves the route and its guidance alone |
@@ -225,11 +249,11 @@ Browser gates, measured the same way:
 
 | Suite | Checks | Command |
 |---|---|---|
-| `test/e2e.mjs` | 46 | `npm run e2e` |
+| `test/e2e.mjs` | 49 | `npm run e2e` |
 | `test/screens.mjs` | 159 (53 × 3 viewports) | `npm run screens` |
 | `tools/focus.mjs` | 15 | `npm run focus` |
 | `tools/sw-shellcheck.mjs` | 1 (offline boot after a captive portal) | `npm run swshell` |
-| `tools/reflow.mjs` | 3 failing — a diagnostic, §12.7 | `npm run reflow` |
+| `tools/reflow.mjs` | 12 passing — a diagnostic, §12.7; green as of §14 | `npm run reflow` |
 
 **Seven counts in this document have now been wrong at least once, and each was wrong the
 same way.** The e2e count (§2). The screen figure, recorded as both "29 × 3 = 87" and "50 × 3
@@ -1402,18 +1426,18 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx                3967  screens, navigation state, focus + announcements,
+  App.tsx                3998  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts             84  detects the platform's font scale (§12.7)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
   sw.ts                   264  offline shell service worker
   errors.ts                54  describeError: a message for any thrown value
   settings.ts             347  typed, validated, quota-safe persistence
-  theme.ts                177  AAOS design tokens (colour, type, layout, shape)
+  theme.ts                219  AAOS design tokens (colour, type, layout, shape)
   icons.tsx               421  29 maneuver kinds + system icons, hand-drawn SVG
   geo.ts                  352  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt
-  styles.css             2125  layout, insets, responsive rules
+  styles.css             2181  layout, insets, responsive rules
 
   osm/
     engine.worker.ts     1175  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
@@ -1429,6 +1453,7 @@ src/
     reroute.ts            394  reroute policy: when to act, backoff, banner
     providers.ts          390  provider chain, attempt trace, connectivity
     requests.ts           107  RequestGate: one live route request at a time
+    chrome.ts             117  the two bars' measured heights, as --eta-h and --nav-h
     steps.ts               66  why the turn list is empty: three causes, three answers
     engines.ts            239  engine selection, readiness, provenance
     geocode.ts            231  Nominatim client, 1 req/s throttle
@@ -1449,7 +1474,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            934 unit tests, 45 files
+test/            957 unit tests, 47 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1597,17 +1622,27 @@ or "gap 18" are to the *old* numbering and say so; the current numbers are 1–1
     sees very little map. The first thing a designer would cut, and the one change
     that should not be made without one.
 11. **The platform's font-size setting does nothing, and the navigation screen
-    cannot cope when the text is large anyway.** One defect, two causes — see
-    §12.7 and §13.8. Detection ships; the banner-stack lower bound ships and is
-    re-measured; the layout that responds to it does not. **This is the largest
-    single piece of work left in the app**, and it is two pieces of work: the
-    `rem` conversion, and intrinsic heights for the two chrome bars.
+    could not cope when the text was large anyway.** One coat, two defects, and
+    §14 closed one of them outright.
 
-    Corrected in §13.15: the "seven clipped labels" this gap has been ranked by is
-    **five**, and the instruction was never among them — it scrolls and is
-    reachable. What is clipped is chrome: `14 min`, `5.2 km`, `Steps`, `Exit`,
-    `Overview`, all inside bars whose `height` is a fixed token. Still a real
-    defect at 175% and 200%; smaller than this document made it sound.
+    - ~~The navigation screen cannot cope when the text is large.~~ **Closed**
+      (§14). The cause was not the one this gap assumed: the type scale's
+      **leading was a px length**, so it did not follow the platform's own text
+      scale, and at 175% every text element on the screen had a line box shorter
+      than its glyphs. The token now emits Google's leading as a *ratio*. The
+      five "clipped labels" §13.15 measured are **zero**, and the two bars' heights
+      are measured rather than assumed, so nothing anchored to them collides.
+      `npm run reflow` is green at all three text sizes for the first time.
+    - **The platform's font-size setting still does nothing**, because every token
+      is an absolute `px`. That is the `rem` conversion, and it is **open**. §14
+      fixed what happens *when* the text is scaled; it did not make the setting
+      reach the type.
+
+    Also closed under this heading, and found while fixing it: the off-route
+    notice was **invisible at 100% text** on a landscape phone (§14.3) — the
+    banner stack had no lower bound outside the large-text rules, so the alert sat
+    entirely behind the navigation controls — and the notice is now above the
+    maneuver card rather than below it (§14.4).
 12. **`RoadGraph.regionOf` is a merged-graph-only field that the persistence
     layer still knows about.** Recorded here because the previous revision
     claimed it "is persisted for every region … the bytes are still wasted on
@@ -1702,7 +1737,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 934 unit tests
+npm test             # 957 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -1712,7 +1747,7 @@ npm run typecheck
 npm run screens      # screen coverage at 3 viewports
 npm run focus        # 15 keyboard and focus checks in a real browser
 npm run swshell      # offline boot after a captive portal (a gate)
-npm run reflow       # large-text reflow — a DIAGNOSTIC, it fails (§13.9)
+npm run reflow       # large-text reflow — a diagnostic; was failing, green as of §14
 npm run status       # STATUS.md checked against disk
 # with per-file test counts, feed it a real run:
 VITEST_JSON=/tmp/r.json npx vitest run --reporter=json && VITEST_JSON=/tmp/r.json npm run status
@@ -2136,7 +2171,7 @@ anything is interactive.
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files** (the figures as of that
 > revision), and the boundary pass to
-> **934 across 45** — see §11, §12 and §13. The figures above are left as written
+> **957 across 47** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
@@ -2451,11 +2486,13 @@ people to delete the explanation.
    always fails is a gate people learn to ignore. It is a diagnostic, and
    `styles.css` records what it reports.
 
-   Two things the probe still reports as failing, honestly: the control column,
-   and clipped chrome labels. The labels are clipped because the tokens are
-   absolute `px` — which is the *other* cause above, and fixing it means `rem`.
-   (This section's "seven" is corrected in §13.15: it is five, and the instruction
-   was never one of them.)
+   **Both of those are now fixed — see §14**, and this section is left as it was
+   written because its reasoning is what §14 had to correct: the probe was right
+   that something was wrong and wrong about what. The clipped chrome labels were
+   line boxes shorter than their own glyphs (§14.1), not labels too small for their
+   own box, so the `rem` conversion this section nominated would not have fixed
+   them. The control column's overlap was a `max-height: none` that undid the base
+   rule's bound (§14.2).
 
 2. ~~Confirming a region removal loses focus~~ — **closed.** The Remove button
    stays mounted and hidden, focus moves to Confirm, cancelling returns focus to
@@ -2723,16 +2760,21 @@ override wraps inside the column's own 168px width and grows **upward** out of t
 viewport — `y=-296` in a 412px viewport, 604px tall, where before the change it was
 merely cramped. Reverted.
 
-`tools/reflow.mjs` is deliberately **not** in `npm run check`. It fails, and a
+`tools/reflow.mjs` is deliberately **not** in `npm run check`. It used to fail, and a
 gate that always fails is a gate people learn to ignore — the same conclusion §10.3
-reached about a green result nobody re-derives. It is a diagnostic;
-`styles.css` carries the measurements and this section carries the reasoning.
+reached about a green result nobody re-derives. It is a diagnostic; `styles.css` carries
+the measurements and this section carries the reasoning.
 
-Two things it still reports as failing, honestly: the control column, and clipped
-chrome labels. The labels are clipped *because* the tokens are absolute `px`, which
-is the other half of the same defect — and fixing it means `rem`. The count is
-corrected in §13.15: five, not seven, and the instruction is scrollable rather than
-clipped.
+**Update (§14): it no longer fails.** All 12 checks pass at all three text sizes. That
+does not make it a gate, because it needs a browser and takes minutes, and because a
+diagnostic that reports *nothing* tends to stop being read — so it stays a diagnostic and
+is now listed in §2 as a passing row.
+
+Two things it still reported as failing, honestly: the control column, and clipped
+chrome labels. **Both are fixed in §14**, and so is this section's diagnosis. The labels
+were clipped because their *leading* was a length that did not scale with their font
+(§14.1) — which is why the `rem` conversion nominated here would not have fixed them, and
+why §13.15 had to correct the count to five before anything could be.
 
 ---
 
@@ -3258,10 +3300,17 @@ heights: the two halves of §7 gap 11, which is one defect with two causes.
 No further CSS was attempted. A second attempt at the same shape, with the same known
 limitation and a now-known-smaller target, is the shape of decision §3.19 warns about.
 
-### 13.16 Four probes measured something other than what they named
+**Both closed in §14** — and the nominated fix was the wrong one. Intrinsic bar heights
+were needed, but intrinsic *leading* was what the five labels needed: their line boxes
+were shorter than their own glyphs, which no bar height could fix and no `rem` conversion
+would have addressed on its own. The `rem` conversion is still open, for the other half of
+the gap.
 
-The clearest pattern in this pass, and worth one section of its own because the
-instances are independent and the conclusions are the same.
+### 13.16 Five probes measured something other than what they named
+
+The clearest pattern across this pass and the next, and worth one section of its own
+because the instances are independent and the conclusions are the same. The fifth row was
+added by §14, forty minutes after the other four.
 
 | | measured | should have measured |
 |---|---|---|
@@ -3269,12 +3318,15 @@ instances are independent and the conclusions are the same.
 | §13.15 | `scrollHeight` on a text node, reported as clipping | whether the text is reachable |
 | §11.9 | a synthetic `Tab` dispatch | whether focus moves on real input |
 | §13.12 | a 30 s default timeout, reported as "the probe never settles" | whether the app overruns its own 75 s bound |
+| §14.7 | a stubbed `ResizeObserver` whose callback the test called directly | whether the module observed anything at all |
 
 Three of these made a screen look **worse** than it is — a clipped child counted as an
 overlap, a scrollable label counted as clipped, an unreachable one that was reachable.
-The fourth made it look **better**: a gate with its budget silently reverted to 30 s
-called a screen unsettled that was merely not finished, and I spent a revision reading it
-as a network fault before the wall clock said `30003 ms`.
+Two made it look **better**, and both were mine: a gate with its budget silently reverted
+to 30 s called a screen unsettled that was merely not finished, and a test whose stub
+called its own callback made a module that observed nothing look tested. The first was
+caught by a wall clock that read `30003 ms`; the second only by deleting the code and
+watching the test stay green.
 
 The general form is the one worth keeping, because each instance looked like a product
 defect until measured: **a probe's failure and a product's failure look identical from
@@ -3321,6 +3373,175 @@ measurements corrected, and the defects found underneath three of them.
 | The gate for the above never used its own budget — `waitForFunction`'s options were passed as its argument, so it ran on Playwright's 30 s default and reported a slow probe as a hung one | `undefined` passed explicitly; verified to fail at 1.5 s and pass at 150 s. §13.12 |
 | Two sibling cards with the same fill and different corners, read as one panel split in two | The notice matches the card's 16px radius. §13.13 |
 | An empty turn list blamed the engine for a route that had no turns in it | Three causes, three honest explanations, in a tested function. §13.14 |
+
+---
+
+## 14. The type-scale pass: the last layout defect
+
+§7 gap 11 had been open across four passes and described as "the largest single piece of
+work left in the app". It was two defects wearing one coat, and neither was the one the
+coat suggested.
+
+### 14.1 The leading was a length, so it did not follow the type
+
+`theme.ts` typed `lineHeight` as a `` `${number}px` `` string, and the comment above it
+explained why that was deliberate: React writes a *number* into `line-height` verbatim, a
+bare number in CSS is a multiplier rather than a length, and `line-height: 32` on a 24px
+font would produce a 768px line box. The reasoning is correct. The conclusion was wrong,
+because it weighed one class of mistake and ignored the cost of avoiding it.
+
+Android's font scale multiplies text. A **length stays the length it was**. So at 175%:
+
+| | 100% | 175% | what that means |
+|---|---|---|---|
+| `body1` type | 32dp | 56dp | the platform scaled the text |
+| `body1` leading | 40dp | **40dp** | and nothing scaled the line box |
+| glyphs needing | ~42dp | ~52dp | 12dp of overflow per line |
+
+Measured across the navigation screen at 175%, **every text element** had its line box
+shorter than its glyphs: 12px on the ETA values, 14px on the distance, 8px on each of the
+three button labels, and 12px spread across the five lines of one maneuver instruction.
+`tools/reflow.mjs` had been reporting five of these as *clipped labels* for two passes —
+which is what that overflow looks like from outside the element, and is the fifth time in
+this project that a probe's name for a finding has been the finding.
+
+The fix is one type change. Google's published leading (`64/56`, `40/32`, `32/24`) is a
+ratio, and the token now emits that ratio, with the dp pair kept in the table as the
+source of truth so the specification stays legible:
+
+```
+display1: step(sans, 56, 64, 0)     // 56dp type, 64dp leading, per Design for Driving
+```
+
+At 100% the rendered line box is within **0.002px** of the published figure — the cost of
+rounding a ratio to 4dp — and at 175% the overflow is **zero everywhere**.
+
+### 14.2 The bars were measured by nobody
+
+With the leading fixed, the ETA bar grew — correctly, because its numbers now wrap to two
+lines at 200% instead of being clipped. And that immediately broke two other things,
+which is the useful part, because it exposed the shape of the original defect:
+
+- `.banner-stack`'s `top: calc(var(--app-bar, 96px) + …)` no longer cleared the bar that
+  had just become 128px tall, so the maneuver card was drawn underneath it. Measured
+  **168 × 8px** of overlap at 200%.
+- `.nav-controls`' `max-height: none` in the short-screen block put its four buttons across
+  the bottom bar by **4px**.
+
+Both were the same mistake as the gap they came from: **a position written as a constant
+next to something whose height depends on its content.** §13.9 had already concluded that
+"the honest fix is to stop deriving layout from constants"; this is that fix.
+
+`src/nav/chrome.ts` publishes the bars' *measured* heights as `--eta-h` and `--nav-h`, via
+a `ResizeObserver`, and every anchored position reads them with the design token as the
+fallback — so the first paint is right, and so is any platform without the observer:
+
+```css
+top:    calc(var(--eta-h, var(--app-bar, 96px)) + var(--inset-top) + 24px);
+bottom: calc(var(--nav-h, var(--navbot, 128px)) + var(--inset-bottom));
+```
+
+The measurements are written as **separate properties** from the design tokens on purpose.
+`--app-bar` says how tall a bar *should* be and `--eta-h` says how tall it *is*; collapsing
+them would make each bar's height an input to itself.
+
+### 14.3 A warning the driver could not see
+
+Bounding the stack below exposed a defect that had been there the whole time, at **100%
+text**, on the commonest layout in the app.
+
+`.banner-stack` had **no lower bound at all** except under `[data-textsize="large"]`. On an
+892×412 landscape phone the stack ran from y=120 to y=384 while the bottom bar began at
+y=316 — so all 56px of **"You have left the route" sat behind the navigation controls**. A
+driver who has left the route was told nothing. At 175% and 200% `reflow` reported it as
+entirely out of view.
+
+Nothing caught it, and the reason is worth keeping: `reflow.mjs` compares the pieces in
+its `PIECES` list, and the notice is a *child* of the stack rather than a peer of it, so
+the pair that was actually colliding was never compared. §13.8 established that this
+probe cannot see some pairs; this is a third one, and the only remedy so far has been to
+look at what a probe is pointed at rather than at what it reports.
+
+Bounded at every text size now, and the stack scrolls instead of overflowing — the trade
+§13.15 had already settled, that a banner you can scroll to is correct and one you cannot
+see is not.
+
+### 14.4 The alert goes above the instruction
+
+Bounding the stack raised a second question: when the cards do not both fit — 216px of
+room against 264px of cards on a landscape phone — which one is below the fold?
+
+With the notice second, the answer was **the alert**, which §13.13 had explicitly reasoned
+against: it said the notice sat beneath so it would never cover "the maneuver is the one
+they act on immediately". That reasoning assumed both cards fit. They do not, and not
+closely.
+
+So the order is reversed: the off-route notice is first, the maneuver card second. A driver
+who is not told they have gone off-route will keep following the road they are on — and
+the instruction they can still see is precisely the wrong thing to keep following. The
+cost lands on the instruction, which scrolls and is reachable, which §13.15 already
+established is the acceptable way for an instruction to be unavailable.
+
+This reverses a recorded decision, so it is recorded here with the measurement that
+reversed it rather than as a quiet improvement.
+
+### 14.5 What it measures now
+
+`npm run reflow` is green — **all 12 checks at all three text sizes**, for the first time
+in the project's history:
+
+| | 100% | 175% | 200% |
+|---|---|---|---|
+| before | 4 checks, 3 failing | 4 checks, 1 failing | 4 checks, 3 failing |
+| after | **4 passing** | **4 passing** | **4 passing** |
+| clipped labels | 0 | **5 → 0** | **5 → 0** |
+| chrome overlaps | 1 (68px, unreported) | 0 | 1 (new, then fixed) |
+| off-route notice | **invisible** | out of view | out of view |
+
+Verified independently at **three viewports × three text sizes**, all nine combinations
+clean: 892×412, 412×915 and 1280×720 at 100%, 175% and 200%.
+
+`reflow` is still a diagnostic rather than a gate, for the reason §10.3 gives — a gate
+that always failed was a gate people learned to ignore — but it no longer fails, so that
+reason has gone with it. It is listed in §2 as a passing row for the first time.
+
+### 14.6 What is still open
+
+Half of §7 gap 11, and it is the half this pass did not touch. **The platform's font-size
+setting still does nothing to this app**, because every token is an absolute `px` and the
+`rem` conversion was never done. What §14 fixes is the *consequence*: when the platform
+does scale the text — as the probe and a real WebView both do — the layout now survives
+it. The remaining work is making the setting reach the type in the first place, and it is
+a mechanical sweep of `theme.ts` and `styles.css` with a visual gate to catch it.
+
+So the gap is narrower and better described, and not closed:
+
+- ~~the navigation screen cannot cope when the text is large~~ — **closed**, §14.
+- ~~the `rem` conversion is the fix~~ — it is *a* fix, for the other half.
+- the layout that responds to the platform's font setting does not exist — **open**.
+
+### 14.7 Two things this pass got wrong on the way
+
+Recorded because both are the shape §13.16 is about, and one of them is mine.
+
+**The fix was tested wrong, twice, before it was tested right.** The obvious experiment —
+scale the text, then apply a unitless `line-height` — appeared to do nothing. It computed
+the ratio *after* scaling, so it faithfully preserved the bug: 40/56 is the broken ratio,
+and re-expressing it as a number reproduced 40px exactly. The second attempt failed for a
+different reason: the ratio table was passed across a `page.evaluate` boundary, and DOM
+references do not survive serialisation, so every lookup missed. Both produced a clean
+"no improvement" from a fix that works. Measuring the ratio *before* scaling made it work
+immediately, and the real numbers came out on the first honest run.
+
+**The new test suite had a test that could not fail.** `chrome.spec.ts` stubbed
+`ResizeObserver` and let the test call the captured callback directly. Deleting every
+`observe()` call from the module left that test **passing** — it was exercising a closure,
+not an observation, which is the module's entire mechanism. The stub now registers a
+callback per observed element, and `fire(el)` only reaches an element that was actually
+observed; with that, deleting `observe()` fails two tests. Worth stating plainly: I found
+this by deliberately breaking the code rather than by reading the test, which is the only
+reason it was found at all.
+
 
 ---
 

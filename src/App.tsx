@@ -25,6 +25,7 @@ import {
 } from './nav/reroute';
 import { RequestGate, isSuperseded } from './nav/requests';
 import { stepsEmptyReason } from './nav/steps';
+import { observeChromeHeights } from './nav/chrome';
 import {
   formatDistance, formatDuration, formatClock, lineLength,
   snapToPolyline, vertexAt, type LatLng,
@@ -2500,6 +2501,17 @@ function NavOverlay(props: {
 
   useEffect(() => () => cancelSpeech(), []);
 
+  /*
+   * Publish the two bars' measured heights, so the banner between them is bounded by
+   * what they actually are rather than by the constants the stylesheet assumes.
+   *
+   * Re-run on mount only: both bars are present for the life of this screen, and a
+   * `ResizeObserver` on each already fires whenever their content changes height —
+   * which is the case that matters, since the ETA bar's height is a function of how
+   * many lines its numbers wrap to.
+   */
+  useEffect(() => observeChromeHeights()?.stop, []);
+
   /**
    * What a screen reader is told about the trip.
    *
@@ -2667,6 +2679,31 @@ function NavOverlay(props: {
         first in the column and the notice follows.
       */}
       <div className="banner-stack">
+      {/*
+        The off-route notice comes **first**, above the maneuver card, which reverses
+        the placement §13.13 chose and recorded. That placement was reasoned: the
+        notice sat beneath so it never covered "the maneuver is the one they act on
+        immediately". The reasoning assumed both cards fit.
+
+        Measured, they do not, and it was not close. On a 892x412 landscape phone the
+        stack has 216px between the bars and the two cards need 264 — so *something*
+        is below the fold, and with the notice second the thing below the fold was
+        the alert. At 100% text it was invisible outright: the notice ran to y=384
+        while the bottom bar began at y=316, so all 56px of "You have left the route"
+        sat behind the navigation controls. At 175% and 200% `tools/reflow.mjs`
+        reported it as entirely out of view.
+
+        A driver who is not told they have left the route will keep following the road
+        they are on, and the instruction they can still see is precisely the wrong
+        thing to keep following. So the alert takes the space and the instruction
+        scrolls — which §13.15 already established is the acceptable way for an
+        instruction to be unavailable: reachable, and first among the non-alerts.
+      */}
+      {props.rerouteNotice && (
+        <div className="offroute-banner" role="status" aria-live="polite">
+          {props.rerouteNotice}
+        </div>
+      )}
       {/* Maneuver banner — the big card Google Maps shows before each turn */}
       <div className="maneuver-banner">
         <div className={`maneuver-icon ${major || arriving ? 'major' : ''}`}>
@@ -2691,12 +2728,6 @@ function NavOverlay(props: {
           </div>
         </div>
       </div>
-
-      {props.rerouteNotice && (
-        <div className="offroute-banner" role="status" aria-live="polite">
-          {props.rerouteNotice}
-        </div>
-      )}
       </div>
 
       {/* Right-hand control stack */}

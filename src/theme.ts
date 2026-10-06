@@ -104,34 +104,76 @@ export function applyThemeTokens(root: HTMLElement | undefined = globalThis.docu
 /**
  * A single entry of the type scale.
  *
- * `lineHeight` is deliberately typed as a `${number}px` string. React treats
- * `lineHeight` as a unitless CSS property, so it copies a numeric value into
- * the style attribute verbatim — and a bare number in CSS means a *multiplier*
- * of font-size, not a length. `line-height: 32` on a 24px font therefore
- * produces a 768px line box, which silently shreds any layout that relies on
- * the box height. The AAOS scale is specified in px, so we serialise the unit
- * ourselves; typing it as `${number}px` turns a bare number into a type error.
+ * ## Why `lineHeight` is a multiplier, not a px length
+ *
+ * It was a `${number}px` string, and the comment above it explained why that was
+ * deliberate: React copies a *number* into `line-height` verbatim, a bare number in
+ * CSS is a multiplier rather than a length, and `line-height: 32` on a 24px font
+ * would produce a 768px line box. Typing it as `${number}px` made the mistake a
+ * compile error. That reasoning is correct and the conclusion was wrong, because it
+ * only considered the mistake and not the cost.
+ *
+ * The cost is that **a px line-height does not scale with its font**. Android's font
+ * scale multiplies text; a length stays the length it was. So at 175% a 32dp heading
+ * with Google's 40dp line box has 56dp of glyphs in a 40dp line, and every line of
+ * text is drawn closer together than the letters need — measured, 12px of overflow
+ * on the ETA values and 12px across the five lines of a maneuver instruction, with
+ * nothing in the layout to absorb it. `tools/reflow.mjs` reported those as five
+ * "clipped labels", which is what the overflow looked like from outside.
+ *
+ * A multiplier is the same design spec and it follows the font: Google's 64/56 and
+ * 40/32 are ratios, and this is how they are now written. At 100% the computed
+ * line box is unchanged to within 0.002px (§14.1), and at 175% the overlap is zero.
+ *
+ * The px figures are kept in the table below as the source of truth, because that
+ * is how the specification states them, and the ratio is derived from them rather
+ * than typed twice.
  */
 export type TypeToken = Omit<CSSProperties, 'lineHeight'> & {
-  readonly lineHeight: `${number}px`;
+  readonly lineHeight: number;
 };
 
+/** Google Sans at 32dp and up; Roboto below. Sizes in pt (== dp for our purposes). */
+const sans = 'var(--sans)';
+const roboto = 'var(--roboto)';
+
 /**
- * Type scale, in pt (== dp for our purposes).
- * Android Auto uses Google Sans at 32dp and up; Roboto below.
+ * One step of the scale, from the specification's own dp pair.
+ *
+ * @param fontSize   dp, as published
+ * @param lineHeight dp, as published — Google states leading as a length, and the
+ *                   ratio derived from it is what makes the leading follow the type
  */
+function step(
+  fontFamily: string,
+  fontSize: number,
+  lineHeight: number,
+  letterSpacing: number,
+  fontWeight?: number,
+): TypeToken {
+  return {
+    fontFamily,
+    fontSize,
+    // React writes a number straight through, and CSS reads it as a multiplier. The
+    // rounding to 4dp keeps 100% within 0.002px of the published leading.
+    lineHeight: Math.round((lineHeight / fontSize) * 10_000) / 10_000,
+    letterSpacing,
+    ...(fontWeight ? { fontWeight } : {}),
+  };
+}
+
 export const type = {
-  display1: { fontFamily: 'var(--sans)', fontSize: 56, lineHeight: '64px', letterSpacing: 0 },
-  display2: { fontFamily: 'var(--sans)', fontSize: 44, lineHeight: '52px', letterSpacing: 0.1 },
-  display3: { fontFamily: 'var(--sans)', fontSize: 36, lineHeight: '44px', letterSpacing: 0.2 },
-  body1: { fontFamily: 'var(--sans)', fontSize: 32, lineHeight: '40px', letterSpacing: 0.3 },
-  body1m: { fontFamily: 'var(--sans)', fontSize: 32, lineHeight: '40px', letterSpacing: 0.3, fontWeight: 500 },
-  body2: { fontFamily: 'var(--roboto)', fontSize: 28, lineHeight: '36px', letterSpacing: 0.3 },
-  body3: { fontFamily: 'var(--roboto)', fontSize: 24, lineHeight: '32px', letterSpacing: 0.6 },
-  body3m: { fontFamily: 'var(--roboto)', fontSize: 24, lineHeight: '32px', letterSpacing: 0.6, fontWeight: 500 },
-  sub1: { fontFamily: 'var(--roboto)', fontSize: 22, lineHeight: '28px', letterSpacing: 1.1 },
-  sub2: { fontFamily: 'var(--roboto)', fontSize: 20, lineHeight: '26px', letterSpacing: 1.2 },
-  sub3: { fontFamily: 'var(--roboto)', fontSize: 18, lineHeight: '24px', letterSpacing: 1.2 },
+  display1: step(sans, 56, 64, 0),
+  display2: step(sans, 44, 52, 0.1),
+  display3: step(sans, 36, 44, 0.2),
+  body1: step(sans, 32, 40, 0.3),
+  body1m: step(sans, 32, 40, 0.3, 500),
+  body2: step(roboto, 28, 36, 0.3),
+  body3: step(roboto, 24, 32, 0.6),
+  body3m: step(roboto, 24, 32, 0.6, 500),
+  sub1: step(roboto, 22, 28, 1.1),
+  sub2: step(roboto, 20, 26, 1.2),
+  sub3: step(roboto, 18, 24, 1.2),
 } satisfies Record<string, TypeToken>;
 
 export type ScreenWidthClass = 'standard' | 'wide' | 'extraWide' | 'superWide';

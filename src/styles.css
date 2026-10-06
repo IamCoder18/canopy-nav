@@ -784,7 +784,11 @@ code {
 
 .eta-bar {
   position: absolute; top: 0; left: 0; right: 0;
-  height: var(--app-bar, 96px);
+  /* A floor, not a height, for the same reason as `.nav-bottom`: a long distance
+     ("1234 km") or a wrapped caption can need more than the token allows, and a
+     fixed height clips it rather than growing. `--app-bar` is the design minimum and
+     `chrome.ts` publishes the result as `--eta-h` for everything anchored to it. */
+  min-height: var(--app-bar, 96px);
   display: flex; align-items: center; gap: 24px;
   /* One shorthand, with the inset folded in. This used to be
      `padding-top: var(--inset-top)` followed by `padding: 0 16px 0 24px`, and
@@ -862,10 +866,39 @@ code {
  * the maneuver tile's height, so the two cards touched with no gap and any
  * change to the tile would have pushed the notice underneath it.
  */
+/*
+ * The two bounds below are the only thing standing between a card and the bars above
+ * and below it, and both used to be constants: `var(--app-bar)` and `var(--navbot)`.
+ * That is only correct while the bars really are the height the tokens claim, and
+ * they are not — the ETA bar's height is a function of how many lines its numbers
+ * wrap to, which no constant can predict.
+ *
+ * `--eta-h` and `--nav-h` are measured (see `src/nav/chrome.ts`) and are what the
+ * bounds read first; the design tokens are the fallback, so the layout is correct
+ * before the first measurement and on any platform without a `ResizeObserver`.
+ */
 .banner-stack {
   position: absolute;
   left: 24px;
-  top: calc(var(--app-bar, 96px) + var(--inset-top) + 24px);
+  top: calc(var(--eta-h, var(--app-bar, 96px)) + var(--inset-top) + 24px);
+  /* Bounded below by the bottom bar, at every text size.
+   *
+   * This bound used to exist only under `[data-textsize="large"]`, which left the
+   * commonest layout in the app unbounded: on a 892x412 landscape phone the stack ran
+   * from y=120 to y=384 while the bottom bar started at y=316, so the **off-route
+   * notice was behind the bottom bar in its entirety** — a warning about being lost,
+   * invisible. Measured, and it is pre-existing: no gate caught it because
+   * `tools/reflow.mjs` only compares the chrome it listed, and the notice is a child
+   * of the stack rather than a peer of it.
+   *
+   * So the stack scrolls instead of overflowing. That is the same trade the
+   * large-text rule already makes, and the same one §13.15 settled: a banner the
+   * driver can scroll to is correct; one they cannot see is not. The instruction gets
+   * priority because it is first in the column.
+   */
+  bottom: calc(var(--nav-h, var(--navbot, 128px)) + var(--inset-bottom));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   /* Stretch, not flex-start: with `flex-start` the cards shrink-to-fit and a
@@ -978,10 +1011,20 @@ code {
 .nav-controls {
   position: absolute;
   right: 24px;
-  top: calc(var(--app-bar, 96px) + var(--inset-top) + 24px);
+  /* Below the ETA bar's *measured* height, for the same reason `.banner-stack` is:
+     a constant collides as soon as the bar grows. It grew for a real reason — the
+     ETA numbers wrap to two lines at 200%, and the bar is now allowed to be as tall
+     as they need — which turned the constant into an overlap of 168x8px at 200%,
+     measured. Reading `--eta-h` puts this column back under the bar at every size. */
+  top: calc(var(--eta-h, var(--app-bar, 96px)) + var(--inset-top) + 24px);
   display: flex; flex-direction: column; gap: 16px;
-  /* keep the stack clear of the maneuver card on narrow screens */
-  max-height: calc(100% - 260px);
+  /* Keep the stack clear of the maneuver card on narrow screens. Also derived from
+     constants, so it is bounded by the same two measurements: the space left between
+     the two bars is `100vh` less both of them, less the gap that separates this
+     column from the cards. */
+  max-height: calc(
+    100% - var(--eta-h, var(--app-bar, 96px)) - var(--nav-h, var(--navbot, 128px)) - 48px
+  );
   overflow: hidden;
   /* Wraps to a second column when the column cannot fit vertically. Measured at
      892x412: four 76px buttons plus gaps need 352px and only 196px is available,
@@ -1240,7 +1283,12 @@ code {
 
 .nav-bottom {
   position: absolute; bottom: 0; left: 0; right: 0;
-  height: var(--navbot, 128px);
+  /* A floor, not a height. The three labels in this bar wrap to two lines when the
+     text is large — measured, 64px of label in a 96px bar at 200% — and a fixed
+     height clipped them by 4px. `--navbot` is the design minimum; the content decides
+     above it, and `chrome.ts` publishes the result as `--nav-h` so the banner stack's
+     lower bound rises with it instead of being overlapped. */
+  min-height: var(--navbot, 128px);
   display: flex; align-items: center; justify-content: space-around;
   gap: 8px;
   /* Same longhand/shorthand bug as `.eta-bar`: `padding-bottom` was reset by
@@ -1671,8 +1719,13 @@ ol.search-results { list-style: none; margin: 0; padding-left: 12%; padding-righ
   .maneuver-banner { top: calc(76px + var(--inset-top) + 20px); padding: 16px 24px; }
   .maneuver-icon { width: 88px; height: 88px; }
   .maneuver-icon svg { width: 64px; height: 64px; }
-  .nav-bottom { height: var(--app-bar, 96px); }
-  .eta-bar { height: 76px; }
+  /* Both bars are floors here, not heights, for the same reason they are in the base
+     rules: a fixed height clipped their own content once the type got large —
+     measured, the bottom bar's three labels need 100px of a 96px box at 200%, and the
+     ETA bar needs 128px of a 76px one at 200%. `chrome.ts` publishes the results as
+     `--nav-h` and `--eta-h`, so everything anchored to them moves with them. */
+  .nav-bottom { min-height: var(--app-bar, 96px); }
+  .eta-bar { min-height: 76px; }
   /* Four stacked 76dp buttons do not fit above a 96dp bottom bar on a 412dp-tall
      screen — the last two used to be clipped out of reach. Wrap into two columns
      instead so every control stays tappable at full touch-target size. */
@@ -1680,7 +1733,13 @@ ol.search-results { list-style: none; margin: 0; padding-left: 12%; padding-righ
     flex-direction: row; flex-wrap: wrap;
     width: 168px;
     justify-content: flex-end;
-    max-height: none;
+    /* `none` here undid the base rule's bound, which is how the column came to
+       overlap the bottom bar at 200%: four 76dp buttons in two rows are 168px tall,
+       starting at y=152 on a 412px screen, and the bottom bar begins at y=316 —
+       a 4px intersection. The bound is the distance left between the two bars. */
+    max-height: calc(
+      100% - var(--eta-h, var(--app-bar, 96px)) - var(--nav-h, var(--navbot, 128px)) - 48px
+    );
   }
   /* The layers panel has to clear the 76dp bar and the control stack on a short
      screen. The tall-layout values do not transfer: `bottom: 136px` was derived
@@ -2114,9 +2173,6 @@ ul.result-list > li { margin: 0; }
  * one thing that screen must not lose at any text size.
  */
 [data-textsize="large"] .banner-stack {
-  bottom: calc(var(--navbot, 128px) + var(--inset-bottom));
-  overflow-y: auto;
-  overscroll-behavior: contain;
   padding-bottom: 8px;
 }
 
