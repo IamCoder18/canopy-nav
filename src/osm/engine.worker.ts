@@ -293,9 +293,28 @@ export function parseOsmXml(
  * the buffer is kept to a working window: everything up to the last safe element
  * boundary is scanned and dropped, and only the incomplete tail is carried.
  *
- * @param totalChars Optional size hint, used only to scale progress. Without it
- *   progress is reported against the high-water mark rather than a total, which
- *   is honest about not knowing the denominator.
+ * @param totalChars Optional size hint. Progress is a fraction of it.
+ *
+ * ## Without a size hint, progress is a single terminal report
+ *
+ * This used to say progress "is reported against the high-water mark rather than a
+ * total". There is no such reporting. A variable named `high` was accumulated on every
+ * window cut and **never read anywhere in the repo** — the fingerprint of reporting
+ * that was removed and not re-wired — so a caller passing no hint received exactly one
+ * value: `onProgress(0.5)`, after the last chunk.
+ *
+ * That is the honest answer rather than a missing feature, and it took a wrong fix to
+ * see why. The tempting repair is to report `high / seen`, which rises toward 0.5 — but
+ * `high / seen` is **1.0** the moment the first boundary is cut, and stays there, so it
+ * is not a fraction of anything. Any other rising value without a denominator is
+ * **invented**: it would claim the parse is 40% done when nothing knows that, which is
+ * the same defect as §13.14's steps list, where a screen reported a cause nothing had
+ * established.
+ *
+ * So: no hint means one terminal report, and `high` is gone rather than left as dead
+ * state that invites exactly that invention. Production is unaffected either way —
+ * `engine.ts` always passes `file.size`, so this is the branch the app never takes, and
+ * the worker's `post(label, p * 0.5)` halves whatever arrives.
  */
 export async function parseOsmXmlStream(
   chunks: AsyncIterable<string> | Iterable<string>,
@@ -307,7 +326,6 @@ export async function parseOsmXmlStream(
 
   let carry = '';
   let seen = 0;
-  let high = 0;
 
   const flush = (segment: string, done: boolean) => {
     scanSegment(segment, nodes, ways);
@@ -322,7 +340,6 @@ export async function parseOsmXmlStream(
     if (cut > 0) {
       flush(carry.slice(0, cut), false);
       carry = carry.slice(cut);
-      high = Math.max(high, seen - carry.length);
     }
   }
 

@@ -517,7 +517,12 @@ function readU32BE(b: Uint8Array, p: number): number {
  *
  * Not supported: zstd-compressed blobs (detected and reported rather than
  * mis-parsed), relations (irrelevant to the road graph), and streaming from
- * disk — the whole file must be in memory, exactly like the XML path.
+ * disk — the whole file must be in memory.
+
+ * That last one used to say "exactly like the XML path", which was true of the
+ * pre-streaming design and is false now: the XML path *does* stream, in a bounded
+ * window (`parseOsmXmlStream`), and that is the path production uses. PBF is the
+ * normal format and is always held whole. Recorded in STATUS.md §14.16.
  */
 export async function parseOsmPbf(
   bytes: Uint8Array,

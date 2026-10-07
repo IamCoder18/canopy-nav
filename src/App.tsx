@@ -1065,15 +1065,19 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   };
 
   /**
-   * Start progress over — for a new route, or when leaving navigation.
+   * Turn-by-turn guidance from the engine's own maneuvers.
    *
-   * The placement in metres has to be cleared *with* the fraction, not instead of
-   * it. Metres measured along the previous route would immediately clamp the new
-   * route's progress to wherever the old trip ended, and because the clamp is
-   * monotonic that is unrecoverable for the rest of the drive: the new ETA would
-   * open reading a distance belonging to a road the driver is not on, and would
-   * never come down. Resetting the fraction alone would have reintroduced
-   * exactly the bug this ref exists to remove.
+   * This is a **read-only derivation** of `route`, `progressAlong` and `units`. It
+   * resets nothing and owns no state.
+   *
+   * It used to carry a verbatim copy of `beginRouteProgress`'s comment — including
+   * "the placement in metres has to be cleared *with* the fraction" — which reads, on
+   * this memo, as an obligation it does not have. A reader who landed here could
+   * conclude `guidance` owns the reset, add one, and reintroduce precisely the bug
+   * the first copy warns about: metres measured along the previous route clamping the
+   * new route's progress to where the old trip ended, unrecoverably, because the clamp
+   * is monotonic. The obligation belongs to `beginRouteProgress`, above, and only
+   * there.
    */
   const guidance = useMemo(() => {
     if (!route || route.engine === 'osm-local') return null;
@@ -3322,8 +3326,8 @@ function SearchScreen(props: {
     // `props.location` is intentionally NOT a dependency and `locationKey` is
     // its stand-in; the body reads the live value from `locationRef`. Adding
     // `props.location` here is exactly the bug this note exists to prevent — see
-    // `locationKey` above — and `test/search-debounce.spec.ts` fails if the raw
-    // array comes back.
+    // `locationKey` above — and `test/audit-regressions.spec.ts` asserts the raw
+    // array stays out of this dependency list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, cat, props.dataset, props.online, locationKey, props.regions, locationRef]);
 

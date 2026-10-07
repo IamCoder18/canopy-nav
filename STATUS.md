@@ -87,6 +87,7 @@ evaluated, which a pass or fail result does not tell you.
    — [two more stale claims, and one real gap](#1413-two-more-claims-that-were-stale-and-one-that-is-a-real-gap)
    — [the imported road network was never drawn](#1414-the-imported-road-network-was-never-drawn)
    — [three more, and the shape they share](#1415-three-more-and-the-shape-they-share-with-1414)
+   — [two more code defects](#1416-two-more-code-defects-one-of-which-is-the-largest-thing-found-in-this-pass)
 
 ---
 
@@ -113,7 +114,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1017 unit tests across 53 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1026 unit tests across 54 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -127,7 +128,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1017 passing**, 53 files |
+| Unit tests | `npm test` | **1026 passing**, 54 files |
 | End-to-end | `npm run e2e` | **55 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -205,7 +206,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **53 files, 1017 tests**. The
+retyped by hand. The table is the complete set: **54 files, 1026 tests**. The
 previous revision's table listed 24 of the 38 files and several stale counts.
 
 | File | Tests | Covers |
@@ -257,6 +258,7 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `strict-plan.spec.ts` | 6 | `strict` constrains the plan, not the walk — and the two docstrings now agree |
 | `mapsources.spec.ts` | 6 | every source id the app writes to is one the style declares — a layer id is not a source id |
 | `threshold-prose.spec.ts` | 11 | the numbers a comment states, so a comment cannot disagree with the code quietly |
+| `stream-progress.spec.ts` | 9 | streaming progress without a size hint, and three comments that had drifted |
 | `minheap.spec.ts` | 6 | the heap invariant, plus the broken implementation kept and asserted to fail |
 | `pbfgeo.spec.ts` | 6 | absolute coordinates against the PBF spec, via the real encoder |
 | `streamscale.spec.ts` | 6 | the streaming parse holds a small multiple of the document, not the document |
@@ -1453,7 +1455,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx                3998  screens, navigation state, focus + announcements,
+  App.tsx                4002  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            222  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
@@ -1467,8 +1469,8 @@ src/
   styles.css             2181  layout, insets, responsive rules
 
   osm/
-    engine.worker.ts     1193  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
-    pbf.ts                606  .osm.pbf protobuf reader
+    engine.worker.ts     1210  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
+    pbf.ts                611  .osm.pbf protobuf reader
     engine.ts             403  worker client, format sniff, GeoJSON mirroring
     regions.ts            462  RegionLibrary, catalogue, bbox helpers, merge cache
     merge.ts              318  union-find merge of adjacent extracts
@@ -1502,7 +1504,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              285  RegionLibrary singleton, per-region workers
 
-test/            1017 unit tests, 53 files
+test/            1026 unit tests, 54 files
 test/e2e.mjs           46 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1783,7 +1785,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1017 unit tests
+npm test             # 1026 unit tests
 npm run e2e          # 46 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -2218,7 +2220,7 @@ anything is interactive.
 > These are the numbers as of §10. Two further passes added work and, in the
 > engine audit, took the total to **828 across 38 files** (the figures as of that
 > revision), and the boundary pass to
-> **1017 across 53** — see §11, §12 and §13. The figures above are left as written
+> **1026 across 54** — see §11, §12 and §13. The figures above are left as written
 > because §10.4 is a record of what *that* pass changed, and editing them would
 > make it a record of something else. §2 carries the current figures, measured.
 
@@ -4250,6 +4252,86 @@ ids, `SPEED` had the motorway speed, `VALHALLA_TIMEOUT_MS` had the 20 s, and
 `bboxOverlapFrac` was exported and tested.
 
 Nothing was missing. The **joins** were.
+
+### 14.16 Two more code defects, one of which is the largest thing found in this pass
+
+#### Closed here: a comment that named a test which does not exist
+
+`App.tsx`'s search effect says `props.location` is intentionally not a dependency and
+that "`test/search-debounce.spec.ts` fails if the raw array comes back". **That file has
+never existed** — it is the only one of the ten `test/*.spec.ts` files cited from `src/`
+that is absent. The invariant is in fact upheld (`locationRef.current` is read instead),
+and what actually covers it is `test/audit-regressions.spec.ts`, which asserts the string
+`props.location` is absent from the dependency list.
+
+So this is not a behaviour bug. It is a comment naming the mechanism that keeps an
+invariant true, and the mechanism was not there to be found — a reader trusting it would
+look for a test and conclude there is none. Corrected to name the test that exists, and
+`test/stream-progress.spec.ts` now asserts that **every** `test/*.spec.ts` path cited from
+`src/` exists.
+
+#### Closed here: the streaming parser's dead progress state
+
+`parseOsmXmlStream`'s docstring claimed that without a size hint "progress is reported
+against the high-water mark". It was not: a variable named `high` was accumulated on
+every window cut and **never read anywhere in the repo** — the fingerprint of reporting
+that was removed and not re-wired — so a caller passing no hint got one value,
+`onProgress(0.5)`, after the last chunk.
+
+`test/stream.spec.ts` could not see it, because it asserts monotonicity and a terminal
+`0.5`, and a one-element `[0.5]` satisfies both.
+
+The dead state is gone and the comment now says what happens. **The tempting repair was
+wrong**, which is the part worth recording: `high / seen` looks like a rising fraction and
+is **1.0** from the first boundary onward, so it is not a fraction of anything — and any
+other rising value without a denominator is *invented*, claiming the parse is 40% done when
+nothing knows that. That is §13.14's defect in a new place: a surface reporting something
+the data does not support. The honest answer is one terminal report, and that is what
+ships. Production is unaffected either way — `engine.ts` always passes `file.size`.
+
+#### Open, and it is the largest thing in this pass: focus is never returned
+
+`App.tsx` keeps a `returnFocus` ref described as "the element focused before the last
+screen change, so `Back` returns to it", keyed by screen name so that "returning to the
+launcher from Settings should return to the card that was pressed".
+
+**Nothing ever reads it.** `rg -n "returnFocus" src/` returns two hits: the declaration
+and the assignment inside `go()`. The only focus work a screen change does is
+
+```tsx
+if (mounted.current && document.activeElement === document.body) {
+  focusQuietly(headingRef.current);
+}
+```
+
+So launcher → tap the **Settings** tile → press Back lands focus on the Home `<h1>`,
+never on the tile that was pressed — and because `go()` *overwrites* the record on the way
+back, the original entry is gone too. The scenario the comment describes is the one §11 was
+written for, and this path is the gap in it. Nothing in the suite covers it:
+`test/focus.mjs`'s 15 checks never leave a screen and come back.
+
+Recorded, not fixed: restoring focus means reading the ref on back-navigation and focusing
+a possibly-unmounted element, which needs a "is it still in the document" guard and a
+decision about whether to fall back to the heading. That is a focus-behaviour change to a
+screen §11 already reworked twice, and it belongs in its own pass with the focus suite
+extended to cover it — not in the last hour of one.
+
+#### Open: the PBF reader is never streamed, and the comment says it is
+
+`engine.worker.ts` prefers a `stream` handle because it "lets a multi-hundred-MB extract
+be parsed in a bounded window instead of being held whole, which is the difference
+between parsing a province and being OOM-killed by one" — and three lines above it records
+that **PBF is the normal path**.
+
+For PBF it is unreachable: the only PBF poster sends `{ bytes, format: 'pbf' }` from
+`await file.arrayBuffer()`. And even if a stream were passed, the handler reads it to
+completion, concatenates, and parses the whole thing — peak of **2×** the file, not a
+bounded window. So for the format production uses, the file is always held whole, and the
+outcome the comment says the stream prevents is what happens.
+
+The comment is corrected to say so, and the gap is recorded here rather than fixed: making
+the PBF path genuinely streaming means a `block.fork()`-per-block incremental parse, which
+is the largest single piece of engineering left in the app and is not a comment change.
 
 ---
 
