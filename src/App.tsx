@@ -25,6 +25,7 @@ import {
 } from './nav/reroute';
 import { RequestGate, isSuperseded } from './nav/requests';
 import { stepsEmptyReason } from './nav/steps';
+import { inferSteps, summariseTrace, type GuidanceTraceEntry } from './nav/guidance';
 import {
   startSimulator, stopSimulator, simulatorInstalled, currentSimulator,
   onSimulatorChange, simulatorState, progressFraction,
@@ -1219,25 +1220,21 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
      * Reported rather than guessed at, so the Steps screen can say which of the two
      * it is.
      */
-    const tooSparseToInfer = geometry.length < 17;
-
-    const steps: LegStep[] = [];
-    for (let i = 8; i < geometry.length - 8; i += 8) {
-      const inB = bearingBetween(geometry[i - 8], geometry[i]);
-      const outB = bearingBetween(geometry[i], geometry[i + 8]);
-      let turn = outB - inB;
-      while (turn > 180) turn -= 360;
-      while (turn < -180) turn += 360;
-      const kind = turnKind(turn);
-      if (!kind) continue;
-      const legM = lineLength(geometry.slice(i, i + 9));
-      steps.push({
-        icon: kind, major: Math.abs(turn) > 120,
-        title: `${kind.replace('-', ' ')} onto unnamed road`,
-        // A real distance, so the Steps screen is not a column of bare names.
-        distanceLabel: formatDistance(legM, units), distanceMeters: legM, shapeIndex: i,
-      });
-    }
+    /**
+     * The inference itself, and the trace of how it decided.
+     *
+     * Moved into `src/nav/guidance.ts` unchanged — same window, same thresholds, same
+     * order — with one addition: it returns every window it looked at, including the ones
+     * that produced nothing. §7 gap 6 says this misses three of seven real maneuvers, and
+     * the misses left no record at all, so "the turn was wrong" was an argument rather than
+     * a diff. `guidance.trace` is now the diff, and the panel shows it.
+     *
+     * `tooSparseToInfer` is read from the module rather than recomputed here, so the
+     * threshold has one definition.
+     */
+    const inferred = inferSteps(geometry, { units });
+    const tooSparseToInfer = inferred.tooSparse;
+    const steps = inferred.steps;
 
     // The next turn ahead of the driver, and how far along the line to it.
     const nextIdx = steps.findIndex((s) => s.shapeIndex > here);
@@ -1254,6 +1251,9 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
       // placement as the ETA, so the drawn line and the number can no longer
       // disagree about where the car is.
       travelled: geometry.slice(0, here + 1),
+      // The trace travels with the guidance so the panel can render it without re-running
+      // the inference, and so what it shows is exactly what the banner acted on.
+      guidance: inferred,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route, dataset, progressAlong, location]);
@@ -1719,6 +1719,7 @@ const banner = rerouteNotice ?? routeError ?? null;
           storageNotice={settingsNotice}
           headingRef={headingRef}
           simAppFix={fix}
+          guidanceTrace={localGuidance?.guidance.trace}
           simRoute={route?.geometry ?? null}
           onBack={() => go('home')}
           onImport={() => go('import')}
@@ -1783,24 +1784,6 @@ const banner = rerouteNotice ?? routeError ?? null;
 }
 
 /* ---------------------- bearing / turn helpers --------------------- */
-
-function bearingBetween(a: LatLng, b: LatLng): number {
-  const toRad = Math.PI / 180;
-  const lon1 = a[0] * toRad, lat1 = a[1] * toRad;
-  const lon2 = b[0] * toRad, lat2 = b[1] * toRad;
-  const y = Math.sin(lon2 - lon1) * Math.cos(lat2);
-  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(lon2 - lon1);
-  return (Math.atan2(y, x) * 180) / Math.PI;
-}
-
-function turnKind(delta: number): LegStep['icon'] | null {
-  const d = Math.abs(delta);
-  if (d < 18) return null;
-  if (d < 45) return delta > 0 ? 'slight-right' : 'slight-left';
-  if (d < 115) return delta > 0 ? 'right' : 'left';
-  if (d < 150) return delta > 0 ? 'sharp-right' : 'sharp-left';
-  return delta > 0 ? 'uturn-right' : 'uturn-left';
-}
 
 /* ---------------------------- HomeScreen ---------------------------- */
 
@@ -3944,6 +3927,12 @@ function SettingsScreen(props: {
    */
   simAppFix?: Fix | null;
   /**
+   * The offline guidance, with the trace of how it was derived. `null` when the route came
+   * from an engine that supplied its own maneuvers, because then there is nothing inferred
+   * and nothing to trace.
+   */
+  guidanceTrace?: GuidanceTraceEntry[];
+  /**
    * The route the simulator should drive, or `null` when there is none.
    *
    * `null` rather than an empty array: a simulator pointed at nothing would emit a position
@@ -4102,6 +4091,54 @@ function SettingsScreen(props: {
             </>
           )}
         </div>
+
+        {/* --------------------------- guidance trace --------------------------- */}
+        {/*
+          §15.5 item 38, and the thing §7 gap 6 has needed for four passes.
+
+          The offline engine supplies no maneuvers, so every turn this app shows is
+          *inferred* — and the inference missed three of seven real ones, invented one and
+          reversed a direction. That was diagnosable only by reimplementing it, because a
+          window it looked at and rejected left no record at all. A missing turn and a
+          spurious turn look identical in the output and are opposite defects.
+
+          So this lists every window, with the two bearings, the signed turn, what was
+          chosen, and for the rejected ones what the number was against. A reviewer asking
+          "why did it miss the roundabout" gets an answer rather than an argument.
+        */}
+        {props.guidanceTrace && (
+          <div className="hint-card" style={{ marginTop: DP.P2 }}>
+            <div style={T.body3m}>
+              {props.guidanceTrace.length > 0
+                ? `Guidance trace — ${summariseTrace(props.guidanceTrace)}`
+                : 'Guidance trace — this route is too short to read turns from'}
+            </div>
+            <div style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1 }}>
+              {props.guidanceTrace.length > 0
+                ? 'Every window the inference looked at, in route order. A window with no '
+                  + 'step is one it considered and rejected.'
+                : 'The inference samples every eighth point and needs eight either side, so '
+                  + 'a route with fewer than 17 points has no window at all. That is a '
+                  + 'different thing from looking and finding nothing, and the Steps screen '
+                  + 'tells the two apart.'}
+            </div>
+            <div data-testid="guidance-trace" style={{ ...T.sub3, marginTop: DP.P2, maxHeight: 220, overflowY: 'auto' }}>
+              {props.guidanceTrace.map((e) => (
+                <div key={e.index} style={{ display: 'flex', gap: DP.P2, paddingBottom: 2 }}>
+                  <span style={{ color: e.kind ? ink.primary : ink.tertiary, minWidth: 116 }}>
+                    {e.kind ?? '— no step —'}
+                  </span>
+                  <span style={{ color: ink.secondary, minWidth: 68 }}>
+                    {`${e.turn > 0 ? '+' : ''}${e.turn.toFixed(1)}°`}
+                  </span>
+                  <span style={{ color: ink.tertiary, flex: 1 }}>
+                    {e.reason ?? `index ${e.index} · ${formatDistance(e.legMetres, props.units)}`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="section-head" style={T.body3m}>Units</div>
         <div className="seg">

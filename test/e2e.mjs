@@ -349,6 +349,49 @@ console.log('\ndrive simulator');
     check('the panel says so plainly when the app has received nothing',
       !/App has received no position/.test(fixLate), fixLate.slice(0, 90));
 
+    /*
+     * The guidance trace, which is the item §7 gap 6 has needed for four passes.
+     *
+     * A *missing* turn and a *spurious* one look identical in the steps list, so before this
+     * the offline inference could only be argued about by reimplementing it. The panel lists
+     * every window it looked at, including the ones it rejected, and the check below is that
+     * a rejected window is actually shown — an empty list would satisfy "the trace is
+     * present" and prove nothing, which is the failure this whole section is about.
+     */
+    const trace = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid=guidance-trace]');
+      const card = el?.closest('.hint-card');
+      if (!el) return { present: false, lines: 0, rejected: 0, sample: '', panel: card?.innerText ?? '' };
+      const rows = [...el.children].map((d) => d.innerText.replace(/\s+/g, ' ').trim());
+      return {
+        present: true,
+        lines: rows.length,
+        rejected: rows.filter((l) => l.includes('no step')).length,
+        sample: rows[0] ?? '',
+        panel: card?.innerText ?? '',
+      };
+    });
+    check('the guidance trace is shown in the panel, or says why there is none', trace.present,
+      trace.present ? `${trace.lines} windows` : 'no trace element');
+    // The two honest states, and only those two. An empty panel would satisfy "the trace is
+    // present" and prove nothing, so the check is on what it says.
+    //
+    // On this fixture it is the *too short* state: the offline engine returns a 2-3 point
+    // geometry for a short route, and the inference needs 17. That is exactly why the panel
+    // states it rather than rendering nothing -- §3.19's lesson, which was that an empty
+    // state with the wrong explanation is worse than a plain one.
+    const statesTrace = trace.lines > 0;
+    const statesTooShort = /too short to read turns/i.test(trace.panel ?? '');
+    check('it states one of the two honest reasons, not an empty panel',
+      trace.present && (statesTrace || statesTooShort),
+      statesTrace ? `${trace.lines} windows, ${trace.rejected} rejected`
+        : statesTooShort ? 'says the route is too short' : 'said nothing');
+    if (statesTrace) {
+      check('it lists the windows the inference rejected, not just the ones it kept',
+        trace.rejected > 0,
+        `${trace.rejected} rejected of ${trace.lines}: "${trace.sample}"`);
+    }
+
     // Stopped *after* that check, not before. The first version switched the simulator off
     // and then waited for the app to react to a position it was no longer sending -- and
     // reported "the app noticed nothing" as though the app were at fault. The order is the

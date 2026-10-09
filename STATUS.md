@@ -111,6 +111,7 @@ evaluated, which a pass or fail result does not tell you.
    — [driving the guard through the UI](#1419-153-item-9--driving-the-guard-through-the-ui-and-what-it-cost)
    — [what an adversarial review found](#1421-what-an-adversarial-review-of-1418-1420-found-in-them)
    — [the number that refused the import](#14201-the-number-that-refused-the-import-arriving-too-late-to-refuse-it)
+   — [the inference, extracted so it can be argued with](#1423-the-inference-extracted-so-that-it-can-be-argued-with)
    — [the drive simulator, and four unprovable checks](#1422-the-drive-simulator-and-four-checks-that-could-not-tell-it-from-a-working-one)
    — [the crop, and a guard that refused it anyway](#1420-the-crop-and-a-guard-that-refused-it-anyway)
 15. [The roadmap](#15-the-roadmap)
@@ -146,7 +147,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1235 unit tests across 62 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1250 unit tests across 63 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -160,8 +161,8 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1235 passing**, 62 files |
-| End-to-end | `npm run e2e` | **79 checks** against the built bundle — +11 for the memory guard, +2 for the crop, +9 for the drive simulator |
+| Unit tests | `npm test` | **1250 passing**, 63 files |
+| End-to-end | `npm run e2e` | **81 checks** against the built bundle — +11 for the memory guard, +2 for the crop, +9 for the drive simulator |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
 | Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
@@ -239,7 +240,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **62 files, 1235 tests**. The previous
+retyped by hand. The table is the complete set: **63 files, 1250 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -250,8 +251,8 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1235 total double-counts contrast's 34 tests**: 1201 distinct test cases are
-declared across 62 files. Both figures are recorded rather than reconciled by lowering the
+that **the 1250 total double-counts contrast's 34 tests**: 1216 distinct test cases are
+declared across 63 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
 
@@ -322,6 +323,7 @@ reading it.
 | `probebound.spec.ts` | 6 | the catalogue probe is bounded, and every entry reaches a verdict |
 | `steps.spec.ts` | 8 | why the turn list is empty — three causes, three honest explanations |
 | `pbfcrop.spec.ts` | 12 | the crop: a cropped parse equals the unfiltered one restricted to the same box, on both readers and against the XML parser; a road leaving the box splits into runs rather than joining across the gap |
+| `guidance.spec.ts` | 15 | the offline turn inference, and the trace of how it decided: every window it looked at, with the two bearings, the signed turn, and — for the ones it rejected — the number and the threshold it missed |
 | `simulator.spec.ts` | 32 | the drive simulator's pure core: a seeded generator, metre-accurate interpolation, seven fault kinds, and the catch-up bound that stops a `Date.now()` clock replaying the time since 1970 |
 | `memory.spec.ts` | 8 | the memory gate: the boxed node map measured against the same 229 B/node the guard uses, plus the structural properties that keep the file out of memory |
 | `worker-crop.spec.ts` | 6 | the crop across all three seams: `engine.ts`'s postMessage, both of the worker's PBF paths, and the reader's filter — driven through the worker's real `onmessage` handler, with a `Worker` stub for the message |
@@ -349,7 +351,7 @@ Browser gates, measured the same way:
 
 | Suite | Checks | Command |
 |---|---|---|
-| `test/e2e.mjs` | 79 | `npm run e2e` |
+| `test/e2e.mjs` | 81 | `npm run e2e` |
 | `test/screens.mjs` | 159 (53 × 3 viewports) | `npm run screens` |
 | `tools/focus.mjs` | 15 | `npm run focus` |
 | `tools/sw-shellcheck.mjs` | 1 (offline boot after a captive portal) | `npm run swshell` |
@@ -1723,7 +1725,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx                4216  screens, navigation state, focus + announcements,
+  App.tsx                4253  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            222  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
@@ -1773,8 +1775,8 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              436  RegionLibrary singleton, per-region workers, memory gate
 
-test/            1235 unit tests, 62 files
-test/e2e.mjs           79 browser checks, built bundle
+test/            1250 unit tests, 63 files
+test/e2e.mjs           81 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
                              extract slicing is done by osmium on a desktop)
@@ -2296,8 +2298,8 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1235 unit tests
-npm run e2e          # 79 browser checks against the built bundle
+npm test             # 1250 unit tests
+npm run e2e          # 81 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
 npm run sync         # build, clear android assets, cap sync
@@ -4961,6 +4963,56 @@ now produced a fifth instance in one afternoon.
 
 ---
 
+### 14.23 The inference, extracted so that it can be argued with
+
+§15.5 item 38. The offline engine supplies no maneuvers at all, so **every turn this app
+shows a default-engine driver is inferred** — and §7 gap 6 measured that inference missing
+three of seven real maneuvers on a 4 km stretch, inventing one and reversing a direction.
+
+It has been wrong for four passes, and "the turn was wrong" has been an argument rather than
+a diff. The reason is structural: the inference was a loop inside a `useMemo` in `App.tsx`,
+and its only record of its reasoning was the steps it chose to keep. **A window it looked
+at and rejected left nothing at all** — which is precisely the interesting case. You cannot
+see a miss.
+
+`src/nav/guidance.ts` now holds it, pure, and returns a trace beside the steps: every window
+considered, with both bearings, the signed turn, what was chosen, and for the rejected ones
+the number and the threshold it missed. The thresholds are named and exported rather than
+being literals in a loop, because "the constant moved" is otherwise indistinguishable from
+"the behaviour regressed".
+
+**The thresholds are unchanged.** 18° straight, 45° plain, 115° sharp, 150° U-turn, window
+of 8 either side. §7 gap 6 says these are wrong for real maneuvers, and fixing them here
+would conflate "made the reasoning visible" with "made the reasoning correct" — so the fix
+stays a separate, reviewable act. `test/guidance.spec.ts` pins all four boundaries one below
+and one above, and says in its own body that it does *not* reproduce the gap 6 measurement,
+because no geometry was recorded for it. It pins the behaviour that measurement was taken
+against instead, so a later change shows up as a diff here rather than as a surprise in a car.
+
+**Three defects the extraction found, all in the tests rather than the code.**
+
+The trace's own first version recorded only the *rejected* windows. That is the opposite of
+useful: a list of things the inference declined, with nothing it accepted, cannot tell a
+reviewer which of the two is at fault. Reversing the code to omit every kept window fails
+eight of the fifteen tests.
+
+`turnKind(-50)` was expected to be `'right'` by a mirror helper doing
+`.replace('-right', '-left')` — and `right` has no `-right` substring in it. So the test
+failed with `expected 'left' to be 'right'`, which reads as *the code reversed a direction*,
+and is half of what §7 gap 6 measured. A check whose failure looks like the product defect it
+is testing is a liability, and this was one.
+
+And the trace and the steps were only compared by count. They are now compared element by
+element — index, kind and leg length — because "the trace and the list are two accounts of
+the run rather than one" is exactly the sort of divergence nobody notices until they trust
+the wrong one. Reversing a step's icon while leaving its trace entry alone fails three tests.
+
+**A browser check, and what the fixture actually is.** Two checks assert the panel shows the
+trace *or states the honest reason there is none*. On this fixture it is the second: the
+offline engine returns a 2–3 point geometry for a short route and the inference needs 17.
+That was a real gap — the panel rendered nothing at all for that case, which is §3.19's
+lesson in a new place: an empty state with no stated reason is worse than a plain one.
+
 ### 14.22 The drive simulator, and four checks that could not tell it from a working one
 
 §15.5's item 35. Offline turn-by-turn is *inferred* from bearing changes, and §7 gap 6
@@ -5355,6 +5407,18 @@ check able to tell the seam apart from the simulator itself (§14.22).
 **36. Speed and pause controls**, plus a scrub bar, so a manoeuvre can be replayed at
 0.25× without waiting.
 
+**Partly done** — the scrub bar ships; a speed control and an explicit pause do not. The
+bar scrubs along the route, which is what makes a maneuver replayable, but "replay at 0.25×"
+is not the same as "scrub", and the two are written differently above. Recording the
+difference rather than claiming the item.
+
+**37. Deliberate fault injection** — all five ship: `off-route` by N metres, `freeze` for
+N ms, `teleport` to a distant point, `jump-ahead`/`jump-back`, `reverse`, and `stop`. Two
+of them are one-shot and the rest expire on their own clock, and a second fault of the same
+kind *replaces* the first rather than stacking — two `off-route` faults used to offset the
+car by their sum, which is a fault the tool invented rather than one that was injected, and
+would have been reported as a product bug.
+
 **37. Deliberate fault injection**, because this is what finds bugs:
    - drive off the route by N metres, on demand;
    - drop the fix for 30 s (the frozen-position loop of §3.11.1);
@@ -5366,8 +5430,28 @@ check able to tell the seam apart from the simulator itself (§14.22).
 change, distance, the icon chosen, the spoken text. This turns "the turn was wrong" from
 an argument into a diff, and it is what §7 gap 6 has needed for four passes.
 
+**Done** — `src/nav/guidance.ts` extracts the inference out of `App.tsx`'s `useMemo`
+*unchanged* (same window, same thresholds, same order) and returns a trace alongside the
+steps: every window it looked at, with both bearings, the signed turn, what it chose, and
+for the ones it rejected the number and the threshold it missed. Settings renders it, and
+says plainly when the route was too short for any window to exist — which is a different
+thing from looking and finding nothing, and is what the fixture route actually hits.
+
+A **missing** turn and a **spurious** one look identical in the steps list, and no output
+said which; only the trace distinguishes them. §14.23.
+
 **39. Deterministic seed and replay.** A route plus a fault script should reproduce the
 same run, so a bug found in a browser can become a fixture.
+
+**Done, in the part that makes it worth anything.** `rng(seed)` is `mulberry32` — 32 bits
+of state, no dependencies, identical output in every engine, which `Math.random` cannot
+promise — and a fault carries `at`, so a script is "drop the fix at t = 40 s" rather than
+"drop the fix at some point". Two runs with the same seed and script produce byte-identical
+positions, asserted.
+
+What is **not** done is turning a run into a *stored* fixture: there is no serialiser, so a
+bug found in a browser is still reproduced by hand from the seed. That is the part the item
+was really for, and it is recorded as open rather than folded into the sentence above.
 
 **40. Chromium coverage for all of it**, per §15.3's rule. The simulator is the answer to
 "how do we verify directions without a car", and an unverified simulator is just another
