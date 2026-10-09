@@ -344,6 +344,29 @@ export function MapView(props: MapViewProps) {
 }
 
 /**
+ * The three layers a basemap is made of, at one zoom.
+ *
+ * `water` and `green` are carried per-entry even though they are built once and
+ * shared, because the caller reads all three off one value and splitting them
+ * would push that decision into every call site.
+ */
+type BasemapLayers = {
+  roads: GeoJSON.FeatureCollection;
+  water: GeoJSON.FeatureCollection;
+  green: GeoJSON.FeatureCollection;
+};
+
+/**
+ * How many zooms' worth of roads to keep per dataset.
+ *
+ * Two is enough to survive a single boundary crossing; three leaves room to zoom
+ * out and back without paying again. Capped because each entry is a serialised
+ * copy of the whole extract's road network at one level of detail, so an
+ * unbounded per-zoom cache would itself become the memory problem.
+ */
+const MAX_CACHED_ZOOMS = 3;
+
+/**
  * Serialised offline basemap, cached per dataset and per integer zoom.
  *
  * `roadsToGeoJSON` walks every way in the extract and allocates a Feature per
@@ -359,25 +382,66 @@ export function MapView(props: MapViewProps) {
  * Keyed on the dataset object with a `WeakMap`, so an imported region is
  * collectable once it is replaced, and on the integer zoom, because the LOD is
  * a function of zoom only.
+ *
+ * ## Why this holds several zooms rather than one
+ *
+ * It held a **single** slot: `WeakMap<dataset, {zoom, roads, water, green}>`,
+ * with a hit only when `entry.zoom === zoom`. So the moment the driver crossed an
+ * integer zoom boundary — the single most common camera movement there is, and
+ * one the LOD exists to make cheaper rather than more expensive — the entire
+ * provincial road network was re-serialised on the main thread. Pinch-zoom in,
+ * pinch-zoom out, and the whole province was built twice. A guard that pays full
+ * price at exactly the boundary it was added to smooth is not a guard.
+ *
+ * Two further things were rebuilt needlessly. `water` and `green` do not vary
+ * with zoom at all — `RENDER_MIN_ZOOM` applies to roads only — so they were being
+ * re-walked and re-allocated on every boundary crossing to produce values
+ * identical to the ones already in hand.
+ *
+ * So: roads are cached per integer zoom in a small LRU, and the zoom-independent
+ * layers are built exactly once per dataset. Zooming across a boundary now
+ * usually finds a cached entry for the level it is arriving at, because the
+ * level it came from is still resident.
  */
 const basemapCache = new WeakMap<object, {
-  zoom: number;
-  roads: GeoJSON.FeatureCollection;
+  /** Zoom-independent. Built once; shared by every zoom's entry. */
   water: GeoJSON.FeatureCollection;
   green: GeoJSON.FeatureCollection;
+  /** Roads by integer zoom, in most-recently-used order. */
+  roadsByZoom: Map<number, GeoJSON.FeatureCollection>;
 }>();
 
-function basemapFor(dataset: OsmDataset, zoom: number) {
-  const hit = basemapCache.get(dataset as unknown as object);
-  if (hit && hit.zoom === zoom) return hit;
-  const built = {
-    zoom,
-    roads: roadsToGeoJSON(dataset, zoom),
-    water: waterToGeoJSON(dataset),
-    green: greenToGeoJSON(dataset),
-  };
-  basemapCache.set(dataset as unknown as object, built);
-  return built;
+function basemapFor(dataset: OsmDataset, zoom: number): BasemapLayers {
+  const key = dataset as unknown as object;
+  let entry = basemapCache.get(key);
+  if (!entry) {
+    entry = {
+      water: waterToGeoJSON(dataset),
+      green: greenToGeoJSON(dataset),
+      roadsByZoom: new Map(),
+    };
+    basemapCache.set(key, entry);
+  }
+
+  // Re-insert on hit so `Map`'s insertion order is least-recently-used first,
+  // which is what the eviction below assumes.
+  let roads = entry.roadsByZoom.get(zoom);
+  if (roads !== undefined) {
+    entry.roadsByZoom.delete(zoom);
+  } else {
+    roads = roadsToGeoJSON(dataset, zoom);
+  }
+  entry.roadsByZoom.set(zoom, roads);
+
+  // Evict oldest first. The arriving zoom and the one just left are the pair
+  // worth keeping, so `MAX_CACHED_ZOOMS - 1` others survive behind them.
+  while (entry.roadsByZoom.size > MAX_CACHED_ZOOMS) {
+    const oldest = entry.roadsByZoom.keys().next();
+    if (oldest.done) break;
+    entry.roadsByZoom.delete(oldest.value);
+  }
+
+  return { roads, water: entry.water, green: entry.green };
 }
 
 /**

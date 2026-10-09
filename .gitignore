@@ -46,3 +46,6 @@ e2e-screenshots/
 # files). Must come after the negation above, hence the second one.
 test/*.pbf
 !test/fixture.osm.pbf
+
+# UI audit output (tools/ui-audit.mjs)
+probe-shots/

@@ -25,6 +25,15 @@
  * No dependencies: zlib inflate uses the platform `DecompressionStream`, which
  * exists in Chrome/Android WebView and Node 18+. zstd is detected and reported
  * clearly rather than mis-parsed into garbage coordinates.
+ *
+ * Streaming
+ * ---------
+ *
+ * `parseOsmPbfStream` is the production entry point: it holds one blob at a
+ * time, so a province-sized extract never has to fit in the heap. `parseOsmPbf`
+ * reads a whole file already in memory and exists for tests and for callers that
+ * hold the bytes. The two share the header reader, the framing checks and the
+ * block parser, so they cannot disagree about what a valid file is.
  */
 
 import type { RawNode, RawWay } from './engine.worker';
@@ -507,22 +516,267 @@ function readU32BE(b: Uint8Array, p: number): number {
   return b[p]! * 0x1000000 + ((b[p + 1]! << 16) | (b[p + 2]! << 8) | b[p + 3]!);
 }
 
+/** `type` and `datasize`, read out of a BlobHeader's own bytes. */
+function readBlobFields(header: Uint8Array): { type: string; datasize: number } {
+  let type = '';
+  let datasize = -1;
+  const hr = new Reader(header, 0, header.length);
+  while (!hr.done) {
+    const tag = hr.varint();
+    const field = tag >>> 3;
+    const wire = tag & 7;
+    if (field === 1 && wire === WIRE_LEN) type = DECODER.decode(hr.bytes());
+    else if (field === 3 && wire === WIRE_VARINT) datasize = hr.varint();
+    else hr.skipField(wire);
+  }
+  if (!type) throw new PbfFormatError('blob header has no type field');
+  if (datasize < 0) throw new PbfFormatError(`blob header "${type}" has no datasize field`);
+  if (datasize > MAX_BLOB_SIZE) {
+    throw new PbfFormatError(`implausible blob size ${datasize} for "${type}" — file is not OSM PBF`);
+  }
+  return { type, datasize };
+}
+
+/**
+ * The two checks every reader makes on a BlobHeader's own 4-byte length, given
+ * how many bytes are actually left.
+ *
+ * Shared by the whole-file and streaming readers so the two cannot disagree
+ * about what a valid header is — they raise the same message for the same
+ * defect, which is what lets one fixture test both.
+ */
+function checkHeaderLen(headerLen: number, available: number): void {
+  if (headerLen > MAX_BLOB_HEADER) {
+    throw new PbfFormatError(`implausible blob-header length ${headerLen} — file is not OSM PBF`);
+  }
+  if (headerLen > available) {
+    throw new PbfFormatError(
+      `truncated file: blob header claims ${headerLen} bytes, only ${available} remain`,
+    );
+  }
+}
+
+/* ------------------------------ streaming ------------------------------ */
+
+/**
+ * A pull-based byte queue over an async chunk source.
+ *
+ * Exists because PBF's framing is **self-delimiting at blob granularity**:
+ *
+ *     uint32be  headerLen
+ *     BlobHeader { 1: type, 3: datasize }
+ *     Blob      { datasize bytes }
+ *
+ * `datasize` tells you exactly how many bytes the current blob occupies before
+ * reading any of them, so a reader never has to look past the end of one blob to
+ * find the start of the next. That is what makes a bounded-window read possible
+ * here at all, and it is the property the XML path has for free via
+ * `elementBoundary` and PBF does not.
+ *
+ * `take` copies rather than handing out a view. A view into a queued chunk would
+ * be one `await` away from being overwritten by the next `ensure` — and
+ * `readBlobPayload` is async, so a `raw` (uncompressed) blob would be parsed
+ * from memory that had already been recycled. That failure is silent: wrong
+ * coordinates, a plausible-looking extract, a wrong route. The copy is one
+ * allocation of at most `datasize` bytes per blob (~8 MB in a Geofabrik file),
+ * transient and immediately collectable, which is a price worth paying to make
+ * the lifetime a property of the type rather than of the call order.
+ */
+/** Whether `source` is an async iterable rather than a `ReadableStream`. */
+function isAsyncIterable(source: unknown): source is AsyncIterable<Uint8Array> {
+  return typeof (source as Partial<AsyncIterable<Uint8Array>>)?.[Symbol.asyncIterator] === 'function';
+}
+
+class ByteQueue {
+  private readonly it: AsyncIterator<Uint8Array>;
+  private pending: Uint8Array[] = [];
+  /** Bytes held in `pending`, already read from the source. */
+  private queued = 0;
+  /** Bytes consumed out of `pending[0]`. */
+  private taken = 0;
+  private eof = false;
+
+  constructor(source: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>) {
+    this.it = isAsyncIterable(source)
+      ? source[Symbol.asyncIterator]()
+      : (async function* () {
+          // A `ReadableStreamDefaultReader` exposes `read()`, not the iterator
+          // protocol's `next()`, so it is adapted here rather than cast to one.
+          // (Its `read()` resolves a `ReadableStreamReadResult`, a union on
+          // `done`, which is also not directly usable as an `IteratorResult`.)
+          const reader = (source as ReadableStream<Uint8Array>).getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) return;
+            if (value) yield value;
+          }
+        })();
+  }
+
+  /** Bytes read from the source but not yet consumed. */
+  get available(): number {
+    return this.queued;
+  }
+
+  /** Wait until `n` bytes are in hand. False if the source ends first. */
+  async ensure(n: number): Promise<boolean> {
+    while (this.queued < n && !this.eof) {
+      const { done, value } = await this.it.next();
+      if (done) {
+        this.eof = true;
+        break;
+      }
+      if (value && value.length) {
+        this.pending.push(value);
+        this.queued += value.length;
+      }
+    }
+    return this.queued >= n;
+  }
+
+  /** Copy the next `n` bytes out. Only valid after `ensure(n)` returned true. */
+  take(n: number): Uint8Array {
+    const out = new Uint8Array(n);
+    let filled = 0;
+    while (filled < n) {
+      const head = this.pending[0]!;
+      const from = Math.min(head.length - this.taken, n - filled);
+      out.set(head.subarray(this.taken, this.taken + from), filled);
+      filled += from;
+      this.taken += from;
+      this.queued -= from;
+      if (this.taken === head.length) {
+        this.pending.shift();
+        this.taken = 0;
+      }
+    }
+    return out;
+  }
+}
+
+/**
+ * Parse a `.osm.pbf` from a stream, holding one blob at a time.
+ *
+ * This is the path production takes, and the reason is not stylistic: the whole
+ * file no longer has to fit in the heap. Peak transient memory is the largest
+ * single blob (~8 MB for a Geofabrik file) plus the inflate scratch, instead of
+ * the entire extract.
+ *
+ * ## What this does and does not fix
+ *
+ * It removes the file itself from the peak. It does **not** remove the node map.
+ * `out.nodes` still holds one boxed `{id, lat, lon}` per node for the whole file,
+ * because OSM PBF writes every node before every way: when the ways arrive and
+ * say which nodes they reference, the coordinates are already gone from the
+ * stream, so there is nothing to discard early.
+ *
+ * For a 334 MB Alberta extract that node map — not the file — is the dominant
+ * term, and it is why `src/osm/mergeguard.ts` refuses a province-sized parse
+ * rather than attempting one. Streaming and that guard are complements: this
+ * removes a cost the guard was counting, and the guard still counts what remains.
+ *
+ * ## Progress
+ *
+ * `onProgress` is a fraction of `totalBytes` when given, monotonic, and
+ * reported once per blob. Without it, one terminal `1` — because a rising value
+ * without a denominator would be inventing progress nothing supports, which is
+ * the same defect as `parseOsmXmlStream`'s no-hint branch documents.
+ */
+export async function parseOsmPbfStream(
+  source: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
+  onProgress: (pct: number) => void = () => {},
+  totalBytes?: number,
+): Promise<{ nodes: Map<number, RawNode>; ways: RawWay[] }> {
+  const out: ParseOutput = { nodes: new Map<number, RawNode>(), ways: [] };
+  const scratch = new Scratch();
+  const queue = new ByteQueue(source);
+  const hasTotal = typeof totalBytes === 'number' && totalBytes > 0;
+  let dataBlobs = 0;
+  let consumed = 0;
+  let reported = 0;
+
+  const report = () => {
+    if (!hasTotal) return;
+    const pct = Math.min(1, consumed / totalBytes!);
+    if (pct > reported) {
+      reported = pct;
+      onProgress(pct);
+    }
+  };
+
+  for (;;) {
+    if (!(await queue.ensure(4))) {
+      // A clean end-of-input is only "clean" if there were no partial bytes:
+      // 1–3 trailing bytes are a truncated header, and saying so is the
+      // difference between a corrupt download and a finished one.
+      if (queue.available > 0) {
+        throw new PbfFormatError(
+          `truncated file: ${queue.available} trailing byte(s) where a 4-byte blob-header length was expected`,
+        );
+      }
+      break;
+    }
+
+    const headerLen = readU32BE(queue.take(4), 0);
+    consumed += 4;
+    // The same ceiling the whole-file reader applies, and for the same reason:
+    // a garbage length must be rejected on sight rather than turned into a
+    // multi-gigabyte `ensure`. Without it this path would answer a corrupt file
+    // with "truncated", naming a length nothing could have supplied.
+    if (headerLen > MAX_BLOB_HEADER) {
+      throw new PbfFormatError(`implausible blob-header length ${headerLen} — file is not OSM PBF`);
+    }
+    if (!(await queue.ensure(headerLen))) {
+      throw new PbfFormatError(
+        `truncated file: blob header claims ${headerLen} bytes, only ${queue.available} remain`,
+      );
+    }
+    const { type, datasize } = readBlobFields(queue.take(headerLen));
+    consumed += headerLen;
+
+    if (!(await queue.ensure(datasize))) {
+      throw new PbfFormatError(
+        `truncated file: ${type} blob claims ${datasize} bytes, only ${queue.available} remain`,
+      );
+    }
+    // Taken and copied even for OSMHeader, whose payload is skipped: the queue
+    // is sequential, so its bytes have to be consumed to reach the next blob.
+    const body = queue.take(datasize);
+    consumed += datasize;
+
+    if (type === 'OSMData') {
+      // A PrimitiveBlock is always wholly inside one Blob, so the previous
+      // block's data is finished with by the time we get here.
+      const payload = await readBlobPayload(new Reader(body), scratch);
+      parsePrimitiveBlock(new Reader(payload), out);
+      dataBlobs++;
+    }
+
+    report();
+  }
+
+  if (dataBlobs === 0) {
+    throw new PbfFormatError('no OSMData blobs in this file — headers only, or not OSM PBF at all');
+  }
+
+  onProgress(1);
+  return { nodes: out.nodes, ways: out.ways };
+}
+
 /* ------------------------------- public ------------------------------- */
 
 /**
- * Parse a `.osm.pbf` file into the same `{ nodes, ways }` the XML parser
- * returns, so the result drops straight into `buildDataset`.
+ * Parse a whole `.osm.pbf` already in memory, into the same `{ nodes, ways }`
+ * the XML parser returns, so the result drops straight into `buildDataset`.
  *
  * `onProgress` gets a monotonic 0..1 based on bytes consumed.
  *
+ * **Prefer `parseOsmPbfStream`.** This reads the entire extract into memory
+ * first, which is why it exists: tests, and callers that already hold the bytes.
+ * A production import goes through the streaming reader.
+ *
  * Not supported: zstd-compressed blobs (detected and reported rather than
- * mis-parsed), relations (irrelevant to the road graph), and streaming from
- * disk — the whole file must be in memory.
-
- * That last one used to say "exactly like the XML path", which was true of the
- * pre-streaming design and is false now: the XML path *does* stream, in a bounded
- * window (`parseOsmXmlStream`), and that is the path production uses. PBF is the
- * normal format and is always held whole. Recorded in STATUS.md §14.16.
+ * mis-parsed) and relations (irrelevant to the road graph).
  */
 export async function parseOsmPbf(
   bytes: Uint8Array,
@@ -552,34 +806,10 @@ export async function parseOsmPbf(
       );
     }
     const headerLen = readU32BE(bytes, pos);
-    pos += 4;
-    if (headerLen > MAX_BLOB_HEADER) {
-      throw new PbfFormatError(`implausible blob-header length ${headerLen} — file is not OSM PBF`);
-    }
-    if (pos + headerLen > bytes.length) {
-      throw new PbfFormatError(
-        `truncated file: blob header claims ${headerLen} bytes, only ${bytes.length - pos} remain`,
-      );
-    }
+    checkHeaderLen(headerLen, bytes.length - (pos + 4));
+    const { type, datasize } = readBlobFields(bytes.subarray(pos + 4, pos + 4 + headerLen));
+    pos += 4 + headerLen;
 
-    let type = '';
-    let datasize = -1;
-    const hr = new Reader(bytes, pos, pos + headerLen);
-    while (!hr.done) {
-      const tag = hr.varint();
-      const field = tag >>> 3;
-      const wire = tag & 7;
-      if (field === 1 && wire === WIRE_LEN) type = DECODER.decode(hr.bytes());
-      else if (field === 3 && wire === WIRE_VARINT) datasize = hr.varint();
-      else hr.skipField(wire);
-    }
-    pos += headerLen;
-
-    if (!type) throw new PbfFormatError('blob header has no type field');
-    if (datasize < 0) throw new PbfFormatError(`blob header "${type}" has no datasize field`);
-    if (datasize > MAX_BLOB_SIZE) {
-      throw new PbfFormatError(`implausible blob size ${datasize} for "${type}" — file is not OSM PBF`);
-    }
     if (pos + datasize > bytes.length) {
       throw new PbfFormatError(
         `truncated file: ${type} blob claims ${datasize} bytes, only ${bytes.length - pos} remain`,

@@ -18,9 +18,10 @@ import {
 import { CATALOG, catalogByCountry, type CatalogEntry, type Region } from '../osm/regions';
 import type { RouteResult } from '../osm/engine.worker';
 import type { BuildProgress } from '../osm/engine';
+import { canImport } from '../osm/importguard';
 import type { LatLng } from '../geo';
 import { formatDistance, formatDuration } from '../geo';
-import { ink, type as T, DP, ICON } from '../theme';
+import { ink, type as T, DP, ICON, SEP } from '../theme';
 import { focusQuietly } from '../App';
 
 /**
@@ -81,6 +82,15 @@ export function RegionsScreen(props: RegionsScreenProps) {
 
   const [progress, setProgress] = useState<BuildProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * An extract the memory guard would refuse, held so "try anyway" can run it.
+   *
+   * `null` when nothing is pending. Distinct from `pending` (a `ref` naming a
+   * *region*), because this holds a `File` the driver has chosen to risk the
+   * import of — and it is cleared the moment they decline or the import runs, so
+   * a stale oversized file cannot be revived by a later tap elsewhere.
+   */
+  const [pendingForce, setPendingForce] = useState<File | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
   /**
@@ -470,7 +480,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
    */
   const onActivated = props.onActivated;
 
-  const onPicked = useCallback(async (file: File | undefined) => {
+  const onPicked = useCallback(async (file: File | undefined, forceMemory = false) => {
     if (!file) return;
     const p = pending.current ?? { id: '', name: '', code: 'local' };
     try {
@@ -479,6 +489,10 @@ export function RegionsScreen(props: RegionsScreenProps) {
         name: p.name || localRegionName(file),
         code: p.code,
         file,
+        // Passed explicitly rather than defaulted from the verdict: the user has
+        // to have been asked, so an import the guard stopped has a button
+        // behind it. `store.ts` refuses on `!forceMemory`.
+        forceMemory,
         onProgress: setProgress,
         onError: setError,
         // Regions is the *primary* import surface — the catalogue lives here — so
@@ -516,7 +530,26 @@ export function RegionsScreen(props: RegionsScreenProps) {
     const file = e.target.files?.[0];
     // Reset so re-picking the same file fires again.
     e.target.value = '';
+    if (!file) return;
+    // Ask the guard before running the import, so the offer to override is
+    // shown *instead of* a failure rather than after one. `importRegionFile`
+    // checks this too; the point of asking here is that the file is still in
+    // hand, which it is not once the picker has fired and the guard has refused.
+    //
+    // This is a repeat call of a pure function over a constant and a device
+    // reading, not a second parse: it costs a division.
+    if (!canImport(file.size ?? 0).ok) {
+      setPendingForce(file);
+      return;
+    }
     void onPicked(file);
+  };
+
+  /** "Try anyway" — run the import the guard just refused, with `forceMemory`. */
+  const onForce = () => {
+    const file = pendingForce;
+    setPendingForce(null);
+    if (file) void onPicked(file, true);
   };
 
   /* ------------------------- cross-region routing ----------------------- */
@@ -562,9 +595,23 @@ export function RegionsScreen(props: RegionsScreenProps) {
         <button className="icon-btn" onClick={props.onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
         <h1 className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Regions</h1>
         <div className="spacer" />
-        {/* Green only once something is actually loaded. */}
-        <span className={`chip ${regions.length ? 'ok' : ''}`}>
-          {regions.length} loaded{totalBytes > 0 ? ` · ${formatBytes(totalBytes)}` : ''}
+        {/*
+          The count, and the size only when the count is not competing for room.
+
+          "1 loaded · 13.0 KB" is 219px of text. At 412dp the app bar leaves about
+          140px for this chip after the Back button, the title and the padding, so
+          it rendered "1 loaded…" — the two most load-bearing words on the screen
+          with a truncated tail after them.
+
+          The count is the fact: how many regions are available to search and route
+          across. The byte total is a diagnostic, and it is still on screen in the
+          region row itself ("Bounds … · 13.0 KB · local"). So it is rendered at its
+          natural width above a width the count can hold in full, rather than being
+          concatenated and then truncated.
+        */}
+        <span className={`chip chip-stacked ${regions.length ? 'ok' : ''}`}>
+          <span>{regions.length} loaded</span>
+          {totalBytes > 0 && <span className="chip-sub">{formatBytes(totalBytes)}</span>}
         </span>
       </div>
 
@@ -592,15 +639,28 @@ export function RegionsScreen(props: RegionsScreenProps) {
               <span className="result-text">
                 <span style={T.body3m}>{r.name}</span>
                 <span style={{ ...T.body3, color: ink.secondary }}>
-                  {r.counts.routable.toLocaleString()} routable ways · {r.gazetteerSize.toLocaleString()} places indexed
+                  {/*
+                    `SEP` rather than a plain `' · '`. These two lines wrap on a
+                    narrow phone, and with a normal space around the bullet the
+                    browser is free to break on either side of it — so the bullet
+                    ended up alone at the start of a line with nothing else on
+                    it, and the bounds line ended in a dangling bullet with
+                    "local" pushed onto a line of its own. A one-character line
+                    that means nothing, on a screen whose text is mostly
+                    metadata. See `SEP` in `theme.ts`.
+                  */}
+                  {r.counts.routable.toLocaleString()} routable ways{SEP}
+                  {r.gazetteerSize.toLocaleString()} places indexed
                 </span>
                 <span style={{ ...T.sub2, color: ink.tertiary }}>
-                  Bounds {r.bbox.map((v) => v.toFixed(3)).join(', ')} · {formatBytes(r.bytes)} · {r.code}
+                  Bounds {r.bbox.map((v) => v.toFixed(3)).join(', ')}{SEP}
+                  {formatBytes(r.bytes)}{SEP}
+                  {r.code}
                 </span>
               </span>
               <span className="region-actions">
                 <button
-                  className="pill-btn ghost"
+                  className="pill-btn ghost pill-btn-icon"
                   onClick={() => props.onMapFocus(centroid(r.bbox), zoomFor(r.bbox))}
                   aria-label={`Show ${r.name} on the map`}
                 >
@@ -826,8 +886,8 @@ export function RegionsScreen(props: RegionsScreenProps) {
                   <span className="result-text">
                     <span style={T.body3m}>{e.name}</span>
                     <span style={{ ...T.body3, color: ink.secondary }}>
-                      ≈ {e.approxMb.toLocaleString()} MB · {e.country}
-                      {parent ? ` · part of ${parent.name}` : ''}
+                      ≈ {e.approxMb.toLocaleString()} MB{SEP}{e.country}
+                      {parent ? `${SEP}part of ${parent.name}` : ''}
                     </span>
                     <span className="truncate" style={{ ...T.sub2, color: ink.tertiary }} title={e.pbfUrl}>{e.pbfUrl}</span>
                     {/* The reason, on screen. A `title` is unreachable on a
@@ -1015,6 +1075,41 @@ export function RegionsScreen(props: RegionsScreenProps) {
 
         {error && (
           <div className="error-card" role="alert" style={{ marginTop: DP.P3 }}>{error}</div>
+        )}
+
+        {/**
+         * The override for a refused extract.
+         *
+         * Offered as its own card rather than folded into the error text, because
+         * the guard's verdict is an estimate from a file size and a constant — and
+         * the estimate being wrong is the one case where the guard is wrong in the
+         * direction that helps. The driver may know their device can hold a file
+         * the arithmetic says it cannot, and they are the only one who does.
+         *
+         * `role="alert"` for the same reason as the error above: what they asked
+         * for did not happen.
+         *
+         * Not shown for a *thin* headroom case — that import proceeds, so there is
+         * nothing to override. It reaches here only when `canImport` returned
+         * `ok: false`.
+         */}
+        {pendingForce && (
+          <div className="hint-card warn" role="alert" style={{ marginTop: DP.P3 }}>
+            <div style={{ ...T.body2 }}>
+              This device is not expected to have enough memory to read that file.
+            </div>
+            <div style={{ marginTop: DP.P2, display: 'flex', gap: DP.P2 }}>
+              <button className="pill-btn" onClick={onForce}>
+                Try importing it anyway
+              </button>
+              <button
+                className="pill-btn"
+                onClick={() => setPendingForce(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>

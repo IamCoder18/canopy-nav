@@ -26,6 +26,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { overlaySources, OSM_ATTRIBUTION, offlineStyleSpec } from '../src/map/style';
+import { contrast } from './contrast.spec';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -151,12 +152,20 @@ describe('nothing suppresses the credit', () => {
   });
 
   it('gives the credit a legible colour on the dark chrome', () => {
-    // The bar sits on the AAOS +1 surface. Grey-on-grey at 11px would satisfy
-    // "it is present" and still be unreadable in a moving car, so the contrast
-    // is pinned rather than left to a later edit.
+    // The bar sits on the app's own deep surface. Grey-on-grey at 11px would
+    // satisfy "it is present" and still be unreadable in a moving car, so the
+    // contrast is pinned rather than left to a later edit.
+    //
+    // The palette check is against the *token* rather than a list of hex values,
+    // because the token is the definition — a hard-coded list here was how the
+    // credit ended up still citing the old AAOS ramp after the whole app had
+    // moved to Google Maps' dark theme.
     const withColor = attribRules().find((b) => /color\s*:/.test(b));
     expect(withColor, 'no explicit text colour on the attribution bar').toBeTruthy();
-    expect(withColor).toMatch(/color\s*:\s*#(DADCE0|BDC1C6|E8EAED|F1F3F4|F8F9FA)/i);
+    expect(withColor).toMatch(/color\s*:\s*var\(--ink-secondary,\s*#C2C8D0\)/);
+    // And that token must clear the floor it is being used for. 13px is body
+    // text, not large text, so it is 4.5:1.
+    expect(contrast('#C2C8D0', '#1A1D21')).toBeGreaterThanOrEqual(4.5);
   });
 
   it('does not leave a dead close-button rule behind', () => {

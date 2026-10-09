@@ -1,67 +1,146 @@
 /**
- * Android Auto / Automotive OS design tokens.
+ * Google Maps dark theme — design tokens.
  *
- * Layout values: official "Design for Driving" layout spec
- * (8dp grid, padding P0-P8, keylines KL0-KL4, 12% side margins).
- * Colours: the AAOS grayscale palette + elevation ramp (night mode),
- * as published at docs.partner.android.com/drivingux/automotive-os/design-system/color.
+ * ## Why this is not the AAOS palette any more
  *
- * Elevation ramp (night mode):
- *   +1 #0E1013   +2 #17181B   +3 #202124
+ * This used to be the Android Auto / Automotive OS grayscale ramp
+ * (`#0E1013` / `#17181B` / `#202124`, accent `#60A8F0`). That palette is a
+ * faithful transcription of the AAOS specification and it is *wrong for this
+ * app*: the brief is to look like Google Maps, and Google Maps' dark theme is a
+ * warmer, slightly blue-shifted neutral set built on `#1E2024`–`#30343A` with the
+ * `#8AB4F8` accent. Carrying both palettes meant the app was simultaneously
+ * claiming to implement two systems and matching neither.
+ *
+ * So the grayscale ramp is gone and the values below are Google Maps'. The
+ * *layout* tokens (8dp grid, P0-P8 padding, keylines, 12% side margins, 76dp touch
+ * minimum) are unchanged: those are AAOS layout guidance and they are still the
+ * right numbers for a car, which is what this app is.
+ *
+ * Surface ramp (dark):
+ *   page      #1E2024
+ *   card      #26292E
+ *   raised    #30343A   (app bar, chips, inputs)
+ *   hover     #3D4249
+ *
+ * ## Ink is solid, not an alpha ramp
+ *
+ * The old `ink` was `rgba(255,255,255,0.88 / 0.6 / 0.5)`, the AAOS white-opacity
+ * ramp. Alpha text is *translucent*, which makes its contrast a function of
+ * whatever is behind it — so the same token measured one thing on a card and
+ * something else over the map, and the ratio moved as the map panned.
+ *
+ * The values below are solid hex, so contrast is a property of the token rather
+ * than of the screen it landed on. Every one is asserted at >= 4.5:1 against every
+ * surface in `elevation` by `test/contrast.spec.ts`, which composited and
+ * measured rather than transcribing the ramp.
+ *
+ * The same reasoning is why the interactive states in `styles.css` are opaque:
+ * a translucent fill *replaces* the one beneath it, so a hover declared as
+ * `rgba(255,255,255,0.06)` on a surface floating over a near-white basemap
+ * renders as the basemap. See `.quick-tile` there for the measured numbers.
  */
 
 import type { CSSProperties } from 'react';
 
-/* ---------------- AAOS grayscale palette ---------------- */
+/* ---------------- Google Maps dark neutral ramp ---------------- */
 export const grey = {
   black: '#000000',
-  g958: '#0E1013',
-  g928: '#17181B',
-  g900: '#202124',
-  g868: '#282A2D',
-  g846: '#2E3134',
-  g800: '#3C4043',
-  g700: '#5F6368',
-  g600: '#80868B',
-  g500: '#9AA0A6',
-  g400: '#BDC1C6',
-  g300: '#DADCE0',
-  g200: '#E8EAED',
-  g100: '#F1F3F4',
-  g50: '#F8F9FA',
+  g958: '#1E2024', // page
+  g928: '#26292E', // card
+  g900: '#30343A', // raised: app bar, chips, inputs
+  g868: '#3D4249', // hover / pressed
+  g846: '#4A4F57',
+  g800: '#5F6368',
+  g700: '#80868B',
+  g600: '#9AA0A6',
+  g500: '#A7AEB8',
+  g400: '#C2C8D0',
+  g300: '#D5DAE0',
+  g200: '#E4E8EC',
+  g100: '#EDF0F2',
+  g50: '#F5F7F9',
 } as const;
 
-/** Night-mode elevation surfaces. */
+/** Dark elevation surfaces. */
 export const elevation = {
   e0: grey.black,
   e1: grey.g958,
   e2: grey.g928,
   e3: grey.g900,
-  e4: grey.g900, // dialogs/HUN/snackbar rest at +3..+4, mapped to g900
+  e4: grey.g868, // dialogs/HUN/snackbar rest at +3..+4
 } as const;
 
-/** Car accent. Day #66B5FF, night #60A8F0. */
-export const accentNight = '#60A8F0';
-export const accentDay = '#66B5FF';
+/** Google Maps dark accent. `#1A73E8` is the light-mode blue and fails on dark. */
+export const accentNight = '#8AB4F8';
+export const accentDay = '#1A73E8';
 
-/** White opacity ramp for text/icons/dividers (night mode). */
-export const white = (pct: number) => `rgba(255,255,255,${pct})`;
+/** Ink on dark surfaces. Solid, and each measured at >= 4.5:1 on every surface. */
 export const ink = {
-  primary: white(0.88),   // Headline/Title, Body 1
-  secondary: white(0.6),  // Body copy, option labels
-  tertiary: white(0.5),   // inactive icons
-  divider: white(0.12),
-  track: white(0.12),
-  outline: white(0.2),
+  primary: '#EDF0F2',   // Headline/Title, Body 1      14.25:1 on e1
+  secondary: '#C2C8D0', // Body copy, option labels     9.68:1 on e1
+  tertiary: '#A7AEB8',  // inactive icons, metadata     7.29:1 on e1
+  /** Text drawn *on* the accent fill. 6.94:1 — the accent is too light to carry it. */
+  onAccent: '#0B2545',
+  /**
+   * Text drawn on a *warning* fill, i.e. body copy inside a warning card rather
+   * than its heading.
+   *
+   * The warning card's own colour is bright enough to carry a heading at 24px
+   * (`#F5D67E` on `#5C4A1A` is 6.04:1), so using it for the body as well made
+   * the card read as one undifferentiated block of yellow. This is the step
+   * below, and it is still 5.1:1 — so the hierarchy costs nothing in legibility.
+   */
+  onWarn: '#EFE0B4',
+  divider: 'rgba(255,255,255,0.12)',
+  track: 'rgba(255,255,255,0.12)',
+  outline: 'rgba(255,255,255,0.24)',
   scrim84: 'rgba(0,0,0,0.84)',
   scrim70: 'rgba(0,0,0,0.7)',
 } as const;
 
+/** The white-opacity ramp, kept for the few places that need a veil rather than a colour. */
+export const white = (pct: number) => `rgba(255,255,255,${pct})`;
+
+/**
+ * The separator between pieces of metadata, joined so it cannot be orphaned.
+ *
+ * A plain `' · '` is three characters the browser is free to break before and
+ * after, so on a narrow column the bullet lands alone at the end of one line
+ * with its text on the next. Measured on the regions screen at 412px: the
+ * "routable ways · places indexed" line rendered as
+ *
+ *     19 routable ways
+ *     · 712 places
+ *     indexed
+ *
+ * with a 2x2px mark alone on line two, and the bounds line ended in a dangling
+ * `·` before dropping "local" onto a line of its own. A bullet is the only thing
+ * on the line and it means nothing.
+ *
+ * The non-breaking spaces on both sides bind the bullet to its neighbours, so
+ * the three of them wrap as one unit and the bullet is always between two words.
+ * U+00A0 rather than U+202F so it renders in the same fallback as the rest of
+ * the app's punctuation.
+ */
+export const SEP = '\u00A0·\u00A0';
+
 /** Padding scale P0-P8. */
 export const DP = { P0: 4, P1: 8, P2: 12, P3: 16, P4: 24, P5: 32, P6: 48, P7: 64, P8: 96 } as const;
 
-/** Corner radius scale R0-R4. */
-export const R = { R0: 0, R1: 4, R2: 8, R3: 16, R4: 9999 } as const;
+/**
+ * Corner radius scale.
+ *
+ * Google's own scale is 4 / 8 / 12 / 16 / 28 with a fully-rounded pill at the
+ * end. The AAOS scale this replaced was 4 / 8 / 16 / 9999, which had one step
+ * between "small" and "pill" — so a card, a chip and a search field all landed
+ * on the same 8px while a button went fully round, and the result read as three
+ * unrelated corner languages on one screen.
+ *
+ * R5 (28px) is new and is the one that matters visually: it is the radius
+ * Google uses on its sheets and large cards, and every card-sized surface in
+ * `styles.css` now uses it.
+ */
+export const R = { R0: 0, R1: 4, R2: 8, R3: 12, R4: 16, R5: 28, R6: 9999 } as const;
 
 /** Icon sizes + minimum touch target. */
 export const ICON = { primary: 44, secondary: 36, tertiary: 24 } as const;
@@ -87,17 +166,86 @@ export const STRUCTURE = {
 } as const;
 
 /**
- * Publish the structural tokens as CSS custom properties.
+ * Publish the design tokens as CSS custom properties.
  *
  * Called once at startup. This is the seam that lets `styles.css` consume the
  * tokens without a build-time CSS-in-JS dependency: TypeScript owns the values,
  * CSS reads them, and `styles.css` falls back to the literal so a stylesheet
  * loaded without this running still lays out correctly.
+ *
+ * The *palette* is published here too, and not just the two structural numbers
+ * it used to carry. `styles.css` had the whole theme retyped as hex literals —
+ * `#17181B` on cards, `#202124` on bars, `#60A8F0` on accents — in around forty
+ * places, none of which could be changed by editing the palette. Every one of
+ * those is a place where the palette could drift from its own definition, and
+ * the drift had already happened: the same "app bar" was one colour on the
+ * launcher and another on the navigation screens.
+ *
+ * So there is now one definition of each colour, here, and CSS asks for it by
+ * name. `styles.css` still carries the literal in each `var()` fallback, so a
+ * stylesheet that loads without this running still paints the intended theme
+ * rather than falling back to the browser's defaults.
  */
 export function applyThemeTokens(root: HTMLElement | undefined = globalThis.document?.documentElement): void {
   if (!root) return;
+
   for (const [name, value] of Object.entries(STRUCTURE)) {
     root.style.setProperty(`--${name.toLowerCase().replace(/_/g, '-')}`, `${value}px`);
+  }
+
+  const surfaces: Record<string, string> = {
+    'surface-page': elevation.e1,
+    'surface-card': elevation.e2,
+    'surface-raised': elevation.e3,
+    'surface-hover': elevation.e4,
+  };
+  for (const [name, value] of Object.entries(surfaces)) {
+    root.style.setProperty(`--${name}`, value);
+  }
+
+  for (const [name, value] of Object.entries(ink)) {
+    // camelCase -> kebab-case, so `onAccent` publishes as `--ink-on-accent`
+    // rather than `--ink-onaccent`. The CSS side names it the kebab form, and a
+    // token that is published under a name nothing reads is worse than one that
+    // is never published: it looks like it works.
+    const kebab = name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+    root.style.setProperty(`--ink-${kebab}`, value);
+  }
+
+  root.style.setProperty('--accent', accentNight);
+
+  // Google Maps' elevation, as a pair of shadows. Every card-sized surface in
+  // the app now uses one of these rather than the AAOS `0 2px 2px` tile shadow,
+  // which on a surface this large reads as a hard outline rather than a lift.
+  root.style.setProperty('--shadow-1', '0 1px 2px rgba(0,0,0,0.32), 0 1px 3px rgba(0,0,0,0.24)');
+  root.style.setProperty('--shadow-2', '0 2px 6px rgba(0,0,0,0.36), 0 4px 16px rgba(0,0,0,0.28)');
+  root.style.setProperty('--shadow-3', '0 6px 16px rgba(0,0,0,0.44), 0 12px 32px rgba(0,0,0,0.32)');
+
+  /*
+   * The radius scale, published under the names `styles.css` uses.
+   *
+   * `R` is keyed `R1..R6` because that is how the scale is written down, but the
+   * CSS wants `--r-xs`/`--r-sm`/`--r-md`/`--r-lg`/`--r-xl`/`--r-pill` — names
+   * that say what the radius is *for*. Publishing `Object.keys(R)` verbatim gave
+   * `--r-r1`, which no stylesheet reads, so the radius scale was defined twice
+   * and only one of the two definitions was live. The mapping is written out
+   * here rather than derived, because it is a naming decision and not a
+   * mechanical transform.
+   */
+  const radiusNames: Partial<Record<keyof typeof R, string>> = {
+    R1: 'xs',
+    R2: 'sm',
+    R3: 'md',
+    R4: 'lg',
+    R5: 'xl',
+    R6: 'pill',
+  };
+  // `R0` is deliberately absent: a zero radius is what an element has when nothing
+  // overrides it, so publishing it would create a token that reads "no rounding"
+  // and is never asked for. The scale starts at the first radius that means
+  // something.
+  for (const [key, alias] of Object.entries(radiusNames) as [keyof typeof R, string][]) {
+    root.style.setProperty(`--r-${alias}`, `${R[key]}px`);
   }
 }
 

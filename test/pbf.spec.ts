@@ -20,7 +20,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { parseOsmPbf, PbfFormatError } from '../src/osm/pbf';
+import { parseOsmPbf, parseOsmPbfStream, PbfFormatError } from '../src/osm/pbf';
 import { parseOsmXml, buildDataset } from '../src/osm/engine.worker';
 import type { RawNode, RawWay } from '../src/osm/engine.worker';
 
@@ -504,6 +504,10 @@ async function encodeFromParsed(
   return concat(parts);
 }
 
+// `fixtureXml` is the module-level parse of the XML fixture, and it is *not*
+// consumed: it feeds the PBF encoder and the shape comparisons below. Nothing
+// here passes it to `buildDataset`, which consumes its inputs — the two
+// equivalence tests re-parse the XML for that reason rather than sharing this.
 const fixtureXml = parseOsmXml(XML_FIXTURE);
 const fixturePbf = encodeFromParsed(fixtureXml.nodes, fixtureXml.ways, 700);
 
@@ -556,7 +560,11 @@ describe('osm pbf parsing', () => {
 
     expect(shape(pbfOut.nodes, pbfOut.ways)).toEqual(shape(fixtureXml.nodes, fixtureXml.ways));
 
-    const fromXml = buildDataset(fixtureXml.nodes, fixtureXml.ways);
+    // `buildDataset` consumes its inputs (it clears the map), so each side gets
+    // its own parse here and the XML fixture is re-parsed rather than shared.
+    // Sharing one and comparing after would compare two emptied structures.
+    const xmlSide = parseOsmXml(XML_FIXTURE);
+    const fromXml = buildDataset(xmlSide.nodes, xmlSide.ways);
     const fromPbf = buildDataset(pbfOut.nodes, pbfOut.ways);
     expect(fromPbf.counts).toEqual(fromXml.counts);
     expect(fromPbf.bbox).toEqual(fromXml.bbox);
@@ -589,6 +597,22 @@ describe('osm pbf parsing', () => {
     await rejects(UTF8.encode(XML_FIXTURE.slice(0, 200)), /looks like OSM XML/);
     // Structurally valid, but it contains no OSMData blobs.
     await rejects(await blob('OSMHeader', encodeHeader(), true), /no OSMData blobs/);
+  });
+
+  it('streams a many-blob file with the same output as the whole-file reader', async () => {
+    // `fixturePbf` is encoded with `perBlob: 700`, which on this fixture yields
+    // very few blobs — so chunk-boundary reassembly across many self-delimiting
+    // frames is barely exercised by it. Re-encoding at `perBlob: 1` gives one
+    // blob per node, the shape a real extract has: thousands of frames, mixed
+    // compression, each carrying its own header and datasize.
+    const many = await encodeFromParsed(fixtureXml.nodes, fixtureXml.ways, 1);
+    const ranges = await allDataBlobRanges(many);
+    expect(ranges.length, 'a genuinely many-blob file').toBeGreaterThan(5);
+
+    const whole = await parseOsmPbf(many);
+    const streamed = await parseOsmPbfStream(chunked(many, 32));
+    expect(shape(streamed.nodes, streamed.ways)).toEqual(shape(whole.nodes, whole.ways));
+    expect(streamed.nodes.size).toBeGreaterThan(0);
   });
 
   it('rejects truncation at every boundary', async () => {
@@ -636,6 +660,340 @@ describe('osm pbf parsing', () => {
       (globalThis as Record<string, unknown>).DecompressionStream = saved;
     }
     await expect(parseOsmPbf(pbf)).resolves.toBeTruthy(); // restored
+  });
+});
+
+/* ============================== streaming ============================== */
+
+/**
+ * Split a file into chunks of `size` bytes, as an async iterable.
+ *
+ * Deliberately *not* `ReadableStream`: the point of several of these tests is
+ * that chunk boundaries land in arbitrary places, and an async generator makes
+ * the boundary the test's decision rather than the platform's.
+ */
+async function* chunked(bytes: Uint8Array, size: number): AsyncGenerator<Uint8Array> {
+  for (let at = 0; at < bytes.length; at += size) {
+    yield bytes.subarray(at, Math.min(at + size, bytes.length));
+  }
+}
+
+/** The same bytes through a real `ReadableStream`, to prove that path too. */
+function streamOf(bytes: Uint8Array, size: number): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    async start(c) {
+      for (let at = 0; at < bytes.length; at += size) {
+        c.enqueue(bytes.subarray(at, Math.min(at + size, bytes.length)));
+      }
+      c.close();
+    },
+  });
+}
+
+/**
+ * The byte range of the first `OSMData` blob, header included.
+ *
+ * Walks the file's own framing rather than hard-coding an offset, so it stays
+ * correct if the encoder's block sizes change — and so a bug in the reader
+ * cannot be masked by a test that shares the reader's idea of the layout.
+ */
+async function firstDataBlobRange(pbf: Uint8Array): Promise<BlobRange> {
+  return (await allDataBlobRanges(pbf))[0]!;
+}
+
+/**
+ * Every `OSMData` blob's byte range, in file order.
+ *
+ * `start` is the position of the blob's **4-byte length prefix**, not its body:
+ * a self-delimiting slice handed to a parser has to include the framing, and
+ * slicing from the body produced a reader that began mid-record and reported a
+ * nonsense header length — which is exactly how the first version of this helper
+ * failed.
+ */
+async function allDataBlobRanges(pbf: Uint8Array): Promise<BlobRange[]> {
+  const view = new DataView(pbf.buffer, pbf.byteOffset, pbf.byteLength);
+  const ranges: BlobRange[] = [];
+  let pos = 0;
+
+  while (pos + 4 <= pbf.length) {
+    const recordStart = pos;
+    const headerLen = view.getUint32(pos);
+    pos += 4;
+    const headerStart = pos;
+    let cursor = headerStart;
+    let type = '';
+    let datasize = 0;
+    while (cursor < headerStart + headerLen) {
+      const [tag, afterTag] = readVarint(view, cursor);
+      cursor = afterTag;
+      const field = tag >>> 3;
+      const wire = tag & 7;
+      if (field === 1 && wire === 2) {
+        const [len, afterLen] = readVarint(view, cursor);
+        type = new TextDecoder().decode(pbf.subarray(afterLen, afterLen + len));
+        cursor = afterLen + len;
+      } else if (field === 3 && wire === 0) {
+        const [v, afterV] = readVarint(view, cursor);
+        datasize = v;
+        cursor = afterV;
+      } else if (wire === 2) {
+        const [len, afterLen] = readVarint(view, cursor);
+        cursor = afterLen + len;
+      } else if (wire === 0) {
+        cursor = readVarint(view, cursor)[1];
+      } else if (wire === 5) cursor += 4;
+      else if (wire === 1) cursor += 8;
+      else throw new Error(`unexpected wire type ${wire} in test helper`);
+    }
+    pos = headerStart + headerLen + datasize;
+    if (type === 'OSMData') ranges.push({ start: recordStart, end: pos });
+  }
+  if (ranges.length === 0) throw new Error('no OSMData blobs in the test file');
+  return ranges;
+}
+
+interface BlobRange { start: number; end: number }
+
+/** Minimal varint reader for the framing helper above. */
+function readVarint(view: DataView, at: number): [number, number] {
+  let value = 0;
+  let shift = 0;
+  let b = 0;
+  let pos = at;
+  do {
+    b = view.getUint8(pos++);
+    value += (b & 0x7f) * 2 ** shift;
+    shift += 7;
+  } while (b & 0x80);
+  return [value, pos];
+}
+
+describe('parseOsmPbfStream', () => {
+  it('produces byte-identical output to the whole-file reader', async () => {
+    // The property that matters: streaming is not a second parser, it is the
+    // same parser fed differently. If these ever diverge, one of them is wrong.
+    const pbf = await fixturePbf;
+    const whole = await parseOsmPbf(pbf);
+    const streamed = await parseOsmPbfStream(chunked(pbf, 64));
+
+    expect(shape(streamed.nodes, streamed.ways)).toEqual(shape(whole.nodes, whole.ways));
+  });
+
+  it('is independent of where the chunk boundaries fall', async () => {
+    // Every chunk size from 1 upward puts a boundary somewhere different, and
+    // the framing is only correct if the reader can reassemble across all of
+    // them. 1 byte per chunk is the pathological case and is included on
+    // purpose: a BlobHeader split mid-varint is exactly the bug this catches.
+    const pbf = await fixturePbf;
+    const reference = await parseOsmPbf(pbf);
+    const want = shape(reference.nodes, reference.ways);
+
+    for (const size of [1, 2, 3, 5, 7, 13, 64, 511, 1024, 4096, pbf.length]) {
+      const got = await parseOsmPbfStream(chunked(pbf, size));
+      expect(shape(got.nodes, got.ways), `chunk size ${size}`).toEqual(want);
+    }
+  });
+
+  it('feeds buildDataset identically to the whole-file reader', async () => {
+    const pbf = await fixturePbf;
+    const streamed = await parseOsmPbfStream(chunked(pbf, 97));
+    const fromStream = buildDataset(streamed.nodes, streamed.ways);
+    // Re-parsed rather than reusing `fixtureXml`: `buildDataset` consumes what it
+    // is given, so the shared fixture's map would already be empty here.
+    const xmlSide = parseOsmXml(XML_FIXTURE);
+    const fromWhole = buildDataset(xmlSide.nodes, xmlSide.ways);
+    expect(fromStream.counts).toEqual(fromWhole.counts);
+    expect(fromStream.bbox).toEqual(fromWhole.bbox);
+    expect(fromStream.graph.nodeCount).toBe(fromWhole.graph.nodeCount);
+  });
+
+  it('accepts a ReadableStream as well as an async iterable', async () => {
+    // The production path hands it a `ReadableStream` (transferred from the
+    // main thread), while tests naturally have bytes. Both must work, and the
+    // reader satisfies the iterator protocol rather than being wrapped in a loop
+    // of its own — worth pinning, because the two shapes are easy to confuse.
+    const pbf = await fixturePbf;
+    const fromStream = await parseOsmPbfStream(streamOf(pbf, 128));
+    const whole = await parseOsmPbf(pbf);
+    expect(shape(fromStream.nodes, fromStream.ways)).toEqual(shape(whole.nodes, whole.ways));
+  });
+
+  it('parses the first data blob without being asked for the rest of the file', async () => {
+    // The whole point of the change: peak memory is one blob, not the file.
+    //
+    // Proven by starvation rather than by measurement. The source yields exactly
+    // the framing plus the first `OSMData` blob and then ends, and the parse is
+    // asserted to *succeed* for that prefix alone. A reader that concatenated its
+    // input first could not do this — it would need every byte before it could
+    // begin, so it would raise on input the streaming reader finds complete.
+    const pbf = await fixturePbf;
+    const first = await firstDataBlobRange(pbf);
+    // The prefix must genuinely be a strict prefix, or the test proves nothing.
+    expect(first.end, 'there is more file after the first data blob')
+      .toBeLessThan(pbf.length);
+
+    const onlyFirst = pbf.subarray(0, first.end);
+    const parsed = await parseOsmPbfStream(chunked(onlyFirst, 64));
+    // The whole-file reader agrees on what that prefix contains.
+    const whole = await parseOsmPbf(onlyFirst);
+    expect(shape(parsed.nodes, parsed.ways)).toEqual(shape(whole.nodes, whole.ways));
+    expect(parsed.nodes.size).toBeGreaterThan(0);
+  });
+
+  it('has read only a bounded prefix of the file when the first blob is parsed', async () => {
+    // The measurable form of "peak memory is one blob, not the file".
+    //
+    // The source is asked for bytes lazily, so `produced` is a direct reading of
+    // how much the reader has pulled in. It is sampled the moment the first
+    // progress report fires — which the reader reaches only after parsing its
+    // first `OSMData` blob.
+    //
+    // A reader that concatenated its input first (what this path used to do, in
+    // `engine.worker.ts`) would have pulled the *entire* file before parsing
+    // anything, so `produced` would already equal the file length here. That is
+    // the difference the assertion is looking for, and it is observable from
+    // outside rather than inferred.
+    const pbf = await fixturePbf;
+    const ranges = await allDataBlobRanges(pbf);
+    expect(ranges.length, 'a multi-blob fixture, or this proves nothing')
+      .toBeGreaterThan(1);
+    const first = ranges[0]!;
+
+    // Chunk finely rather than one blob per chunk. `produced` is a reading of how
+    // much the reader has pulled in, so the finer the chunks the more precisely
+    // the moment of first parse can be located — and the first version chunked at
+    // the largest blob, which on this fixture was most of the file, leaving
+    // nothing to distinguish "read one blob" from "read everything".
+    const CHUNK = 64;
+    let produced = 0;
+    let atFirstReport = -1;
+    let reportCount = 0;
+
+    async function* watched(): AsyncGenerator<Uint8Array> {
+      for (let at = 0; at < pbf.length; at += CHUNK) {
+        produced = Math.min(at + CHUNK, pbf.length);
+        yield pbf.subarray(at, produced);
+      }
+    }
+
+    // `totalBytes` is required, and this is why: without it the parser reports
+    // progress exactly once, at the end (see the no-hint branch), so the sample
+    // would be taken after the whole file had been read and the assertion would
+    // be measuring nothing. The first version of this test omitted it and failed
+    // for that reason rather than because the reader misbehaved.
+    await parseOsmPbfStream(watched(), () => {
+      if (atFirstReport < 0) atFirstReport = produced;
+      reportCount++;
+    }, pbf.length);
+
+    // A concatenating reader would have pulled the entire file before parsing
+    // anything, so `produced` would already be the file length at this point.
+    // Instead it stopped just past the first blob, plus at most one chunk of
+    // read-ahead from `ByteQueue.ensure`.
+    expect(atFirstReport).toBeGreaterThan(0);
+    expect(atFirstReport, 'a prefix, not the whole file')
+      .toBeLessThan(pbf.length);
+    expect(atFirstReport, 'no further than the first blob plus one chunk')
+      .toBeLessThanOrEqual(first.end + CHUNK);
+
+    // And it went on to read the whole file, so nothing was skipped.
+    expect(produced).toBe(pbf.length);
+    expect(reportCount).toBeGreaterThan(1);
+  });
+
+  it('reports monotonic progress and ends at 1 when given a total', async () => {
+    const pbf = await fixturePbf;
+    const seen: number[] = [];
+    await parseOsmPbfStream(chunked(pbf, 512), (p) => seen.push(p), pbf.length);
+    expect(seen.length).toBeGreaterThan(1);
+    expect(seen[0]).toBeGreaterThan(0);
+    expect(seen[seen.length - 1]).toBe(1);
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeGreaterThanOrEqual(seen[i - 1]!);
+  });
+
+  it('reports once, terminally, without a total — never an invented fraction', async () => {
+    // Same rule as `parseOsmXmlStream`: a rising value with no denominator
+    // would be claiming progress nothing supports.
+    const pbf = await fixturePbf;
+    const seen: number[] = [];
+    await parseOsmPbfStream(chunked(pbf, 512), (p) => seen.push(p));
+    expect(seen).toEqual([1]);
+  });
+
+  it('never reports past 1 when the stream is longer than the declared total', async () => {
+    // A `totalBytes` that under-reports must clamp, not overshoot: a progress
+    // bar reading 140% is worse than one that stalls.
+    const pbf = await fixturePbf;
+    const seen: number[] = [];
+    await parseOsmPbfStream(chunked(pbf, 512), (p) => seen.push(p), Math.max(1, Math.floor(pbf.length / 4)));
+    expect(Math.max(...seen)).toBeLessThanOrEqual(1);
+    expect(seen[seen.length - 1]).toBe(1);
+  });
+
+  it('rejects the same corrupt inputs the whole-file reader does', async () => {
+    // Shared framing means shared verdicts. A defect the streaming path answers
+    // differently from `parseOsmPbf` is a divergence bug, not a style choice.
+    const cases: [Uint8Array, RegExp][] = [
+      [new Uint8Array(0), /no OSMData|empty/],
+      [UTF8.encode('not a pbf at all, just some text'), /implausible|truncated|blob header/],
+      [Uint8Array.of(0xff, 0xff, 0xff, 0xff, 0, 1, 2), /implausible/],
+      [UTF8.encode(XML_FIXTURE.slice(0, 200)), /implausible|truncated|blob header/],
+    ];
+    for (const [bytes, pattern] of cases) {
+      await expect(parseOsmPbfStream(chunked(bytes, 8)), `${pattern}`).rejects.toThrow(pattern);
+    }
+  });
+
+  it('rejects a header-only file, having consumed it without hanging', async () => {
+    const headerOnly = await blob('OSMHeader', encodeHeader(), true);
+    await expect(parseOsmPbfStream(chunked(headerOnly, 7))).rejects.toThrow(/no OSMData blobs/);
+  });
+
+  it('rejects truncation at every boundary, including mid-blob', async () => {
+    // The whole-file reader's truncation table, run through the streaming one.
+    // This is where a hand-rolled framing layer most often goes wrong: a blob
+    // body split across three chunks, cut short.
+    const good = await fixturePbf;
+    for (const cut of [1, 2, 3, 4, 5, 17, 64, 128, 1024, good.length - 1, good.length - 8]) {
+      await expect(
+        parseOsmPbfStream(chunked(good.subarray(0, cut), 16)),
+        `cut at ${cut}`,
+      ).rejects.toThrow(PbfFormatError);
+    }
+  });
+
+  it('rejects 1-3 trailing bytes rather than treating them as a clean end', async () => {
+    // A file whose final blob is complete but has 2 stray bytes is *corrupt*, and
+    // saying so is the difference between "re-download it" and "imported fine".
+    const good = await fixturePbf;
+    const withTail = concat([good, Uint8Array.of(0x00, 0x01)]);
+    await expect(parseOsmPbfStream(chunked(withTail, 9))).rejects.toThrow(/trailing byte/);
+  });
+
+  it('names the compression it cannot undo, streaming too', async () => {
+    for (const [field, name] of [[6, 'zstd'], [4, 'lzma'], [5, 'lz4']] as const) {
+      const body = new Writer().len(field, Uint8Array.of(0x28, 0xb5, 0x2f, 0xfd)).bytes();
+      const bytes = assembleBlob('OSMData', body);
+      await expect(parseOsmPbfStream(chunked(bytes, 5))).rejects.toThrow(new RegExp(name));
+    }
+  });
+
+  it('refuses an implausible header length instead of buffering for it', async () => {
+    // Without the MAX_BLOB_HEADER ceiling a garbage length becomes a request for
+    // gigabytes, and the reader appears to hang rather than reject.
+    const bytes = Uint8Array.of(0x7f, 0xff, 0xff, 0xff, 0, 1, 2);
+    await expect(parseOsmPbfStream(chunked(bytes, 2))).rejects.toThrow(/implausible/);
+  });
+
+  it('says so plainly when DecompressionStream is unavailable, streaming too', async () => {
+    const pbf = await buildHandPbf();
+    const saved = (globalThis as Record<string, unknown>).DecompressionStream;
+    try {
+      delete (globalThis as Record<string, unknown>).DecompressionStream;
+      await expect(parseOsmPbfStream(chunked(pbf, 32))).rejects.toThrow(/no DecompressionStream/);
+    } finally {
+      (globalThis as Record<string, unknown>).DecompressionStream = saved;
+    }
   });
 });
 

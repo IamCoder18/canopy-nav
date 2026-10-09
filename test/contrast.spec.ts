@@ -3,26 +3,33 @@
  *
  * ## Why this is a test and not a note
  *
- * The AAOS palette in `theme.ts` is transcribed from Google's published
- * specification, and the white opacity ramp in particular is *specified* as
- * percentages: primary 88%, secondary 60%, tertiary 50%. Those numbers are not
- * ours to change — but neither is WCAG, and the project has already accepted that
- * obligation once, by replacing a UA-default focus ring that measured 1.06:1.
+ * The palette in `theme.ts` is transcribed from Google's published dark theme,
+ * and the earlier version of it transcribed the AAOS *white opacity ramp* in
+ * particular — which is *specified* as percentages: primary 88%, secondary 60%,
+ * tertiary 50%. Those numbers are not ours to change — but neither is WCAG, and
+ * this project has already accepted that obligation once, by replacing a
+ * UA-default focus ring that measured 1.06:1.
  *
  * A specification being quoted correctly and a specification being *sufficient*
  * are different questions, and only one of them is answered by copying the
- * numbers. So the ramp is measured here against every surface it is actually
+ * numbers. So every ink is measured here against every surface it is actually
  * used on, and the assertion is written to say which requirement it is
  * enforcing: 4.5:1 for body copy, 3:1 for text at 24px and above (WCAG 1.4.3
  * "large text"), and 3:1 for non-text UI boundaries (1.4.11).
  *
  * ## What "used on" means
  *
- * `ink.*` is composited over `elevation.*` — g958, g928, g900 — and over the map
- * canvas, which is light. Compositing alpha over a background is done properly
- * here (in sRGB, then linearised for the luminance ratio), because the shortcut of
- * treating `rgba(255,255,255,0.5)` as a colour and comparing it to white is how a
- * ramp that looks fine on a dark card turns out to be 1.4:1 over a map.
+ * `ink.*` is composited over `elevation.*`. Compositing alpha over a background
+ * is done properly here (in sRGB, then linearised for the luminance ratio),
+ * because the shortcut of treating `rgba(255,255,255,0.5)` as a colour and
+ * comparing it to white is how a ramp that looks fine on a dark card turns out
+ * to be 1.4:1 over a map.
+ *
+ * The ramp is solid hex rather than alpha for the same reason, and that is
+ * recorded as a design decision in `theme.ts`: alpha text has a contrast ratio
+ * that is a function of whatever is behind it, so the same token measures one
+ * thing on a card and another over the map. Solid ink makes contrast a property
+ * of the token rather than of the screen it landed on.
  *
  * Run with `npx vitest run test/contrast.spec.ts`.
  */
@@ -85,12 +92,13 @@ export function contrast(fg: string, bg: string): number {
 
 const SURFACES: { name: string; colour: string }[] = [
   { name: 'elevation.e0 (black)', colour: elevation.e0 },
-  { name: 'elevation.e1 (g958)', colour: elevation.e1 },
-  { name: 'elevation.e2 (g928)', colour: elevation.e2 },
-  { name: 'elevation.e3 (g900)', colour: elevation.e3 },
-  { name: 'grey.g958 app chrome', colour: grey.g958 },
-  { name: 'grey.g900 card', colour: grey.g900 },
-  { name: 'grey.g868 raised', colour: grey.g868 },
+  { name: 'elevation.e1 (page)', colour: elevation.e1 },
+  { name: 'elevation.e2 (card)', colour: elevation.e2 },
+  { name: 'elevation.e3 (raised)', colour: elevation.e3 },
+  { name: 'elevation.e4 (hover)', colour: elevation.e4 },
+  { name: 'grey.g958 page', colour: grey.g958 },
+  { name: 'grey.g900 raised', colour: grey.g900 },
+  { name: 'grey.g868 hover', colour: grey.g868 },
 ];
 
 // Ink roles and the WCAG threshold that applies to each. `tertiary` is used for
@@ -103,7 +111,7 @@ const INK_ROLES = [
   { name: 'ink.tertiary', colour: ink.tertiary, min: 4.5, use: 'inactive icons, metadata' },
 ];
 
-describe('AAOS ink ramp against every dark surface', () => {
+describe('Google Maps dark ink against every surface', () => {
   const measured: string[] = [];
 
   for (const role of INK_ROLES) {
@@ -143,24 +151,38 @@ describe('accents and map colours', () => {
     }
   });
 
-  it('records that the day accent would fail as text on a light surface, and is unused', () => {
-    // The AAOS palette publishes both a day and a night accent. This app is
-    // night-only — a car UI, always on the dark chrome — so `accentNight` is the
-    // one in use and the previous test covers it. `accentDay` is exported for
-    // completeness of the palette and is referenced nowhere in `src/` outside its
-    // own definition.
+  it('records that the light-mode blue fails as text on this app\'s own surfaces, and is unused', () => {
+    // Google publishes a blue for its light theme (#1A73E8) and a lighter one for
+    // dark (#8AB4F8). This app is dark-only — a car UI, always on the dark chrome
+    // — so `accentNight` is the one in use and the previous test covers it.
+    // `accentDay` is exported for completeness and is referenced nowhere in `src/`
+    // outside its own definition.
     //
     // It is measured here rather than ignored, because the number is worth having
-    // written down: #66B5FF on white is 2.18:1, which is fine for the things
-    // Material uses a day accent for (a focus ring, a 3:1 non-text boundary) and
-    // well short of the 4.5:1 that body copy would need. If a light theme is ever
-    // added, this is the token that has to change, and it should change then
-    // rather than being discovered on a screen.
-    const onWhite = contrast(accentDay, '#FFFFFF');
-    expect(onWhite).toBeGreaterThan(2);
-    expect(onWhite).toBeLessThan(3);
-    // And it must not quietly become a text colour somewhere.
-    expect(onWhite).toBeLessThan(4.5);
+    // written down. #1A73E8 on white is 4.51:1 — it clears the body-text floor on
+    // a *light* surface, and it is exactly the light-mode accent. On this app's
+    // own surfaces it does not:
+    //
+    //     on black      4.66:1   (clears, but black is not a surface here)
+    //     on page       3.62:1   fails
+    //     on card       3.24:1   fails
+    //     on raised     2.78:1   fails   <- app bar, search field, chips, inputs
+    //     on hover      2.25:1   fails
+    //
+    // `raised` is where most of the app's text sits, which is the whole argument
+    // for the dark accent. If a light theme is ever added this becomes the accent
+    // and these assertions have to be re-derived for light surfaces rather than
+    // copied over.
+    expect(contrast(accentDay, '#FFFFFF')).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(accentDay, elevation.e3)).toBeLessThan(4.5);
+    expect(contrast(accentDay, elevation.e4)).toBeLessThan(3);
+    // And it must not have quietly become a text colour anywhere.
+    for (const surface of SURFACES.filter((s) => !/black|e0/.test(s.name))) {
+      expect(
+        contrast(accentDay, surface.colour),
+        `accentDay ${accentDay} on ${surface.name} is ${contrast(accentDay, surface.colour).toFixed(2)}:1`,
+      ).toBeLessThan(4.5);
+    }
   });
 
   it('the route line is distinguishable from the map it is drawn on', () => {
@@ -237,19 +259,22 @@ describe('the contrast helper itself', () => {
 
   it('is deliberately NOT symmetric when the foreground is translucent', () => {
     // `contrast(fg, bg)` composites `fg` over `bg`, so the arguments mean
-    // different things and swapping them is a different question. With
-    // `ink.primary` (88% white) the two directions are 14.75:1 and 19.05:1 —
-    // the second treats the translucent colour as an opaque *background*, which
-    // is not a thing.
+    // different things and swapping them is a different question. With a 50%
+    // white the two directions are 5.28:1 and 19.05:1 — the second treats the
+    // translucent colour as an opaque *background*, which is not a thing.
     //
-    // Recorded as a test because the asymmetry is a footgun: it means a caller
-    // cannot check a ratio "either way round" to be safe, and a future helper
-    // that tried to be symmetric would be silently wrong for every alpha colour
-    // in the ramp.
-    const forward = contrast(ink.primary, elevation.e1);
-    const backward = contrast(elevation.e1, ink.primary);
-    expect(forward).toBeCloseTo(14.748, 2);
-    expect(backward).toBeCloseTo(19.053, 2);
+    // The example is written out as a literal rather than against `ink.primary`,
+    // because `ink.primary` is now solid hex (14.25:1 forward, 14.75:1 backward —
+    // genuinely asymmetric, but for the boring reason that the two arguments are
+    // different colours rather than because of any alpha). The helper's alpha
+    // behaviour still has to be pinned, and a literal is what pins it.
+    const forward = contrast('rgba(255,255,255,0.88)', elevation.e1);
+    const backward = contrast(elevation.e1, 'rgba(255,255,255,0.88)');
+    expect(forward).toBeCloseTo(12.857, 2);
+    expect(backward).toBeCloseTo(16.313, 2);
     expect(forward).not.toBeCloseTo(backward, 1);
+
+    // And the solid-ink case, which is the one the app actually uses.
+    expect(contrast(ink.primary, elevation.e1)).toBeCloseTo(14.253, 2);
   });
 });

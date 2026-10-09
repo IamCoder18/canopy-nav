@@ -10,13 +10,22 @@
  *    is single-use; a re-import has to spin up a fresh worker,
  *  - a `useRegions()` hook so screens re-render when the library changes.
  *
- * Parser reality check: `engine.worker.ts` reads **XML** only. A Geofabrik
- * `.osm.pbf` is protobuf and cannot be parsed here, so those files are rejected
- * up front with a message pointing at `osmium cat`.
+ * ## The two guards that run before a worker exists
+ *
+ * `importPreflight` refuses a file that is not OSM data at all, and
+ * `importguard.canImport` refuses one that is OSM data but too large for this
+ * device's heap. Both run before `new OsmEngine()`, so a rejected import costs no
+ * worker and no memory.
+ *
+ * The second is the one that cannot be caught. An out-of-heap WebView is killed
+ * by the system: no throw, no `worker.onerror`, so `buildPromise` never settles
+ * and the user sees the progress bar vanish. A refusal is the only version of
+ * this the app gets to choose.
  */
 
 import { useSyncExternalStore } from 'react';
 import { OsmEngine, importPreflight, type BuildProgress } from '../osm/engine';
+import { canImport, importWarning } from '../osm/importguard';
 import type { OsmDataset } from '../osm/engine.worker';
 import { describeError } from '../errors';
 import { RegionLibrary, type Region, type RegionMeta } from '../osm/regions';
@@ -52,6 +61,16 @@ export interface ImportRequest {
    * failed and nothing changed.
    */
   onWarn?: (message: string | null) => void;
+  /**
+   * Parse anyway, even though the memory guard says it will not fit.
+   *
+   * The guard's estimate comes from a file size and a constant, not from a
+   * measurement, so it is an estimate — and a user who has just watched a
+   * progress bar say "this needs 4 GB" is entitled to disagree with it. This is
+   * that disagreement, made explicit: the caller must have asked, so an import
+   * that dies is a choice rather than a surprise.
+   */
+  forceMemory?: boolean;
 }
 
 /** Best-effort guess that a file is a saved web page rather than map data. */
@@ -87,6 +106,34 @@ export async function importRegionFile(req: ImportRequest): Promise<OsmDataset |
     // environment's.
     const problem = await importPreflight(req.file);
     if (problem) throw new Error(problem);
+
+    /**
+     * Refuse an extract this device cannot parse, before a worker exists.
+     *
+     * The check that had to come first, and does not. `download.ts` asks
+     * `navigator.storage.estimate()` about free *disk*, which is the right
+     * question for the download and the wrong one for the parse — a 334 MB
+     * Alberta extract has room on disk and does not have room in the heap.
+     *
+     * What happens without this is worse than an exception. An out-of-heap
+     * WebView is killed by the system: no `throw`, no `onerror`, so
+     * `OsmEngine`'s handler never runs and the promise here never settles. The
+     * user sees the app return to its launcher with the progress bar simply
+     * gone. See `importguard.ts` for the estimate and its known limits.
+     *
+     * `forceMemory` is the escape hatch for a *wrong* estimate, and it is
+     * deliberately not implicit: an import that dies should have been asked for.
+     */
+    const size = req.file.size ?? 0;
+    if (size > 0) {
+      const verdict = canImport(size);
+      if (!verdict.ok && !req.forceMemory) {
+        throw new Error(verdict.reason);
+      }
+      if (verdict.ok && verdict.thin && !req.forceMemory) {
+        onWarn?.(importWarning(verdict.memory));
+      }
+    }
 
     engine = new OsmEngine();
     engines.set(req.id, engine);

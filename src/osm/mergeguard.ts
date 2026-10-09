@@ -47,6 +47,19 @@ import type { RoadGraph } from './engine.worker';
  */
 export const BYTES_PER_NODE = 96;
 
+/**
+ * The same measure, for the *parse* peak rather than a resident graph.
+ *
+ * Exported here so `importguard.ts` can be compared against it directly, and
+ * deliberately set **higher** (112). A `RoadGraph` is compact typed arrays; the
+ * peak of parsing an extract is a `Map<number, RawNode>` of boxed
+ * `{id, lat, lon, tags?}` objects coexisting with the arrays being built. The
+ * steady state is survivable and the peak is what kills a WebView, so a guard
+ * sized for the steady state under-estimates by roughly half and passes the
+ * cases it exists to refuse.
+ */
+export const PARSE_BYTES_PER_NODE = 112;
+
 /** Bytes per directed edge: `edgeTo` + `edgeCost` + `edgeFlags` + a name slot. */
 export const BYTES_PER_EDGE = 24;
 

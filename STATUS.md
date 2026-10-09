@@ -28,9 +28,25 @@ with **fully offline OpenStreetMap routing**.
   the one value the platform never changes. Along the way it **struck the largest gap in
   this document**, because the premise underneath it is contradicted by Chromium's own
   WebView documentation.
+- **§14.16–14.17 + §15** — the memory pass, and the roadmap it opened. PBF now
+  streams (it never did, and §14.16 called that the largest piece of engineering left in
+  the app — it was much smaller than that); a heap gate refuses imports that would kill
+  the WebView; the basemap no longer rebuilds a province at every zoom boundary. And the
+  finding that reframed all of it: **Alberta has no sub-regional extracts**, so the fix
+  that would have made the problem disappear is unavailable for the province that
+  prompted it. §15 is what to do about it, ordered.
 
 Each pass also had to fix defects **it introduced**, which are recorded in §11.5, §12.8 and
 §13.6 rather than quietly corrected.
+
+**The most recent pass is the shortest and the most consequential.** It was asked a
+question about low-end hardware, and the answer turned out to be structural: a province
+extract does not fit in a phone's heap, and the fix that would have made the question
+moot — smaller sub-regional downloads — **does not exist for Alberta**, which was the
+province in the question. Three things were built anyway (streaming PBF, a heap gate, a
+basemap cache) and §15 is the plan for the problem they only partly solve. It is also the
+first pass whose main finding is a limitation rather than a defect, and it is recorded as
+one.
 
 **The last two passes were both about measurements, and not in the way they were
 expected to be.** §13 found six probes measuring something other than what they named,
@@ -88,6 +104,13 @@ evaluated, which a pass or fail result does not tell you.
    — [the imported road network was never drawn](#1414-the-imported-road-network-was-never-drawn)
    — [three more, and the shape they share](#1415-three-more-and-the-shape-they-share-with-1414)
    — [two more code defects](#1416-two-more-code-defects-one-of-which-is-the-largest-thing-found-in-this-pass)
+15. [The roadmap](#15-the-roadmap)
+    — [Make the biggest extract that fits actually fit](#151-make-the-biggest-extract-that-fits-actually-fit)
+    — [Make the delivery path work on device](#152-make-the-delivery-path-work-on-device)
+    — [Verification](#153-verification-what-has-not-been-run-and-the-gate-that-should-catch-it)
+    — [UI and UX polish](#154-ui-and-ux-polish)
+    — [The drive simulator — a debug setting](#155-the-drive-simulator--a-debug-setting)
+    — [Process, for whoever picks this up](#156-process-for-whoever-picks-this-up)
 
 ---
 
@@ -106,7 +129,7 @@ stands. **Bold** = fully working and verified.
 | 6 | Use Valhalla for car navigation | **Done** as an optional provider; **not** the on-device default (§5.3) | `src/nav/valhalla.ts` |
 | 7 | Use Nominatim for geocoding start/destination | **Done** as an optional online provider | `src/nav/geocode.ts` |
 | 8 | 100% local, no WiFi | **Done.** Offline engine, offline gazetteer, offline map rendering, offline persistence | §3.2–3.4 |
-| 9 | Multi-region: download by city/province (Alberta, BC…), route between them | **Partly done.** Download, streaming, catalogue and cross-region *search* all work. **Cross-region routing does not route correctly** — it stitches at a bounding-box midpoint rather than merging; see row 10 and §7 gap 1 | §3.5 |
+| 9 | Multi-region: download by city/province (Alberta, BC…), route between them | **Partly done.** Download, streaming, catalogue and cross-region *search* all work. **Cross-region routing does not route correctly** — it stitches at a bounding-box midpoint rather than merging; see row 10 and §7 gap 1. **And province-scale extracts no longer import at all** — Alberta is 334 MB with no smaller alternative, and the heap guard refuses it (§7 gap 13, §15.1) | §3.5 |
 | 10 | Merging the two regions rather than stitching | **Done.** `merge.ts` is now called. Cross-region routing is one A\* over a merged graph, cached per region set, behind a memory guard that refuses with a reason rather than returning a wrong line. Requirement was previously recorded as **NOT DONE**; §3.18 is the implementation and §3.5.2 is superseded | `src/osm/regions.ts`, `src/osm/mergeguard.ts` |
 | 11 | Is self-hosting Valhalla on Android unreasonable? | Answered: not unreasonable, but not achievable in the time available (§5.3) | — |
 | 12 | Keep hosted Valhalla as an option | **Done.** Three hosted presets plus a custom endpoint — FOSSGIS, Simplerouting.io, and your own `valhalla_service` — each individually selectable and probeable, alongside the offline engine | §3.6, §3.6.1 |
@@ -114,7 +137,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1026 unit tests across 54 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1153 unit tests across 58 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -128,7 +151,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1026 passing**, 54 files |
+| Unit tests | `npm test` | **1153 passing**, 58 files |
 | End-to-end | `npm run e2e` | **55 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -205,26 +228,50 @@ That was the last known console output in the project.
 
 ### Test breakdown
 
-Every count below is from `vitest --reporter=json` on a run, grouped by file, not
-retyped by hand. The table is the complete set: **54 files, 1026 tests**. The
-previous revision's table listed 24 of the 38 files and several stale counts.
+Every count below is measured by counting `PASS` lines from a run, grouped by file, not
+retyped by hand. The table is the complete set: **58 files, 1153 tests**. The previous
+revision's table listed 24 of 38 files and carried several stale counts.
+
+**One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
+`import { contrast } from './contrast.spec'` — it imports the *spec file*, so vitest
+collects contrast's `describe` blocks into attribution's run **whether or not the run is
+scoped to attribution**. Run attribution alone and it reports 47; run the whole suite and
+it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
+
+This was established by subtraction rather than assumed, and the table carries the number
+the audit compares against — the **run's** count, not the file's own. The consequence is
+that **the 1153 total double-counts contrast's 34 tests**: 1134 distinct test cases are
+declared across 57 files. Both figures are recorded rather than reconciled by lowering the
+total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
+total would fail it for the right reason on the wrong number.
+
+**A gate that passes for the wrong reason, recorded because it happened.** Writing
+`13` — the honest per-file count — makes `npm run status` report
+`§2 breakdown counts attribution.spec.ts at 13, the run has 47` with `VITEST_JSON` set.
+That FAIL is not a bug in the gate and the "fix" is not to make the file's own count
+appear; it is a real disagreement between two defensible numbers, and the one that belongs
+in a column labelled "tests in this file's run" is the run's.
+
+The audit's own hint, `VITEST_JSON=/tmp/r.json npx vitest run --reporter=json`, does not
+work with vitest 3.2 — that version wants `--outputFile=/tmp/r.json`. Recorded because the
+wrong incantation is currently printed by `npm run status`.
 
 | File | Tests | Covers |
 |---|---|---|
 | `geo.spec.ts` | 67 | polyline codec and every refusal case, haversine, bearing, formatting boundaries, `simplify`, `snapToPolyline` |
-| `regions.spec.ts` | 63 | `RegionLibrary`, bbox helpers, `catalogFor`, `searchAll` ranking, `bestFor`, cross-region routing |
+| `regions.spec.ts` | 64 | `RegionLibrary`, bbox helpers, `catalogFor`, `searchAll` ranking, `bestFor`, cross-region routing |
 | `providers.spec.ts` | 46 | provider chain, fallback, `requiresKey`, 4xx handling, `localToRoute` bbox reduction |
 | `valhalla.spec.ts` | 46 | request body, headers, response parsing, multi-leg, unit normalisation, a response missing what it needs |
 | `engines.spec.ts` | 38 | engine selection policy, plan ordering, per-engine readiness reasons, the attempt trace, strict mode |
 | `merge.spec.ts` | 37 | node-ID union, direction permissions, dead-edge sweep, >2^21 node regression |
 | `download.spec.ts` | 37 | streaming, progress, abort, retry/resume, HTML-error detection, truncation, disk cache, poisoned part files |
-| `engine.spec.ts` | 34 | OSM parsing, graph construction, one-ways, A\* route quality, geometry continuity, index isolation and keying |
-| `contrast.spec.ts` | 31 | every ink token against every dark surface, printed as a table |
+| `engine.spec.ts` | 35 | OSM parsing, graph construction, one-ways, A\* route quality, geometry continuity, index isolation and keying, and that `buildDataset` consumes its inputs |
+| `contrast.spec.ts` | 34 | every ink token against every dark surface, printed as a table |
 | `stream.spec.ts` | 30 | streaming XML parse ≡ whole-file parse across chunk sizes, incl. 1-char and seeded fuzz |
 | `geocode.spec.ts` | 29 | throttle serialisation and 1 req/s spacing, viewbox, place mapping |
 | `progress.spec.ts` | 29 | the three ETA properties as properties: monotone, never zero before arrival, last-good-kept |
 | `settings.spec.ts` | 29 | every setting round-trips, a malformed endpoint is not "Ready", quota failures reported |
-| `audit-regressions.spec.ts` | 32 | source-level guards for the §10/§11 defects, each verified to fail when reintroduced |
+| `audit-regressions.spec.ts` | 33 | source-level guards for the §10/§11 defects, each verified to fail when reintroduced, and the multi-zoom basemap shape |
 | `xmlentities.spec.ts` | 24 | entity expansion structurally impossible; hostile documents terminate |
 | `reroute.spec.ts` | 23 | off-route confirmation window, storm guards, backoff growth, tracker reset semantics, banner content |
 | `persist.spec.ts` | 22 | typed-array round-trip, quota errors, corrupt records, rehydration |
@@ -233,7 +280,7 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `mapstyle.spec.ts` | 20 | offline style LOD: every line layer has a low-zoom floor, arterials branch on class |
 | `requests.spec.ts` | 19 | `RequestGate`: supersession, cancellation, and that an abandoned request writes nothing |
 | `shellcheck.spec.ts` | 18 | the service worker's shell predicate, and that the fetch handler consults it |
-| `import.spec.ts` | 17 | a bad file is refused and never replaces a working map |
+| `import.spec.ts` | 21 | a bad file is refused and never replaces a working map, and that the memory guard gates the import and `forceMemory` overrides it |
 | `navigation.spec.ts` | 17 | off-route detection, speed-scaled thresholds, traffic verdicts |
 | `serve.spec.ts` | 16 | test-server path containment and no side effects on import |
 | `renderzoom.spec.ts` | 14 | zoom LOD re-application and reduced motion |
@@ -243,14 +290,17 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `chrome.spec.ts` | 10 | the bar-height observer: it publishes, it republishes on a resize, it cleans up |
 | `textscale.spec.ts` | 16 | the large-text detector sees either way a platform can scale text |
 | `reroute-reason.spec.ts` | 11 | a failed reroute keeps saying why, for as long as the driver is lost |
-| `attribution.spec.ts` | 13 | the ODbL credit is present, well-formed, and not re-suppressed |
+| `mirror.spec.ts` | 25 | the download mirror's allowlist: host, path shape, extension, and every trick it refuses |
+| `attribution.spec.ts` | 47 | the ODbL credit is present, well-formed, and not re-suppressed. **This file's own 13 tests plus the 34 of `contrast.spec.ts`**, which it imports at line 29 — see the note above this table |
 | `mergeguard.spec.ts` | 13 | merge memory guard: three outcomes, the boundary at ratio 1, scaling with region count |
 | `reroute-failure.spec.ts` | 13 | a failed reroute leaves the route and its guidance alone |
 | `catalogue-row.spec.ts` | 8 | the unavailable reason is one line until asked otherwise, and reachable without a mouse |
 | `probebound.spec.ts` | 6 | the catalogue probe is bounded, and every entry reaches a verdict |
 | `steps.spec.ts` | 8 | why the turn list is empty — three causes, three honest explanations |
-| `pbf.spec.ts` | 11 | PBF vs XML parser equivalence on a hand-built file and the whole fixture |
-| `theme.spec.ts` | 11 | `theme.ts` ↔ `styles.css` token-name agreement, fallbacks present, no bare literals |
+| `pbf.spec.ts` | 28 | PBF vs XML parser equivalence on a hand-built file and the whole fixture; **the streaming reader** against the whole-file one at every chunk size, starvation, bounded read-ahead, and the same corrupt inputs |
+| `theme.spec.ts` | 13 | `theme.ts` ↔ `styles.css` token-name agreement, fallbacks present, no bare literals |
+| `importguard.spec.ts` | 24 | the import memory guard: pinned constants, three outcomes, the ratio-1 boundary, an assumed budget is never unlimited, monotonicity across the whole size range, and a refusal that names a way out (§15.2) |
+| `basemapcache.spec.ts` | 14 | the offline basemap LRU: several zooms resident, zoom-independent layers built once, eviction order, dataset isolation (§15.4) |
 | `reroute-strict.spec.ts` | 9 | strict mode bounds the plan rather than aborting it |
 | `styletiles.spec.ts` | 9 | tile-style order-comparison guard: the actual shield filter, idempotency |
 | `basemap.spec.ts` | 6 | a basemap substitution is reported rather than silent |
@@ -258,7 +308,7 @@ previous revision's table listed 24 of the 38 files and several stale counts.
 | `strict-plan.spec.ts` | 6 | `strict` constrains the plan, not the walk — and the two docstrings now agree |
 | `mapsources.spec.ts` | 6 | every source id the app writes to is one the style declares — a layer id is not a source id |
 | `threshold-prose.spec.ts` | 11 | the numbers a comment states, so a comment cannot disagree with the code quietly |
-| `stream-progress.spec.ts` | 9 | streaming progress without a size hint, and three comments that had drifted |
+| `stream-progress.spec.ts` | 10 | streaming progress without a size hint, and four comments that had drifted — including the one that claimed PBF was never streamed, which is now false |
 | `minheap.spec.ts` | 6 | the heap invariant, plus the broken implementation kept and asserted to fail |
 | `pbfgeo.spec.ts` | 6 | absolute coordinates against the PBF spec, via the real encoder |
 | `streamscale.spec.ts` | 6 | the streaming parse holds a small multiple of the document, not the document |
@@ -334,6 +384,7 @@ number written once.
 Which is why this paragraph, and §13.16, both describe the failures without quoting
 the stale figures verbatim: reproducing the pattern in order to explain it puts the
 pattern back into the document, and the check is right to object.
+
 
 ---
 
@@ -1455,26 +1506,27 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx                4002  screens, navigation state, focus + announcements,
+  App.tsx                4092  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            222  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
   sw.ts                   264  offline shell service worker
   errors.ts                54  describeError: a message for any thrown value
   settings.ts             347  typed, validated, quota-safe persistence
-  theme.ts                219  AAOS design tokens (colour, type, layout, shape)
+  theme.ts                367  AAOS design tokens (colour, type, layout, shape)
   icons.tsx               421  29 maneuver kinds + system icons, hand-drawn SVG
   geo.ts                  364  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt
-  styles.css             2181  layout, insets, responsive rules
+  styles.css             2961  layout, insets, responsive rules
 
   osm/
-    engine.worker.ts     1210  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
-    pbf.ts                611  .osm.pbf protobuf reader
-    engine.ts             403  worker client, format sniff, GeoJSON mirroring
-    regions.ts            462  RegionLibrary, catalogue, bbox helpers, merge cache
+    engine.worker.ts     1235  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
+    pbf.ts                841  .osm.pbf protobuf reader, whole-buffer and streaming
+    engine.ts             430  worker client, format sniff, GeoJSON mirroring
+    regions.ts            465  RegionLibrary, catalogue, bbox helpers, merge cache
     merge.ts              318  union-find merge of adjacent extracts
-    mergeguard.ts         177  can a merge be afforded here? three outcomes
+    mergeguard.ts         190  can a merge be afforded here? three outcomes
+    importguard.ts        267  can a parse be afforded here? three outcomes (§15.2)
     tags.ts                36  shared node-tag filter
 
   nav/
@@ -1495,21 +1547,21 @@ src/
     voice.ts              125  spoken guidance, deduped per meaning
 
   map/
-    MapView.tsx           514  MapLibre view, tile/offline style switch
+    MapView.tsx           578  MapLibre view, tile/offline style switch, basemap LRU
     style.ts              520  Google palette, tile remap, offline LOD style
 
   regions/
-    download.ts          1445  streaming downloader, resume, part-file handling
-    RegionsScreen.tsx    1062  manage, catalogue, cross-region route test
+    download.ts          1493  streaming downloader, resume, part-file handling
+    RegionsScreen.tsx    1157  manage, catalogue, cross-region route test
     persist.ts            650  IndexedDB caching of parsed datasets
-    store.ts              285  RegionLibrary singleton, per-region workers
+    store.ts              332  RegionLibrary singleton, per-region workers, memory gate
 
-test/            1026 unit tests, 54 files
-test/e2e.mjs           46 browser checks, built bundle
+test/            1153 unit tests, 57 files
+test/e2e.mjs           55 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
                              extract slicing is done by osmium on a desktop)
-tools/serve.mjs         140 LAN static server for on-device manual testing
+tools/serve.mjs         306 LAN static server for on-device manual testing
 tools/bundle-budget.mjs 153 gzip size budget; fails on regression
 tools/reflow.mjs        368 chrome overlap at 100/175/200% text (§13.8) — a
                              diagnostic, still not a gate: it needs a
@@ -1551,6 +1603,14 @@ or "gap 18" are to the *old* numbering and say so; the current numbers are 1–1
    spike but does not prove the parse fits a phone. This also bounds the merge:
    the guard in §3.18 estimates from declared graph size and refuses rather than
    guessing, but a refusal on a real province has never been seen.
+
+   **Superseded in part by §14.17.** The PBF path *is* streamed now, so the ~2×
+   file-size spike is gone for the format production uses, and the parse peak is
+   bounded by one blob. Two things are still true and one is now much worse:
+   peak memory has still never been measured on hardware, the boxed node map is
+   still the dominant term, and the heap guard in `importguard.ts` **refuses
+   province-sized extracts on every device** — which turns this from "unproven"
+   into "known to fail, deliberately". See §7 gap 13 and §15.1.
 3. **The offline LOD refreshes on zoom, but is unverified at province scale.**
    There was no `zoomend` listener at all, so the level of detail only changed as
    a side effect of a GPS fix and at a standstill the map visibly refused to gain
@@ -1699,6 +1759,27 @@ or "gap 18" are to the *old* numbering and say so; the current numbers are 1–1
     Two corrections to one two-sentence note, in four passes. It is the cheapest item
     in this document and it took longest to describe accurately, which is the
     argument for measuring a claim before writing it down rather than after.
+13. **Alberta cannot be imported, and there is no smaller Alberta to import
+    instead.** The newest gap, and the only one that is a *design* limit rather than
+    an unmeasured risk.
+
+    **Verified against the source, 2026-10-07.** Geofabrik's Alberta extract page
+    reports *"No sub regions are defined for this region"*, and
+    `alberta-latest.osm.pbf` is **334 MB**. So the highest-leverage fix for
+    low-end hardware — offer smaller sub-regional extracts instead of provinces —
+    **is unavailable for this province.** That was the whole of the first
+    recommendation, and it was wrong for the one province that prompted it.
+
+    §14.17's heap guard then makes it explicit rather than accidental: at
+    `PBF_BYTES_PER_NODE = 8` and `PARSE_BYTES_PER_NODE = 112`, 334 MB estimates to
+    ~44 M nodes and ~4.9 GB, which exceeds the budget on an 8 GiB device. The app
+    now **refuses**, with a message naming `osmium extract -b` as the way out.
+
+    The refusal is correct. What is not shipped is any way to act on it *inside the
+    app* — the message sends a driver to a desktop they may not have. §15.1 is the
+    on-device bbox crop that closes that, and it is the first item there for a
+    reason: without it, the largest catalogue entries are unusable and the guard is
+    only a well-worded wall.
 
 ### Closed in the §3.17–3.19 pass
 
@@ -1786,7 +1867,7 @@ three cold-start console warnings (§3.15).
 npm install
 npm run dev          # vite dev server
 npm test             # 1026 unit tests
-npm run e2e          # 46 browser checks against the built bundle
+npm run e2e          # 55 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
 npm run sync         # build, clear android assets, cap sync
@@ -1819,7 +1900,7 @@ the full gate" true.
 
 The Release workflow runs typecheck, unit tests and the build, then attaches the
 APK; the browser suites run on CI for the same commit. **15 releases across 17
-tags**, latest v0.11.2. `v0.7.0` and `v0.10.0` have tags whose Release runs
+tags**, latest v0.11.3. `v0.7.0` and `v0.10.0` have tags whose Release runs
 failed, and v0.11.2 needed one re-tag for the same reason (§9) — so a green tag is
 not evidence of a green release, and the release list is the thing to read.
 
@@ -2447,7 +2528,7 @@ knowing about the previous five.
 ### 11.7 What the new gates are
 
 ```bash
-npm run focus   # 17 keyboard and focus checks in a real browser
+npm run focus   # 15 keyboard and focus checks in a real browser
 npm run shots   # every screen, 3 viewports, computed styles recorded
 npm run reflow  # chrome overlap at 100% / 175% / 200% text  (a diagnostic, not a gate)
 ```
@@ -3687,7 +3768,9 @@ problem in something that already existed — the first was the catalogue row in
 
 **Which mechanism a real device uses.** This cannot be settled here, and §7 gap 1 stands.
 What §14.8 establishes is weaker and more useful: the app responds correctly to *each*
-mechanism, so whichever one the device uses, the layout turns on. The remaining half of
+mechanism, so whichever one the device uses, the layout turns on.
+
+The remaining half of
 gap 11 — making the setting reach the type at all — is still the `rem` conversion.
 
 ### 14.9 The largest gap in this document rested on a false premise
@@ -4305,7 +4388,7 @@ if (mounted.current && document.activeElement === document.body) {
 ```
 
 So launcher → tap the **Settings** tile → press Back lands focus on the Home `<h1>`,
-never on the tile that was pressed — and because `go()` *overwrites* the record on the way
+never on the tile that was pressed — and because `go()` **overwrites** the record on the way
 back, the original entry is gone too. The scenario the comment describes is the one §11 was
 written for, and this path is the gap in it. Nothing in the suite covers it:
 `test/focus.mjs`'s 15 checks never leave a screen and come back.
@@ -4316,22 +4399,330 @@ decision about whether to fall back to the heading. That is a focus-behaviour ch
 screen §11 already reworked twice, and it belongs in its own pass with the focus suite
 extended to cover it — not in the last hour of one.
 
-#### Open: the PBF reader is never streamed, and the comment says it is
+#### Superseded: the PBF reader is never streamed, and the comment says it is
 
-`engine.worker.ts` prefers a `stream` handle because it "lets a multi-hundred-MB extract
-be parsed in a bounded window instead of being held whole, which is the difference
-between parsing a province and being OOM-killed by one" — and three lines above it records
-that **PBF is the normal path**.
+§14.16 recorded this as *open* — "the largest single piece of engineering left in the app",
+with the honest note that it was recorded rather than fixed. **It is now fixed**, and the
+claim in that subsection is superseded: PBF streams.
 
-For PBF it is unreachable: the only PBF poster sends `{ bytes, format: 'pbf' }` from
-`await file.arrayBuffer()`. And even if a stream were passed, the handler reads it to
-completion, concatenates, and parses the whole thing — peak of **2×** the file, not a
-bounded window. So for the format production uses, the file is always held whole, and the
-outcome the comment says the stream prevents is what happens.
+What was true then, and is what the defect actually was:
 
-The comment is corrected to say so, and the gap is recorded here rather than fixed: making
-the PBF path genuinely streaming means a `block.fork()`-per-block incremental parse, which
-is the largest single piece of engineering left in the app and is not a comment change.
+- `engine.ts` took `await file.arrayBuffer()` unconditionally on the PBF path, so the whole
+  extract was resident **on the main thread** before a byte reached the worker.
+- `engine.worker.ts` then read that stream to completion, concatenated every chunk into a
+  second full-size `Uint8Array`, and parsed that. **Two copies of a province.**
+- Meanwhile the comment three lines above said the stream exists so a multi-hundred-MB
+  extract is "parsed in a bounded window instead of being held whole, which is the
+  difference between parsing a province and being OOM-killed by one."
+
+Now: `engine.ts` transfers a `ReadableStream` (transfer, not copy — an untransferred
+`ReadableStream` throws "could not be cloned because it was not transferred"), and
+`parseOsmPbfStream` in `pbf.ts` holds **one blob at a time**.
+
+**Why PBF can stream at all, which is not obvious.** XML streams because an element
+boundary is findable in the buffer (`elementBoundary`). A protobuf field is a varint of
+unknown length, so there is no element boundary to cut on. What PBF *does* have is a
+self-delimiting **blob** boundary: `BlobHeader` carries `datasize`, so a reader knows
+exactly where the current blob ends before reading any of it. `ByteQueue.ensure(n)` waits
+for `n` bytes and `take(n)` hands them over, which is the whole mechanism.
+
+**`take` copies, deliberately.** A view into a queued chunk would be one `await` from being
+overwritten by the next `ensure`, and `readBlobPayload` is async — so an uncompressed
+(`raw`) blob would be parsed from memory that had been recycled. That failure is silent:
+wrong coordinates, a plausible-looking extract, a wrong route. The cost is one allocation
+of at most `datasize` bytes per blob (~8 MB), transient and immediately collectable. A
+lifetime that is a property of the call order rather than of the type is not worth the
+allocation it saves.
+
+`MAX_BLOB_HEADER` is enforced on the streaming path too, and it was not at first. Without
+it a garbage header length becomes a request for gigabytes: the reader appears to *hang*
+rather than reject. Three tests here failed for real reasons during this work — the type
+error on the `ReadableStream` adapter, a blob-range helper that sliced from the body
+instead of the length prefix (so the reader began mid-record), and a budget calculation
+that **doubled** the assumed heap and made this pass's guard more permissive than
+`mergeguard`'s on the same device. All three are recorded because all three were the kind
+of bug that passes a review.
+
+#### Closed here: nothing measured RAM before starting
+
+`download.ts` asks `navigator.storage.estimate()` about free **disk**. That is the right
+question for the download and the wrong one for the parse: a 334 MB extract has room on
+disk and does not have room in the heap.
+
+What happens without a check is worse than an exception. **An out-of-heap WebView is killed
+by the system**: no `throw`, no `worker.onerror`, so `OsmEngine`'s handler never fires,
+`buildPromise` never settles, and the user sees the app return to its launcher with the
+progress bar simply gone. `onerror` converts a *throw* into a message; an OOM is not a
+throw, so the one mechanism built for this could never have caught it.
+
+`src/osm/importguard.ts` now refuses before `new OsmEngine()` exists. Three outcomes, as
+`mergeguard`: proceed / proceed-but-warn / refuse-with-a-reason. The estimate is
+`bytes / 8` nodes × `PARSE_BYTES_PER_NODE` (112 — the boxed `RawNode` peak, *not* the 96 B
+of a resident graph, which would under-estimate by roughly half).
+
+**`forceMemory` exists because the estimate is a constant times a file size, not a
+measurement.** Unlike `mergeguard`, which measures real typed arrays, this one guesses, and
+a user who has watched a progress bar say "needs 4 GB" is entitled to disagree. The Regions
+screen asks the guard *before* running the import — the file is still in hand there, which
+it is not after a refusal — and offers "try importing it anyway". An import that dies was
+asked for.
+
+#### Closed here: the basemap rebuilt the whole province at every zoom boundary
+
+`basemapFor` held a **single** `WeakMap` slot, `dataset -> {zoom, roads, water, green}`,
+with a hit only when `entry.zoom === zoom`. So crossing an integer zoom boundary — the
+most common camera movement there is, and the one the LOD exists to make *cheaper* — threw
+away the entire provincial road network and re-serialised it on the main thread. Pinch out,
+pinch back, whole province built twice. **A guard that pays full price at exactly the
+boundary it was added to smooth is not a guard.**
+
+Two further things were rebuilt needlessly: `water` and `green` do not vary with zoom at
+all (`RENDER_MIN_ZOOM` applies to roads only), so they were re-walked and re-allocated per
+crossing to produce identical values.
+
+Now: a 3-entry LRU keyed on integer zoom, and the zoom-independent layers built once per
+dataset. Zooming across a boundary usually finds the arriving level already resident,
+because the level just left is still there.
+
+### 14.17 The memory pass: what it does *not* fix
+
+The three changes are recorded under §14.16's "Superseded" heading, because that is the
+defect they closed. What is left undone is the reason §15 exists.
+
+**Streaming removes the file from the peak. It does not remove the node map.** OSM PBF
+writes every node before every way, so when the ways arrive and name the nodes they
+reference, the coordinates are already gone from the stream. A reader cannot discard nodes
+as it goes; the map is required until the last way is seen.
+
+`buildDataset` therefore *consumes* its inputs — it clears the node map and empties the way
+array before returning, so the parse peak is not held for the life of the region. That is
+help and it is not sufficient. For Alberta's ~44 M nodes the boxed map is the dominant
+term, and §15.1 is about that.
+
+**And the province still does not parse.** On the pinned constants a 334 MB extract is
+refused on *every* device, including an 8 GiB one: ~4.9 GB estimated against a ~2 GB
+budget. The guard is right and the product consequence is that the largest catalogue
+entries are now unusable by default. §15.1 exists because of this, and §7 gap 13 is the
+same fact as a gap.
+
+**One measurement was wrong while writing this.** The `BoundingClientRect`-style reasoning
+was fine but the *assumption* that a refused import could be distinguished from a
+successful one by its return value was not: `importRegionFile` returns `null` on failure
+*and* on a guarded refusal, so a test asserting "the override let it through" by checking
+for a non-null dataset cannot tell the two apart. It asserted nothing and was rewritten to
+assert on the *absence of the memory message* instead — which is the actual claim. The same
+applies to the streaming tests: two of the three failures in this work were tests that
+measured the wrong thing (a blob range sliced from the body rather than the length prefix,
+and a "bounded prefix" assertion that omitted `totalBytes`, so it sampled at end of file
+because there was only ever one progress report). §13.16 is about exactly this and it has
+now produced a fifth instance in one afternoon.
+
+---
+
+## 15. The roadmap
+
+Everything not yet done, ordered so that each step is worth doing before the next. This
+section was written in one sitting after the memory pass (§14.17) and is the most
+opinionated part of this document: it is a judgement about what to do next, not a
+measurement.
+
+### 15.1 Make the biggest extract that fits actually fit
+
+The thesis of everything below. The app's hard limit today is memory, and the fix is to
+stop asking the device to hold a province. In order:
+
+**1. Verify the bbox-filter assumption against real data, before writing it.** OSM PBF
+blobs are not required to be geographically sorted, and the streaming crop depends on
+reading them once and discarding what is outside the box. If blobs interleave, the
+filter is still correct but the *peak* is not bounded by the box. **This is a
+half-day investigation that decides the shape of everything after it**, so it goes
+first. Fetch one real Geofabrik file (Alberta is 334 MB; a smaller province is fine) and
+report blob count, blob size distribution, and whether node coordinates are
+geographically clustered per blob.
+
+**2. The on-device bbox crop.** Add a bbox filter to `parseOsmPbfStream`: keep nodes
+inside a dilated box, then keep ways whose refs survive. Peak memory becomes a function
+of *area* rather than *province* — Calgary metro is a few million nodes against
+Alberta's ~44 M. No new format and no writer: build the dataset straight from the
+filtered stream. Roughly a hundred lines on the reader §14.17 left behind.
+
+**3. Make the crop reachable from the UI.** The driver picks an area, not a province.
+A map-based picker, a "download the area I'm in" default, and recent areas. The memory
+guard's refusal message should point here rather than at `osmium` once it exists.
+
+**4. Then re-derive the guard's constants against measurement.** `PBF_BYTES_PER_NODE`
+and `PARSE_BYTES_PER_NODE` are pinned guesses. After (1) and (2) there will be real
+numbers, and the guard should use them. Until then it over-refuses, which is safe and
+annoying.
+
+**5. Only after all of that: consider whether the node map can be dropped entirely.**
+`buildDataset` could consume ways and node coordinates together and never materialise
+the map — but only if the format's ordering allows, which is what (1) determines.
+
+**What this does not reach.** A driver who genuinely needs province-wide routing on a
+phone will not get it from any of the above. That case wants MVT tiles plus a prebuilt
+routing graph, streamed by viewport — the Organic Maps / Maps.me shape. It is a
+different architecture, not a bigger version of this one, and it should not be started
+until (1)–(4) are done and measured.
+
+### 15.2 Make the delivery path work on device
+
+Independent of 15.1 and blocked on nothing.
+
+**6. Decide the download strategy, given the CORS wall.** §7 gap 4 measures it:
+Geofabrik sends `Access-Control-Allow-Origin: null` on both the 307 and the 200, so
+one-tap download from a WebView is impossible from any client-side change. Options, in
+order of preference:
+
+   - **`@capacitor/file-transfer`.** Downloads natively to a file on disk, with
+     progress and abort, and does not go through the JS heap at all. This is the
+     documented Capacitor answer for large transfers, and it sidesteps the streaming
+     question entirely because the file never enters memory.
+   - **`CapacitorHttp`.** Works, and STATUS.md already records why it is not the
+     answer: it patches `window.fetch` **globally**, which would replace the streaming
+     downloader §3.12 exists to make survivable with a whole-body bridge transfer.
+   - **Keep manual import as the documented path**, and fix the copy so it is honest
+     rather than apologetic.
+
+   Whatever is chosen, the user's own server is not involved — the phone fetches from
+   Geofabrik directly. **A Cloudflare Tunnel in front of the app is not in the data
+   path** and its terms are not a constraint on any of this. Worth writing down,
+   because it is a natural wrong assumption.
+
+**7. Then revisit `importguard`'s refusal copy** so it names the option that exists on
+the device rather than a desktop tool.
+
+### 15.3 Verification: what has not been run, and the gate that should catch it
+
+The standing constraint from §7 gaps 1 and 2, plus what this pass added.
+
+**8. Every change in §15.1 and §15.2 verified in Chromium before it is called done.**
+Specifically, and not as a substitute for unit tests:
+
+   - a real `.osm.pbf` streaming through the built bundle (`E2E_FIXTURE=fixture.osm.pbf`
+     already does this in CI);
+   - the bbox crop against a **real multi-blob file**, not the fixture;
+   - a memory reading, from `performance.memory` where available and `adb shell dumpsys
+     meminfo` otherwise, at peak — reported as a number, not a verdict;
+   - the guard's three outcomes through the actual UI, including the override button.
+
+**9. Extend `test/e2e.mjs` to cover the guard.** It currently does not import anything the
+guard would refuse, so the refusal path has no browser coverage at all. It should: pick a
+file whose declared size trips the guard, assert the message, click the override, assert
+the import proceeds.
+
+**10. Add a memory gate.** `tools/` has gates for offline boot, focus, reflow and text
+scale, all cheap. A gate that parses the fixture and asserts peak heap stays under a
+budget would catch the next regression in this area that a unit test cannot see.
+
+### 15.4 UI and UX polish
+
+Grouped by what a driver would notice.
+
+**Onboarding and first run (11–15).** 11. The app opens with no map and a launcher that
+does not explain why; a first-run screen should say what an extract is and how to get
+one. 12. Download progress needs a cancel that is honest about what is discarded.
+13. The availability probe greys out dead catalogue entries — show *why* inline, not on
+expand. 14. Region names collide across countries (`ca-on` vs a hypothetical other
+`on`); disambiguate visibly. 15. After an import, say what was loaded in the driver's
+own terms — "Calgary area · 412,000 roads · routes offline" — rather than a byte count.
+
+**The navigation screen, which is the product (16–24).** 16. Off-route detection
+tuning against real driving speeds. 17. Voice guidance interruption when the driver
+also has the phone in conversation — a duck, not a mute. 18. Night mode that follows
+the system without a setting to find. 19. Lane guidance for multi-lane exits, which
+Android Auto shows and this app cannot yet. 20. The ETA bar's remaining-distance field
+in the offline case, which §3.11.1 fixed once; re-check at real scale. 21. Search
+results ranked by *drive time* rather than straight-line distance, which is the only
+ranking that matches the decision being made. 22. Saved places with a Home/Work pair
+already claimed in `App.tsx` but never exercised. 23. Fuel-range and charging stops,
+which AAOS shows for EVs and which this app has no concept of. 24. A "what is this
+screen" affordance, since the UI is a deliberate imitation and a driver who has not used
+AAOS has no anchor for it.
+
+**The regions screen (25–29).** 25. Storage breakdown per region, so deleting the right
+one is obvious. 26. Region expiry — extracts are snapshots and the app does not say how
+old one is. 27. Batch operations: download two adjacent provinces in one action.
+28. A map preview of the imported area before routing is attempted. 29. Import from
+a URL, for the self-hosted case where CORS is not in play.
+
+**Accessibility and platform fit (30–34).** 30. Re-check every touch target against
+the 76dp AAOS minimum now that screens have changed. 31. Screen-reader pass over the
+navigation screen specifically, where the information is visual and spoken. 32.
+Keyboard shortcuts for the debug simulator below, so it is usable without a touchscreen.
+33. Automotive-mode detection, so the app does not offer gestures a head unit cannot do.
+34. Handlebars: the app is `allowMixedContent` and unverified against a real head unit.
+
+### 15.5 The drive simulator — a debug setting
+
+Explicitly a **debug affordance**, off by default, and the single highest-value item here
+for verifying guidance. §3.11 fixed offline turn-by-turn by inferring turns from bearing
+changes, and §7 gap 6 records that inference missing three of seven real maneuvers,
+inventing one and reversing one. **There is currently no way to check that quickly**:
+every manoeuvre bug so far has been found by reading the built app in Chromium.
+
+**35. A synthetic drive.** Replay a route as a moving vehicle: interpolate along the
+route geometry at a chosen speed, feed the result through the *real* `watchPosition` →
+`offroute` → `progress` → guidance path, and let the app's own logic produce every
+number on screen. No production code path is stubbed, which is the point — a simulator
+that bypasses the reroute policy would not find reroute bugs.
+
+**36. Speed and pause controls**, plus a scrub bar, so a manoeuvre can be replayed at
+0.25× without waiting.
+
+**37. Deliberate fault injection**, because this is what finds bugs:
+   - drive off the route by N metres, on demand;
+   - drop the fix for 30 s (the frozen-position loop of §3.11.1);
+   - jump to a waypoint mid-route;
+   - reverse along the route;
+   - teleport to a distant point.
+
+**38. A guidance trace panel** that logs every maneuver as it is derived: bearing
+change, distance, the icon chosen, the spoken text. This turns "the turn was wrong" from
+an argument into a diff, and it is what §7 gap 6 has needed for four passes.
+
+**39. Deterministic seed and replay.** A route plus a fault script should reproduce the
+same run, so a bug found in a browser can become a fixture.
+
+**40. Chromium coverage for all of it**, per §15.3's rule. The simulator is the answer to
+"how do we verify directions without a car", and an unverified simulator is just another
+thing to trust.
+
+### 15.6 Process, for whoever picks this up
+
+**41. Verify in Chromium, always.** `npm run e2e`, `npm run screens`, `npm run focus`,
+`npm run textscale`, `npm run reflow`, `npm run status`. The emulator is not a phone
+(§7 gap 1) and a green unit run does not mean a screen works — §3.19 exists because
+every suite in this repo passes and the screen suite was visiting four screens.
+
+**42. Use subagents, and here is what they are good for in this repo.** They have found
+real defects here repeatedly, and the pattern that works is *giving a symptom, a
+constraint, and permission to answer negatively*:
+
+   - **Auditing** — "read the built app in Chromium and find things that are wrong."
+     `explore` for code, `general` for browser work.
+   - **Writing tests for a defect you already found** — give the subagent the defect and
+     make it prove the test fails without the fix. A test that cannot fail is worse than
+     no test, because it is counted (§3.5.2).
+   - **Measuring** — line counts, test counts, per-file counts. Note the trap in §2:
+     run spec files individually, because `attribution.spec.ts` imports
+     `contrast.spec.ts`.
+   - **Adversarial review of a measurement** — "here is the number, re-derive it." This
+     project has found seven wrong counts and two wrong probes by exactly this.
+   - **Investigating a question with a negative answer allowed** — e.g. "does Geofabrik
+     publish Alberta sub-regions?" The answer was no, and that redirected the whole
+     plan. A subagent asked to confirm something will find something if told to look.
+
+   Not good for: deciding what to build next (there is no ground truth to check
+   against), or anything requiring a decision about what the app should *be*.
+
+**43. Re-derive every number before writing it.** `npm run status` catches the mechanical
+shapes. It cannot read prose for truth, and §13.8's seven-clipped-labels figure would have
+passed it.
+
+**44. Record a defect's *absence* as carefully as its presence.** Half this section is
+things that turned out not to be broken. The reasoning is what stops the next person
+redoing the work.
 
 ---
 

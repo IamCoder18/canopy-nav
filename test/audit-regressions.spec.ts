@@ -149,6 +149,17 @@ describe('map: overlays must not depend on a boot-time closure', () => {
     expect(MAP).toMatch(/basemapFor\(p\.dataset, Math\.round\(m\.getZoom\(\)\)\)/);
   });
 
+  it('does not re-serialise the basemap at every zoom boundary either', () => {
+    // The cache above kept a *single* zoom, so crossing an integer boundary --
+    // the most common camera movement there is, and the one the LOD exists to
+    // make cheaper -- threw away the whole provincial network and rebuilt it on
+    // the main thread. A guard that pays full price at the boundary it was added
+    // to smooth is not a guard. `test/basemapcache.spec.ts` covers the behaviour;
+    // this pins the shape that makes it true.
+    expect(MAP).toMatch(/roadsByZoom\s*:\s*Map<number, GeoJSON\.FeatureCollection>/);
+    expect(MAP).not.toMatch(/hit\.zoom === zoom/);
+  });
+
   it('refreshes the offline level of detail when the zoom changes', () => {
     // Nothing re-applied the overlays on zoom, so the LOD — which is a function
     // of zoom — only updated as a side effect of a GPS fix.
@@ -218,7 +229,15 @@ describe('styles: the declarations that were being discarded', () => {
     // radii, which reads as one panel split in two rather than as two cards.
     const card = /\.maneuver-banner \{[^}]*\}/.exec(CSS)?.[0] ?? '';
     const notice = /\.offroute-banner \{[^}]*\}/.exec(CSS)?.[0] ?? '';
-    const radiusOf = (rule: string) => /border-radius:\s*([\d.]+)px/.exec(rule)?.[1];
+    const radiusOf = (rule: string) => {
+      // Reads the *resolved* value, whether it is written as a bare px or as a
+      // `var(--r-lg, 16px)` token reference. The regex used to accept only the
+      // bare form, which meant this test silently stopped matching the moment
+      // the radius scale was introduced — and a test that quietly stops
+      // matching is not a test.
+      const m = /border-radius:\s*(?:var\(\s*--[a-z-]+\s*,\s*)?([\d.]+)px/.exec(rule);
+      return m?.[1];
+    };
     expect(radiusOf(card)).toBeDefined();
     expect(radiusOf(notice)).toBe(radiusOf(card));
     // And they really are the same surface, which is why the corner has to match.

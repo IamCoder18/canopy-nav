@@ -248,7 +248,14 @@ export class OsmEngine {
           // province in a bounded window and being OOM-killed by one. The
           // whole-file forms are kept for callers that pass a plain Blob-shaped
           // object without `stream`, and for the test fixtures.
-          const totalChars = typeof file.size === 'number' && file.size > 0 ? file.size : undefined;
+          const totalBytes = typeof file.size === 'number' && file.size > 0 ? file.size : undefined;
+          // The XML parser counts *characters* and this counts *bytes*, so they
+          // are not the same number for a non-ASCII document. Both name the file
+          // size because each is the denominator its own parser divides by: the
+          // XML scanner advances through decoded text, the PBF reader through
+          // raw bytes. Passing one as the other would make the progress bar
+          // wrong by the file's UTF-8 overhead — small, and wrong.
+          const totalChars = totalBytes;
           // Captured once: `dispose()` can null the field from another tick.
           const worker = this.worker;
           if (!worker) throw new Error('The OSM worker is not available in this environment.');
@@ -273,8 +280,28 @@ export class OsmEngine {
               const text = await file.text();
               worker.postMessage({ type: 'build', payload: { text, format: 'xml' } });
             }
+          } else if (typeof file.stream === 'function') {
+            // PBF streams for the same reason XML does, and it is the format
+            // Geofabrik actually publishes, so this is the production path.
+            //
+            // It used to take `arrayBuffer()` unconditionally here, which made
+            // the *whole extract* resident on the client before a single byte
+            // reached the worker -- on the main thread -- and then the worker
+            // re-concatenated the chunks into a second full-size buffer. Two
+            // copies of a province, when the BlobHeader framing is
+            // self-delimiting and neither is necessary. See STATUS.md 14.16.
+            //
+            // `totalBytes` is what makes the progress bar truthful rather than
+            // a guess: a stream has no `size`, so without it the parse reports
+            // one terminal value.
+            const stream = file.stream();
+            worker.postMessage(
+              { type: 'build', payload: { stream, format: 'pbf', totalBytes } },
+              [stream as unknown as Transferable],
+            );
           } else {
-            // Transfer the buffer instead of copying a province-sized file.
+            // No `stream` (a plain Blob-shaped object, or a test fixture): fall
+            // back to the whole-buffer form, which the worker still handles.
             const bytes = await file.arrayBuffer();
             worker.postMessage({ type: 'build', payload: { bytes, format: 'pbf' } }, [bytes]);
           }

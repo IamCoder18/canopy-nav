@@ -1,7 +1,7 @@
 # Canopy Nav
 
-An Android app that recreates the **Android Auto / Google Maps** navigation UI,
-with **fully offline routing** from OpenStreetMap data.
+An Android app that recreates the **Google Maps dark navigation UI**, with
+**fully offline routing** from OpenStreetMap data.
 
 Built with **Capacitor + React 19 + TypeScript**. The entire UI is web
 technology wrapped in a native shell, so the same codebase runs in a browser —
@@ -14,9 +14,17 @@ record, including what is *not* finished.
 
 ## What it does
 
-- **Recreates the Android Auto UI** using the official AAOS design system:
-  grayscale palette, elevation ramp, 8dp grid, type scale, and component metrics
-  (96dp app bar, 76dp touch targets, 158dp grid cells).
+- **Recreates Google Maps' dark theme** — its neutral surface ramp
+  (`#1E2024` → `#30343A`), the `#8AB4F8` accent, its radius and elevation
+  scales, and its component language. Colour is **solid, not an alpha ramp**, so
+  a token's contrast is a property of the token rather than of the screen it
+  landed on; every ink is asserted at >= 4.5:1 against every surface by
+  `test/contrast.spec.ts`. Interactive states on surfaces that float over the map
+  are opaque, because `background` *replaces* rather than composites — a
+  translucent hover on the launcher tiles rendered them as bare basemap.
+- **Uses the AAOS *layout* system**: 8dp grid, type scale, and component metrics
+  (96dp app bar, 76dp touch targets, 158dp grid cells) — the numbers are right
+  for a car even where the palette is Google's.
 - **Offline routing** from an imported `.osm` file. No network required.
 - **Online routing** via Valhalla when a network is available, with the engine
   and fallback policy under your control.
@@ -131,7 +139,7 @@ src/
     RegionsScreen.tsx  manage, catalogue, cross-region preview
     download.ts        streaming downloader with resume
     persist.ts         IndexedDB caching of parsed datasets
-  theme.ts             AAOS design tokens (verified against Google's specs)
+  theme.ts             design tokens: Google Maps dark palette + AAOS layout metrics
   App.tsx              screens and navigation state
 ```
 

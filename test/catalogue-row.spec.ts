@@ -58,8 +58,20 @@ describe('the unavailable reason is one line until asked otherwise', () => {
   });
 
   it('still meets the touch-target minimum when it is a control', () => {
-    // It became interactive, so the 44dp minimum applies to it now.
-    expect(applied).toMatch(/\.unavailable-reason\s*\{[^}]*min-height:\s*28px/);
+    /*
+     * 44dp, up from 28dp.
+     *
+     * The row it lives on is 116dp tall and its whole purpose is that the reason
+     * a catalogue row cannot be downloaded is *on the row* — there is no hover on
+     * a head unit and no tooltip anyone reads. So the one control that reveals
+     * that sentence cannot be smaller than the app's own 44dp icon floor, and
+     * certainly not smaller than the 28px its single line of text needs.
+     *
+     * The row is allowed to wrap to two lines, which is when a 44dp target stops
+     * being affordable; this test pins the floor for the one-line case, which is
+     * the common one.
+     */
+    expect(applied).toMatch(/\.unavailable-reason\s*\{[^}]*min-height:\s*44px/);
   });
 
   it('has a focus ring, because it is focusable', () => {

@@ -57,9 +57,12 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: 'ca-sk', name: 'Saskatchewan', country: 'Canada', pbfUrl: 'https://download.geofabrik.de/north-america/canada/saskatchewan-latest.osm.pbf', approxMb: 330, parentId: 'ca' },
   { id: 'ca-ns', name: 'Nova Scotia', country: 'Canada', pbfUrl: 'https://download.geofabrik.de/north-america/canada/nova-scotia-latest.osm.pbf', approxMb: 130, parentId: 'ca' },
   { id: 'ca-nb', name: 'New Brunswick', country: 'Canada', pbfUrl: 'https://download.geofabrik.de/north-america/canada/new-brunswick-latest.osm.pbf', approxMb: 140, parentId: 'ca' },
-  { id: 'ca-nl', name: 'Newfoundland and Labrador', country: 'Canada', pbfUrl: 'https://download.geofabrik.de/north-america/canada/newfoundland-latest.osm.pbf', approxMb: 180, parentId: 'ca' },
+  { id: 'ca-nl', name: 'Newfoundland and Labrador', country: 'Canada', pbfUrl: 'https://download.geofabrik.de/north-america/canada/newfoundland-and-labrador-latest.osm.pbf', approxMb: 180, parentId: 'ca' },
   { id: 'ca-pe', name: 'Prince Edward Island', country: 'Canada', pbfUrl: 'https://download.geofabrik.de/north-america/canada/prince-edward-island-latest.osm.pbf', approxMb: 30, parentId: 'ca' },
-  { id: 'ca-mb-north', name: 'Manitoba (north)', country: 'Canada', pbfUrl: 'https://download.geofabrik.de/north-america/canada/manitoba-north-latest.osm.pbf', approxMb: 90, parentId: 'ca-mb' },
+  // No `manitoba-north` entry: Geofabrik publishes Manitoba as a single extract,
+  // and `manitoba-north-latest.osm.pbf` is a 404 rather than a sub-region. It was
+  // in the catalogue, and every visit to the Regions screen logged a failed
+  // availability probe for a file that has never existed.
 
   { id: 'us-ca', name: 'California', country: 'United States', pbfUrl: 'https://download.geofabrik.de/north-america/us/california-latest.osm.pbf', approxMb: 950 },
   { id: 'us-wa', name: 'Washington', country: 'United States', pbfUrl: 'https://download.geofabrik.de/north-america/us/washington-latest.osm.pbf', approxMb: 520 },

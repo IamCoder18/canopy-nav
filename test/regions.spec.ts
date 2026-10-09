@@ -608,17 +608,47 @@ describe('catalog', () => {
     expect(idAt([0, 0])).toBeNull();
   });
 
-  it('never returns the Manitoba (north) entry because it has no rough box', () => {
-    expect(CATALOG.some((e) => e.id === 'ca-mb-north')).toBe(true);
-    // A point in northern Manitoba resolves to the province, never to the
-    // "Manitoba (north)" entry, because `rough` has no ca-mb-north key.
+  it('does not list Manitoba (north), because Geofabrik does not publish it', () => {
+    // It used to be in the catalogue, and the test above used to *pin it there*
+    // as an entry that exists but has no `rough` box, so a point in northern
+    // Manitoba resolves to the province instead. That was a deliberate decision
+    // about lookup precedence and it is still true of every remaining entry.
+    //
+    // What the decision missed is that `manitoba-north-latest.osm.pbf` is a **404**
+    // — Geofabrik publishes Manitoba as one extract, with no sub-region. So the row
+    // was a download target that had never existed, and every visit to the Regions
+    // screen logged a failed availability probe against it. A catalogue entry whose
+    // job is to be downloaded has to have a file behind it, so it is gone rather
+    // than kept as a phantom.
+    expect(CATALOG.some((e) => e.id === 'ca-mb-north')).toBe(false);
+    // Northern Manitoba still resolves to the province.
     expect(idAt([-97, 55])!.id).toBe('ca-mb');
+  });
+
+  it('only lists extracts that exist upstream', () => {
+    /*
+     * Every catalogue URL is a Geofabrik path, and two of them were not.
+     *
+     * `newfoundland-latest.osm.pbf` 404s; the extract is
+     * `newfoundland-and-labrador-latest.osm.pbf`. Both spellings look plausible,
+     * which is why nothing caught it by reading the list — the name in the entry
+     * and the slug in the URL had simply drifted apart, and the row looked fine
+     * next to its neighbours.
+     *
+     * This asserts the relationship that actually matters: a region called
+     * "Newfoundland and Labrador" must be fetched from a URL that says so. It is a
+     * shape check rather than a network call, so it runs in CI without egress.
+     */
+    const nL = CATALOG.find((e) => e.id === 'ca-nl');
+    expect(nL).toBeDefined();
+    expect(nL!.name).toBe('Newfoundland and Labrador');
+    expect(nL!.pbfUrl).toContain('newfoundland-and-labrador-latest.osm.pbf');
   });
 
   it('groups the catalogue by country', () => {
     const groups = catalogByCountry();
     expect(groups.map((g) => g.country)).toEqual(['Canada', 'United States']);
-    expect(groups[0].entries).toHaveLength(11);
+    expect(groups[0].entries).toHaveLength(10);
     expect(groups[1].entries).toHaveLength(5);
     expect(groups[0].entries.every((e) => e.country === 'Canada')).toBe(true);
     expect(groups.flatMap((g) => g.entries).length).toBe(CATALOG.length);

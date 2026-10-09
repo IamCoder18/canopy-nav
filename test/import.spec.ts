@@ -15,7 +15,7 @@
  * Run with `npx vitest run test/import.spec.ts`.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -156,6 +156,111 @@ describe('warnings are not errors', () => {
     const { result, onWarn } = run(fakeFile('empty.osm', ''));
     await result.catch(() => null);
     expect(lastMessage(onWarn)).toBe('');
+  });
+});
+
+/**
+ * The memory guard, as the import path uses it.
+ *
+ * The guard itself is a pure function and is tested properly in
+ * `test/importguard.spec.ts` — its constants, its boundaries and its messages.
+ * What matters *here* is that `importRegionFile` actually consults it, and that
+ * `forceMemory` is the only way past it. A guard nothing calls is a comment.
+ *
+ * The failure this whole thing exists to prevent is the one with no catch: an
+ * out-of-heap WebView is killed by the system, so there is no throw, no
+ * `worker.onerror`, and the promise never settles. From the user's side that is
+ * indistinguishable from a hang, and the progress bar simply disappears.
+ */
+describe('the memory guard gates the import', () => {
+  const mb = (n: number) => n * 1024 * 1024;
+  const nav = globalThis.navigator as Navigator & { deviceMemory?: number };
+
+  afterEach(() => {
+    if ('deviceMemory' in nav) delete (nav as { deviceMemory?: number }).deviceMemory;
+  });
+
+  /**
+   * A file that is genuinely valid and parseable, but *declares* a large size.
+   *
+   * The content is the real fixture, so nothing about the parse is faked; only
+   * `size` is inflated. That is exactly what the guard reasons over — it runs
+   * before a parse, so a file size is all it can have — and it is what makes this
+   * test honest rather than a mock of the guard's own input.
+   */
+  function validButHuge(declaredBytes: number): File {
+    const file = new Blob([VALID], { type: 'application/octet-stream' }) as File;
+    Object.defineProperty(file, 'name', { value: 'alberta-latest.osm' });
+    Object.defineProperty(file, 'size', { value: declaredBytes });
+    return file;
+  }
+
+  it('refuses a province-sized extract, naming memory and a way out', async () => {
+    const onError = vi.fn();
+    const ds = await importRegionFile({
+      id: 'ca-ab', name: 'Alberta', code: 'CA-AB',
+      file: validButHuge(334 * mb(1)),
+      onError,
+    }).catch(() => null);
+
+    expect(ds, 'a refused import must not produce a dataset').toBeNull();
+    const msg = lastMessage(onError);
+    expect(msg).toMatch(/memory/i);
+    // Without an instruction the refusal is a dead end, which is why
+    // `importguard.ts` names `osmium extract -b` in the sentence.
+    expect(msg).toMatch(/osmium/);
+    expect(msg).toMatch(/-b/);
+  });
+
+  it('reports the refusal through onError rather than only rejecting', async () => {
+    // A throw into a caller that does not await would look identical, from the
+    // user's side, to the silent hang this is meant to replace.
+    const onError = vi.fn();
+    await importRegionFile({
+      id: 'ca-ab', name: 'Alberta', code: 'CA-AB',
+      file: validButHuge(334 * mb(1)),
+      onError,
+    }).catch(() => null);
+    expect(lastMessage(onError)).not.toBe('');
+  });
+
+  it('lets forceMemory past the guard', async () => {
+    // The override exists because the estimate is a constant times a file size,
+    // not a measurement, and the driver may know their device can cope. It has
+    // to be asked for: an import that dies should have been requested.
+    //
+    // What is asserted is that the *guard* stopped running — not that the import
+    // succeeded. It cannot succeed here: node has no `Worker`, so
+    // `new OsmEngine()` throws and `importRegionFile` reports that instead. That
+    // is the point: a different error entirely means the refusal is gone, and
+    // asserting on the *absence* of the memory message is what distinguishes
+    // "the guard let it through" from "the guard is broken".
+    const onError = vi.fn();
+    await importRegionFile({
+      id: 'ca-ab', name: 'Alberta', code: 'CA-AB',
+      file: validButHuge(334 * mb(1)),
+      forceMemory: true,
+      onError,
+    }).catch(() => null);
+
+    const msg = lastMessage(onError);
+    expect(msg, 'the memory refusal must be gone').not.toMatch(/memory/i);
+    expect(msg, 'and it should have reached the engine, which cannot run here')
+      .toMatch(/worker|Worker|environment/i);
+  });
+
+  it('does not gate a file whose size it does not know', async () => {
+    // An absent or zero size means "unknown", and unknown is not "province".
+    // Refusing here would break every caller passing a Blob-shaped object
+    // without a real size — including the browser suite's own fixtures.
+    const onError = vi.fn();
+    const file = new Blob([VALID], { type: 'application/octet-stream' }) as File;
+    Object.defineProperty(file, 'name', { value: 'no-size.osm' });
+    Object.defineProperty(file, 'size', { value: 0 });
+    await importRegionFile({
+      id: 'u', name: 'Unknown', code: 'U', file, onError,
+    }).catch(() => null);
+    expect(lastMessage(onError)).not.toMatch(/memory/i);
   });
 });
 

@@ -31,7 +31,7 @@ import {
   snapToPolyline, vertexAt, type LatLng,
 } from './geo';
 import { placeOnRoute, startPosition, type RoutePosition } from './nav/progress';
-import { ink, accentNight, applyThemeTokens, type as T, DP, ICON } from './theme';
+import { ink, accentNight, applyThemeTokens, type as T, DP, ICON, SEP } from './theme';
 import { useLocation, type LocationMode } from './nav/location';
 import {
   readSelection, writeSelection, readUnits, writeUnits,
@@ -1914,7 +1914,7 @@ function HomeScreen(p: HomeProps) {
                 // Pluralised on the count, not assumed. It read "1 routable ways"
                 // for a single-way extract, which is the sort of small wrongness
                 // that makes a status line stop being believed.
-                ? `${p.dataset.counts.routable.toLocaleString()} routable way${p.dataset.counts.routable === 1 ? '' : 's'} · ${p.regionCount} region${p.regionCount === 1 ? '' : 's'}`
+                ? `${p.dataset.counts.routable.toLocaleString()} routable way${p.dataset.counts.routable === 1 ? '' : 's'}${SEP}${p.regionCount} region${p.regionCount === 1 ? '' : 's'}`
                 : 'No map loaded'}
             </div>
           </div>
@@ -2055,8 +2055,18 @@ function HomeScreen(p: HomeProps) {
           <div className="hint-card warn location-card" role="status">
             <IconInfo size={ICON.secondary} />
             <div>
+              {/*
+                A heading and a sentence, not two sentences.
+
+                Both lines were `body3m`/`sub3` at the same size and weight, so the
+                only thing separating "Position unavailable" from the explanation
+                was the wrapping. On a card whose whole job is to be read quickly
+                while something is wrong, the reader has to work out which line is
+                the problem — so the title is the type token for a title, and the
+                body drops to `sub3` at secondary ink.
+              */}
               <div style={T.body3m}>Position unavailable</div>
-              <div style={{ ...T.sub3, marginTop: 2 }}>
+              <div style={{ ...T.sub3, color: ink.onWarn, marginTop: DP.P1 }}>
                 {p.locationError}. Routing will start from the map's centre until
                 a real position arrives.
               </div>
@@ -2100,8 +2110,8 @@ function HomeScreen(p: HomeProps) {
                 {p.dataset.counts.routable.toLocaleString()} routable way{p.dataset.counts.routable === 1 ? '' : 's'}
               </strong>
               {p.regionCount > 1
-                ? ` · ${p.regionCount} regions loaded`
-                : ' · ready to route offline'}
+                ? `${SEP}${p.regionCount} regions loaded`
+                : `${SEP}ready to route offline`}
             </span>
           </div>
         )}
@@ -2166,12 +2176,34 @@ function StatusPill({
    */
   const gpsText = locationError ?? gps;
   return (
-    <div className={`status-pill ${online ? 'on' : 'off'}`} title={`${engineTitle}\n${dotLabel} · ${gpsText}`}>
+    <div
+      className={`status-pill ${online && !locationError ? 'on' : locationError ? 'warn' : 'off'}`}
+      title={`${engineTitle}\n${dotLabel} · ${gpsText}`}
+    >
       <span className="dot" role="img" aria-label={dotLabel} />
       <span className="pill-label" style={T.sub3}>{label}</span>
-      <span className={`pill-gps ${locationError ? 'bad' : ''}`} style={{ ...T.sub3, color: ink.secondary }}>
-        {gpsText}
-      </span>
+      {/*
+        The separator is now a real element with a real gap around it, rather
+        than an assumption that whitespace between two inline siblings reads as a
+        division.
+
+        They were plain inline siblings inside a `display: flex` pill with no gap,
+        so "Online" and "No location fix yet" rendered as one run-on string —
+        `Online No location fix yet` — which reads as a single malformed word
+        rather than two pieces of state. Worse, the green connectivity dot stayed
+        green through it, so a location failure looked like a healthy status. The
+        dot now reflects whichever of the two is the problem, and the two pieces
+        are separated by a bullet with margins, so they stay legible when either
+        one is long.
+      */}
+      {gpsText !== label && (
+        <>
+          <span className="pill-sep" aria-hidden="true">·</span>
+          <span className={`pill-gps ${locationError ? 'bad' : ''}`} style={{ ...T.sub3, color: ink.secondary }}>
+            {gpsText}
+          </span>
+        </>
+      )}
     </div>
   );
 }
@@ -2624,7 +2656,19 @@ function NavOverlay(props: {
           <div className="eta-label clock" style={T.sub3}>{formatClock(new Date(Date.now() + remainingSec * 1000))}</div>
         </div>
         <div className="eta-sep clock-sep" />
-        <div className="eta-block">
+        {/*
+          The distance, named.
+
+          It is the second of the two blocks and the one that goes first when the
+          row runs out of width, and `styles.css` has to be able to say so. It
+          could not before: the two blocks are not adjacent siblings — a separator
+          sits between them — so a structural selector for "the second block" did
+          not match anything, the 320px rule silently did nothing, and both values
+          stayed truncated to "14 …" on the narrowest screen the app supports.
+
+          A class is the honest way to say which of two similar things is which.
+        */}
+        <div className="eta-block eta-distance">
           <div className="eta-value" style={T.body1m}>{formatDistance(remainingM, units)}</div>
           <div className="eta-label" style={T.sub3}>to destination</div>
         </div>
@@ -2766,19 +2810,35 @@ function NavOverlay(props: {
         >
           <IconLayers size={ICON.primary} />
         </button>
-
-        {/* Current layer name, so the map is never showing something unnamed.
-            Hidden while the panel is open: the panel names every layer, and two
-            copies of the same sentence on a phone-sized screen is noise. */}
-        {!props.layersOpen && (
-          <div className="nav-status" role="status">
-            <span style={T.body3m}>{props.layerName}</span>
-            {statusDetail && (
-              <span style={{ ...T.body3, color: ink.secondary }}>{statusDetail}</span>
-            )}
-          </div>
-        )}
       </div>
+
+      {/*
+        Current layer name, so the map is never showing something unnamed.
+        Hidden while the panel is open: the panel names every layer, and two
+        copies of the same sentence on a phone-sized screen is noise.
+
+        A *sibling* of the control column, not a child of it.
+
+        It was the last child of `.nav-controls`, which is `position: absolute`
+        with `overflow: hidden` — so it was also `.nav-controls`' containing
+        block, and that `overflow` clipped it. Measured on the navigation screen
+        at 1280x720: the status line was missing from the layout entirely,
+        `scrollHeight - clientHeight` on the column was 108px, and the screen
+        showed four round buttons and no indication of which map was loaded.
+
+        The column's own `overflow: hidden` is load-bearing — it bounds the
+        column when it wraps into a second row on a short screen — so the fix is
+        to take this out of the column's clipping context rather than to remove
+        the bound. It is absolutely positioned against `.nav-root` instead.
+      */}
+      {!props.layersOpen && (
+        <div className="nav-status" role="status">
+          <span style={T.body3m}>{props.layerName}</span>
+          {statusDetail && (
+            <span style={{ ...T.body3, color: ink.secondary }}>{statusDetail}</span>
+          )}
+        </div>
+      )}
 
       {props.layersOpen && (
         <NavPanel
@@ -3288,7 +3348,7 @@ function SearchScreen(props: {
       const localHits: SearchHit[] = multi
         ? searchAll(regionLib, term, here, 20).map((h) => ({
             label: h.entry.name,
-            sub: h.regionName === 'Local map' ? h.entry.cat : `${h.entry.cat} · ${h.regionName}`,
+            sub: h.regionName === 'Local map' ? h.entry.cat : `${h.entry.cat}${SEP}${h.regionName}`,
             pos: [h.entry.lon, h.entry.lat] as LatLng,
             source: 'offline' as const,
           }))
@@ -3452,12 +3512,23 @@ function SearchScreen(props: {
               <span style={{ ...T.sub3, color: ink.secondary }}>{r.sub}</span>
             </span>
             {/*
-             * Where the row came from. An online hit has been sent to a
-             * third-party geocoder, which is not true of a local one, and the
-             * two used to be indistinguishable.
-             */}
-            <span className={`source-tag ${r.source}`}>{r.source === 'online' ? 'Online' : 'Offline'}</span>
-            <IconChevronRight size={ICON.secondary} color={ink.tertiary} />
+              The badge and the chevron travel together, as one trailing cluster.
+
+              Where the row came from matters: an online hit has been round-
+              tripped through a third-party geocoder, which is not true of a
+              local one, and the two used to be indistinguishable.
+
+              They were two independent flex children, each holding its share of
+              the row for ever, which at 412px left the title about 108px wide and
+              forced every result name onto two lines. One wrapper lets the pair
+              drop to its own line as a unit at narrow widths -- `.result-row` is
+              already `flex-wrap: wrap` for exactly this -- so the title keeps the
+              full width of the row instead of paying rent to two small glyphs.
+            */}
+            <span className="result-tail">
+              <span className={`source-tag ${r.source}`}>{r.source === 'online' ? 'Online' : 'Offline'}</span>
+              <IconChevronRight size={ICON.secondary} color={ink.tertiary} />
+            </span>
           </button>
           </li>
         ))}
@@ -3572,7 +3643,7 @@ function StepsScreen({
             <span className="result-text">
               <span style={T.body3m}>{s.title}</span>
               <span style={{ ...T.sub3, color: ink.secondary }}>
-                {s.shield ? `Exit ${s.shield} · ` : ''}{s.distanceLabel}
+                {s.shield ? `Exit ${s.shield}${SEP}` : ''}{s.distanceLabel}
               </span>
             </span>
           </li>
@@ -3871,22 +3942,41 @@ function SettingsScreen(props: {
           <div className="hint-card warn" role="status">{props.storageNotice}</div>
         )}
         <div className="section-head" style={T.body3m}>Routing</div>
-        <button className="hint-card" onClick={props.onEngines} style={{ textAlign: 'left', width: '100%' }}>
-          <div style={T.body3m}>
-            {props.selection.preferred === ANY_ONLINE
-              ? ANY_ONLINE_LABEL
-              : PROVIDERS.find((p) => p.id === props.selection.preferred)?.label ?? 'Engine'}
-          </div>
-          <div style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1 }}>
-            {serving
-              ? `Last route answered by ${serving}`
-              : 'No route requested yet — choose an engine'}
-          </div>
-          <div style={{ ...T.sub3, color: ink.secondary }}>
-            {props.selection.allowFallback
-              ? 'May substitute another engine if this one cannot route'
-              : 'Fails rather than substituting'}
-          </div>
+        {/*
+          A *row that navigates*, not a card.
+
+          This has always been a button and it read as a heading, because
+          everything about it was static text: no chevron, no hover, nothing that
+          distinguishes it from the read-only "Offline map" card directly below it
+          which is a `<div>`. The subtitle says "choose an engine", so a driver
+          reasonably reads it as a label and never taps it.
+
+          A chevron and a hover state are the two cues Google Maps uses on every
+          row that opens something, and they cost one element and one rule. The
+          `result-tail` cluster is reused so the chevron sits on the row's right
+          padding rather than wherever the text happens to end.
+        */}
+        <button className="hint-card settings-row" onClick={props.onEngines} style={{ textAlign: 'left', width: '100%' }}>
+          <span className="settings-row-text">
+            <span style={T.body3m}>
+              {props.selection.preferred === ANY_ONLINE
+                ? ANY_ONLINE_LABEL
+                : PROVIDERS.find((p) => p.id === props.selection.preferred)?.label ?? 'Engine'}
+            </span>
+            <span style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1 }}>
+              {serving
+                ? `Last route answered by ${serving}`
+                : 'No route requested yet — choose an engine'}
+            </span>
+            <span style={{ ...T.sub3, color: ink.secondary }}>
+              {props.selection.allowFallback
+                ? 'May substitute another engine if this one cannot route'
+                : 'Fails rather than substituting'}
+            </span>
+          </span>
+          <span className="result-tail">
+            <IconChevronRight size={ICON.secondary} color={ink.tertiary} />
+          </span>
         </button>
 
         <div className="section-head" style={T.body3m}>Units</div>

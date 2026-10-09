@@ -46,6 +46,32 @@ function build() {
   return buildDataset(nodes, ways, () => {});
 }
 
+/**
+ * `buildDataset` consumes its inputs — it clears the node map and empties the way
+ * array, because the boxed `RawNode` map is the largest object in a parse and
+ * nothing needs it once the graph exists.
+ *
+ * Pinned because every one of the ~40 tests below calls `build()`, and a test
+ * that re-read `nodes` after building would otherwise start failing for a reason
+ * nobody could see. `test/engine-consumes-inputs.spec.ts` covers the behaviour.
+ */
+describe('buildDataset consumes its input', () => {
+  it('empties the node map and way array it was given', () => {
+    const { nodes, ways } = parseOsmXml(XML);
+    expect(nodes.size).toBeGreaterThan(0);
+    expect(ways.length).toBeGreaterThan(0);
+
+    const ds = buildDataset(nodes, ways, () => {});
+
+    expect(nodes.size).toBe(0);
+    expect(ways.length).toBe(0);
+    // And it still reported the real figures, read before the clear.
+    expect(ds.counts.nodes).toBeGreaterThan(0);
+    expect(ds.counts.ways).toBeGreaterThan(0);
+    expect(ds.counts.routable).toBeGreaterThan(0);
+  });
+});
+
 describe('osm parsing', () => {
   it('parses nodes with coordinates', () => {
     const { nodes } = parseOsmXml(XML);

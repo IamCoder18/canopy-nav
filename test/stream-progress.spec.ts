@@ -138,15 +138,20 @@ describe('three comments that had drifted', () => {
   it('states that the PBF reader differs from the XML path, which streams', () => {
     // `pbf.ts` said PBF needs the whole file in memory "exactly like the XML path". The
     // XML path streams in a bounded window and is what production uses; PBF is the
-    // normal format and is always held whole.
+    // normal format and was always held whole.
     //
-    // Asserted positively, not `not.toMatch`: the correction has to *quote* the claim it
-    // corrects, so the old wording is present by design and only the corrected sentence
-    // is evidence.
+    // **This assertion was correct and is now wrong, because the defect it described
+    // has been fixed.** PBF streams too (`parseOsmPbfStream`), so the sentence it was
+    // pinning no longer describes the code. Left asserting the old wording it would
+    // fail; left deleted it would lose the record of why. So it now asserts the
+    // *shape* of the relationship — PBF streams, and names which entry point is
+    // production — which is the part that stays true across future changes.
     const pbf = read('src/osm/pbf.ts');
-    // Both wrap, so the patterns allow a newline and the comment's ` * ` prefix.
-    expect(pbf).toMatch(/pre-streaming design and is false now/);
-    expect(pbf).toMatch(/does\* stream, in a bounded/);
+    expect(pbf).toMatch(/parseOsmPbfStream`? is the production entry point/);
+    // The streaming reader exists and is not the one holding whole files.
+    expect(pbf).toMatch(/export async function parseOsmPbfStream/);
+    // The whole-file reader survives only for callers that hold the bytes.
+    expect(pbf).toMatch(/Prefer `parseOsmPbfStream`/);
 
     // **What this cannot catch, stated plainly:** a stale sentence added *alongside* the
     // correction. Two attempts at a positional check for that both passed with the stale
@@ -154,5 +159,23 @@ describe('three comments that had drifted', () => {
     // nothing here distinguishes them. So this pins that the correction is there, and
     // nothing more. A check that looks stronger than it is worse than none, and this
     // file has already produced two of those today.
+  });
+
+  it('does not re-claim anywhere that PBF is held whole', () => {
+    // The specific regression: a comment restored by a merge or a careless edit.
+    // STATUS.md §14.16 called this the largest single piece of engineering left in
+    // the app, so it is the sentence most likely to be copied around.
+    const pbf = read('src/osm/pbf.ts');
+    expect(pbf).not.toMatch(/the whole file must be in memory/i);
+    expect(pbf).not.toMatch(/PBF is the normal format and is always held whole/);
+
+    const worker = read('src/osm/engine.worker.ts');
+    // The worker must not concatenate the stream into one buffer before parsing.
+    expect(worker).not.toMatch(/const joined = new Uint8Array\(total\)/);
+
+    const engine = read('src/osm/engine.ts');
+    // `engine.ts` must not call `arrayBuffer()` on the PBF path unconditionally.
+    const pbfBranch = engine.slice(engine.indexOf("format: 'pbf'") - 600, engine.indexOf("format: 'pbf'") + 400);
+    expect(pbfBranch, 'PBF should prefer stream() over arrayBuffer()').toMatch(/file\.stream\(\)/);
   });
 });

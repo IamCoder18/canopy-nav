@@ -415,6 +415,28 @@ function isJunction(tags: Record<string, string>): boolean {
   return false;
 }
 
+/**
+ * Turn parsed nodes and ways into everything the app needs from an extract.
+ *
+ * ## The caller's `nodes` and `ways` are consumed
+ *
+ * Both are emptied before returning. Not as a micro-optimisation: `nodes` is a
+ * `Map<number, RawNode>` of boxed objects, one per node in the extract, and it
+ * is the single largest thing in the process. Holding it after the graph exists
+ * means holding the parse *peak* for the life of the region, which is exactly
+ * the cost `importguard.ts` estimates and refuses imports over.
+ *
+ * The worker relies on this — see its `postMessage` handler — and it relies on it
+ * *not* relying on it, because both callers in `src/` pass structures they own
+ * and would otherwise have to remember.
+ *
+ * ## Why it cannot be streamed away instead
+ *
+ * OSM PBF writes every node before every way, so when the ways arrive and name
+ * the nodes they reference, the coordinates are already gone. A reader cannot
+ * discard nodes as it goes; the map is required until the last way is seen.
+ * Hence freeing it afterwards rather than never building it.
+ */
 export function buildDataset(
   nodes: Map<number, RawNode>,
   ways: RawWay[],
@@ -747,15 +769,17 @@ let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity;
   const bbox: [number, number, number, number] = west > east
     ? [0, 0, 0, 0]
     : [west, south, east, north];
-  return {
-    graph,
-    gaz: trimmed,
-    roads,
-    water,
-    green,
-    bbox,
-    counts: { nodes: nodes.size, ways: ways.length, routable: routableWays },
-  };
+  // Read *before* the structures are cleared below — `counts` is reported to the
+  // launcher ("1.2 M routable ways") and the import screen's success card, so it
+  // has to be a real figure rather than zero.
+  const counts = { nodes: nodes.size, ways: ways.length, routable: routableWays };
+
+  // Release the parse-time structures now that the graph exists. See the
+  // docstring: the caller's map and array are consumed by this call.
+  nodes.clear();
+  ways.length = 0;
+
+  return { graph, gaz: trimmed, roads, water, green, bbox, counts };
 }
 
 /* ------------------------------ routing ---------------------------- */
@@ -1104,7 +1128,7 @@ export function searchGazetteer(
 /* --------------------------- worker plumbing ----------------------- */
 
 // Static import: the parser is part of the same worker bundle.
-import { parseOsmPbf } from './pbf';
+import { parseOsmPbf, parseOsmPbfStream } from './pbf';
 import { isInterestingTag } from './tags';
 
 
@@ -1148,13 +1172,20 @@ if (typeof self !== 'undefined' && typeof (self as any).postMessage === 'functio
         // which is the difference between parsing a province and being OOM-killed
         // by one. The text/bytes form stays supported for callers that already
         // hold the file -- tests, and small imports.
-        const { text, bytes, format, stream, totalChars } = payload as
+        //
+        // Both formats now take the streaming path in production. PBF used to be
+        // read via `arrayBuffer()` on the client and joined into one contiguous
+        // buffer here, so the format Geofabrik actually publishes was the one
+        // format held whole -- see STATUS.md 14.16, which recorded that as the
+        // largest single piece of engineering left in the app.
+        const { text, bytes, format, stream, totalChars, totalBytes } = payload as
           {
             text?: string;
             bytes?: ArrayBuffer;
             format?: 'xml' | 'pbf';
             stream?: ReadableStream<Uint8Array>;
             totalChars?: number;
+            totalBytes?: number;
           };
         const post = (stage: string, pct: number) =>
           (self as any).postMessage({ type: 'progress', stage, pct });
@@ -1168,27 +1199,18 @@ if (typeof self !== 'undefined' && typeof (self as any).postMessage === 'functio
 
         if (isPbf) {
           if (stream) {
-            // PBF is protobuf, so it cannot be chunked at an element boundary the
-            // way XML can; it is read through a stream but still assembled into a
-            // contiguous buffer by the reader, which needs the BlobHeader framing
-            // to be sequential. Collected here rather than inside the parser so
-            // the limitation is visible at the call site.
-            const parts: Uint8Array[] = [];
-            const reader = stream.getReader();
-            for (;;) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              if (value) parts.push(value);
-            }
-            let total = 0;
-            for (const p of parts) total += p.length;
-            const joined = new Uint8Array(total);
-            let at = 0;
-            for (const p of parts) {
-              joined.set(p, at);
-              at += p.length;
-            }
-            ({ nodes, ways } = await parseOsmPbf(joined, (p) => post(label, p * 0.5)));
+            // PBF cannot be cut at an *element* boundary the way XML can -- a
+            // protobuf field is a varint of unknown length -- but it is cut at a
+            // *blob* boundary for free: BlobHeader carries `datasize`, so a
+            // reader knows exactly where the current blob ends before reading
+            // any of it. The parser therefore holds one blob at a time rather
+            // than concatenating the whole file, which is what the loop here
+            // used to do.
+            ({ nodes, ways } = await parseOsmPbfStream(
+              stream,
+              (p) => post(label, p * 0.5),
+              totalBytes,
+            ));
           } else {
             ({ nodes, ways } = await parseOsmPbf(new Uint8Array(bytes!), (p) => post(label, p * 0.5)));
           }
@@ -1200,6 +1222,9 @@ if (typeof self !== 'undefined' && typeof (self as any).postMessage === 'functio
         }
 
         post('Building graph', 0.5);
+        // `buildDataset` consumes `nodes` and `ways` — it clears both before
+        // returning, so the boxed `RawNode` map is released here rather than
+        // staying reachable for the life of the worker. See its docstring.
         const ds = buildDataset(nodes, ways, (p) => post('Building graph', 0.5 + p * 0.5));
         (self as any).postMessage({ type: 'built', payload: ds });
       }

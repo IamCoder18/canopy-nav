@@ -108,18 +108,31 @@ describe('the on-disk PBF fixture is in the right place', () => {
     const pbf = await parseOsmPbf(new Uint8Array(readFileSync(fixture('fixture.osm.pbf'))));
     const { nodes, ways } = pbf;
     const xml = parseOsmXml(readFileSync(fixture('fixture.osm'), 'utf8'));
+
+    // Snapshot the coordinates *before* building.
+    //
+    // `buildDataset` consumes its inputs — it clears the node map, because the
+    // boxed `RawNode` map is the largest object in a parse and nothing needs it
+    // once the graph exists. Comparing afterwards iterated an empty map, so every
+    // assertion below passed without executing once. A test that cannot fail is
+    // worse than no test because it is counted, which is the defect class this
+    // project has now hit three times.
+    const want = [...xml.nodes.values()].map((n) => [n.id, n.lat, n.lon] as const);
+    const got = new Map(pbf.nodes);
+    expect(want.length, 'the fixture actually has nodes to compare').toBeGreaterThan(10);
+
     const pbfDs = buildDataset(nodes, ways, () => {});
     const xmlDs = buildDataset(xml.nodes, xml.ways, () => {});
 
     // Raw parse output, before the graph builder compacts pure-geometry nodes
     // away. This is the pair that must agree: two readers, one format.
     expect(pbfDs.counts.routable).toBe(xmlDs.counts.routable);
-    for (const [id, x] of xml.nodes) {
-      const y = pbf.nodes.get(id);
+    for (const [id, lat, lon] of want) {
+      const y = got.get(id);
       expect(y, `node ${id} missing from the PBF`).toBeDefined();
       // Within one nanodegree: the finest the format can express.
-      expect(Math.abs(x.lat! - y!.lat!), `node ${id} lat`).toBeLessThan(NANO);
-      expect(Math.abs(x.lon! - y!.lon!), `node ${id} lon`).toBeLessThan(NANO);
+      expect(Math.abs(lat - y!.lat), `node ${id} lat`).toBeLessThan(NANO);
+      expect(Math.abs(lon - y!.lon), `node ${id} lon`).toBeLessThan(NANO);
     }
     // And the built datasets agree outright.
     expect(pbfDs.bbox.map((v) => Number(v.toFixed(6))))

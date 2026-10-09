@@ -300,6 +300,54 @@ export function sniffFormat(head: Uint8Array): SniffResult {
 }
 
 /**
+ * The URL to actually fetch a catalogue entry from.
+ *
+ * ## Why this is not just `entry.pbfUrl`
+ *
+ * Geofabrik serves `*-latest.osm.pbf` as a **307** to a dated filename, and it
+ * sends **no `Access-Control-Allow-Origin` on either the redirect or the final
+ * 200** — checked with and without an `Origin` request header. A browser
+ * therefore cannot read these from a web page at all, and no client-side change
+ * can fix it: that header is the only thing that permits the read and the
+ * upstream declines to send it. The 307 compounds it, because a cross-origin
+ * redirect is followed only when the *redirect response itself* carries CORS
+ * headers, so the request dies at the first hop and never reaches the 200.
+ *
+ * That is why `networkMessage` has always said one-tap download is unavailable
+ * here and pointed at manual import. It was accurate.
+ *
+ * But the app does not have to run on a bare origin. When it is served over
+ * http(s) — the self-hosted deployment — its own server can be asked for the
+ * bytes, and a same-origin request is not subject to CORS at all.
+ * `tools/serve.mjs` exposes `/mirror/geofabrik/<path>` for exactly this, with an
+ * allowlist restricted to that one host.
+ *
+ * ## When the mirror is *not* used
+ *
+ * On a Capacitor build the page is served from the WebView's own local origin,
+ * and there is no `serve.mjs` behind it to ask, so a mirror URL would 404.
+ * Those go direct and hit the same wall `networkMessage` already describes,
+ * which is the honest outcome: manual import remains the path on device.
+ *
+ * So this is opt-in by origin rather than a global default, and the failure mode
+ * when the mirror is absent is the documented one rather than a new one.
+ */
+function fetchUrl(entry: CatalogEntry): string {
+  try {
+    const loc = globalThis.location;
+    // A relative URL only means something when there is an origin to be relative
+    // to, and only when the page is actually served over the network.
+    if (loc && (loc.protocol === 'http:' || loc.protocol === 'https:')) {
+      const path = new URL(entry.pbfUrl).pathname.replace(/^\/+/, '');
+      return `${loc.origin}/mirror/geofabrik/${path}`;
+    }
+  } catch {
+    // `entry.pbfUrl` unparseable, or no location at all: fall through.
+  }
+  return entry.pbfUrl;
+}
+
+/**
  * File name for the payload: the catalogue URL's own basename when it has a
  * sensible one, with the extension corrected to match the sniffed format.
  */
@@ -451,7 +499,7 @@ export async function checkRegionAvailable(
   try {
     let res: Response | null = null;
     try {
-      res = await fetch(entry.pbfUrl, { method: 'HEAD', signal: opts.signal });
+      res = await fetch(fetchUrl(entry), { method: 'HEAD', signal: opts.signal });
     } catch (headErr) {
       if (isAbort(opts.signal)) throw headErr;
       res = null;    // no HEAD to be had; ask for a byte instead
@@ -459,7 +507,7 @@ export async function checkRegionAvailable(
     // 405/501 (and some proxies' 400) mean "I do not do HEAD", not "the file is
     // missing", so ask for the first byte instead.
     if (res === null || res.status === 405 || res.status === 501 || res.status === 400) {
-      res = await fetch(entry.pbfUrl, {
+      res = await fetch(fetchUrl(entry), {
         method: 'GET',
         headers: { Range: 'bytes=0-0' },
         signal: opts.signal,
@@ -1165,7 +1213,7 @@ async function fetchOnce(
 
   let res: Response;
   try {
-    res = await fetch(entry.pbfUrl, { headers, signal });
+    res = await fetch(fetchUrl(entry), { headers, signal });
   } catch (e) {
     if (isAbort(signal)) throw aborted(entry, resume.received, null);
     throw networkError(entry, e);
