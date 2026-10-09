@@ -17,6 +17,7 @@
     "check": "npm run typecheck && npm run lint && npm test",
     "bundle": "node tools/bundle-budget.mjs",
     "e2e": "node test/e2e.mjs",
+    "memory": "vitest run test/memory.spec.ts",
     "screens": "node test/screens.mjs",
     "uiaudit": "node tools/ui-audit.mjs",
     "eta": "node tools/eta-check.mjs",

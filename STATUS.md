@@ -145,7 +145,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1195 unit tests across 60 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1203 unit tests across 61 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -159,7 +159,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1195 passing**, 60 files |
+| Unit tests | `npm test` | **1203 passing**, 61 files |
 | End-to-end | `npm run e2e` | **68 checks** against the built bundle — +11 for the memory guard, +2 for the crop (§14.19, §14.20) |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -167,6 +167,7 @@ stands. **Bold** = fully working and verified.
 | Offline shell | `npm run swshell` | a captive portal answered 2 navigations, then the network went off: the app still boots, 5 launcher tiles |
 | Reflow at large text | `npm run reflow` | **12 checks, all passing** — was 3 failing at the start of §14 |
 | Text-scale detection | `npm run textscale` | **13 checks** — the large-text layout switches on for every way a platform can scale text (§14.8). Was recorded as 14 and as passing; it failed **3 of 12 runs** (§2.3) |
+| Memory gate | `npm run memory` | **8 checks** — the boxed node map measured at **116–133 B/node** against the 229 B/node budget, plus four structural properties (§15.3 item 10) |
 | Bundle budget | `npm run bundle` | entry 112.0 kB / 130, initial 117.5 / 150, largest 282.0 / 300, total JS 417.8 / 460 (gzip) |
 | Offline cold start | verified in-browser | reload with the network off renders the app: 5 tiles, map sized, 0 console errors |
 | Release | v0.11.3 tag | **CI green, Release green**, APK attached |
@@ -237,7 +238,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **60 files, 1195 tests**. The previous
+retyped by hand. The table is the complete set: **61 files, 1203 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -248,8 +249,8 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1195 total double-counts contrast's 34 tests**: 1161 distinct test cases are
-declared across 60 files. Both figures are recorded rather than reconciled by lowering the
+that **the 1203 total double-counts contrast's 34 tests**: 1169 distinct test cases are
+declared across 61 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
 
@@ -320,6 +321,7 @@ reading it.
 | `probebound.spec.ts` | 6 | the catalogue probe is bounded, and every entry reaches a verdict |
 | `steps.spec.ts` | 8 | why the turn list is empty — three causes, three honest explanations |
 | `pbfcrop.spec.ts` | 12 | the crop: a cropped parse equals the unfiltered one restricted to the same box, on both readers and against the XML parser; a road leaving the box splits into runs rather than joining across the gap |
+| `memory.spec.ts` | 8 | the memory gate: the boxed node map measured against the same 229 B/node the guard uses, plus the structural properties that keep the file out of memory |
 | `worker-crop.spec.ts` | 6 | the crop across all three seams: `engine.ts`'s postMessage, both of the worker's PBF paths, and the reader's filter — driven through the worker's real `onmessage` handler, with a `Worker` stub for the message |
 | `pbf.spec.ts` | 28 | PBF vs XML parser equivalence on a hand-built file and the whole fixture; **the streaming reader** against the whole-file one at every chunk size, starvation, bounded read-ahead, and the same corrupt inputs |
 | `theme.spec.ts` | 13 | `theme.ts` ↔ `styles.css` token-name agreement, fallbacks present, no bare literals |
@@ -1769,7 +1771,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              436  RegionLibrary singleton, per-region workers, memory gate
 
-test/            1195 unit tests, 60 files
+test/            1203 unit tests, 61 files
 test/e2e.mjs           68 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -2292,7 +2294,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1195 unit tests
+npm test             # 1203 unit tests
 npm run e2e          # 68 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -2302,6 +2304,7 @@ npm run typecheck
 npm run screens      # screen coverage at 3 viewports
 npm run focus        # 15 keyboard and focus checks in a real browser
 npm run swshell      # offline boot after a captive portal (a gate)
+npm run memory       # the parse peak and the properties that bound it (§15.3)
 npm run reflow       # large-text reflow — a diagnostic; was failing, green as of §14
 npm run textscale    # does the app notice a text scale that leaves the root alone
 npm run status       # STATUS.md checked against disk
@@ -5170,6 +5173,33 @@ the import proceeds.
 **10. Add a memory gate.** `tools/` has gates for offline boot, focus, reflow and text
 scale, all cheap. A gate that parses the fixture and asserts peak heap stays under a
 budget would catch the next regression in this area that a unit test cannot see.
+
+**Done** — `test/memory.spec.ts`, 8 checks, `npm run memory`. It measures the term §15.1.1
+identified: 200,000 boxed `{id, lat, lon}` nodes in a `Map`, **measured at 116–133 B per node**
+against the same 229 B/node the guard budgets, with 1.6× of slack for GC timing. The rest is
+structural and deliberately so — the properties that keep the *file* out of memory (nothing
+calls `parseOsmPbf` with the whole extract, `take` allocates rather than returning a view,
+every write into the node map goes through the crop filter, both PBF entry points accept a
+crop) are visible in the source and asserted there, which is stronger than inferring them
+from a number measured on a machine that is not the target.
+
+Its two limits are stated in the file rather than hidden: Node's heap is not a phone's heap,
+so it cannot prove a province import fits — what it catches is a *regression*, which is
+invisible on a large heap and fatal on a small one — and vitest does not run with
+`--expose-gc`, so the figure is a `heapUsed` delta that under-reads slightly. Both are why
+the budget has slack and why the measurement is reported on every run.
+
+**A spec and not a `tools/` script**, for two reasons: it has to import `src/osm/pbf.ts`,
+which is TypeScript, and a gate nobody runs is worth nothing — so this one is inside
+`npm test` as well as runnable alone.
+
+Four reversals verified to fail it: `take` returning a view, the crop storing every node,
+`buildDataset` no longer consuming its inputs, and `PBF_BYTES_PER_NODE` drifting from the
+229 the gate assumes.
+
+**One assertion anchored on a comment** and had to be rewritten against the implementation —
+which is this project's own standing rule, arrived at by violating it in the file written to
+enforce it.
 
 ### 15.4 UI and UX polish
 
