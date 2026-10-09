@@ -578,7 +578,9 @@ function checkHeaderLen(headerLen: number, available: number): void {
  * `readBlobPayload` is async, so a `raw` (uncompressed) blob would be parsed
  * from memory that had already been recycled. That failure is silent: wrong
  * coordinates, a plausible-looking extract, a wrong route. The copy is one
- * allocation of at most `datasize` bytes per blob (~8 MB in a Geofabrik file),
+ * allocation of at most `datasize` bytes per blob (~1 MiB in a Geofabrik file --
+ * measured max across six real extracts, §15.1.1; it was claimed to be 8 MB here,
+ * which was 8x high),
  * transient and immediately collectable, which is a price worth paying to make
  * the lifetime a property of the type rather than of the call order.
  */
@@ -659,7 +661,7 @@ class ByteQueue {
  *
  * This is the path production takes, and the reason is not stylistic: the whole
  * file no longer has to fit in the heap. Peak transient memory is the largest
- * single blob (~8 MB for a Geofabrik file) plus the inflate scratch, instead of
+ * single blob (~1 MiB for a Geofabrik file) plus the inflate scratch, instead of
  * the entire extract.
  *
  * ## What this does and does not fix

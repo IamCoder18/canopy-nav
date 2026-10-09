@@ -141,7 +141,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1171 unit tests across 58 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1172 unit tests across 58 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -155,7 +155,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1171 passing**, 58 files |
+| Unit tests | `npm test` | **1172 passing**, 58 files |
 | End-to-end | `npm run e2e` | **66 checks** against the built bundle — +11 for the memory guard (§15.3 item 9) |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -233,7 +233,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **58 files, 1171 tests**. The previous
+retyped by hand. The table is the complete set: **58 files, 1172 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -244,7 +244,7 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1171 total double-counts contrast's 34 tests**: 1137 distinct test cases are
+that **the 1172 total double-counts contrast's 34 tests**: 1138 distinct test cases are
 declared across 58 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
@@ -317,7 +317,7 @@ reading it.
 | `steps.spec.ts` | 8 | why the turn list is empty — three causes, three honest explanations |
 | `pbf.spec.ts` | 28 | PBF vs XML parser equivalence on a hand-built file and the whole fixture; **the streaming reader** against the whole-file one at every chunk size, starvation, bounded read-ahead, and the same corrupt inputs |
 | `theme.spec.ts` | 13 | `theme.ts` ↔ `styles.css` token-name agreement, fallbacks present, no bare literals |
-| `importguard.spec.ts` | 24 | the import memory guard: pinned constants, three outcomes, the ratio-1 boundary, an assumed budget is never unlimited, monotonicity across the whole size range, and a refusal that names a way out (§15.2) |
+| `importguard.spec.ts` | 25 | the import memory guard: pinned constants, three outcomes, the ratio-1 boundary, an assumed budget is never unlimited, monotonicity across the whole size range, and a refusal that names a way out (§15.2) |
 | `basemapcache.spec.ts` | 14 | the offline basemap LRU: several zooms resident, zoom-independent layers built once, eviction order, dataset isolation (§15.4) |
 | `reroute-strict.spec.ts` | 9 | strict mode bounds the plan rather than aborting it |
 | `styletiles.spec.ts` | 9 | tile-style order-comparison guard: the actual shield filter, idempotency |
@@ -1659,12 +1659,12 @@ src/
 
   osm/
     engine.worker.ts     1235  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
-    pbf.ts                841  .osm.pbf protobuf reader, whole-buffer and streaming
+    pbf.ts                843  .osm.pbf protobuf reader, whole-buffer and streaming
     engine.ts             430  worker client, format sniff, GeoJSON mirroring
     regions.ts            465  RegionLibrary, catalogue, bbox helpers, merge cache
     merge.ts              318  union-find merge of adjacent extracts
-    mergeguard.ts         190  can a merge be afforded here? three outcomes
-    importguard.ts        267  can a parse be afforded here? three outcomes (§15.2)
+    mergeguard.ts         201  can a merge be afforded here? three outcomes
+    importguard.ts        281  can a parse be afforded here? three outcomes (§15.2)
     tags.ts                36  shared node-tag filter
 
   nav/
@@ -1694,7 +1694,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              332  RegionLibrary singleton, per-region workers, memory gate
 
-test/            1171 unit tests, 58 files
+test/            1172 unit tests, 58 files
 test/e2e.mjs           66 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -2063,7 +2063,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1171 unit tests
+npm test             # 1172 unit tests
 npm run e2e          # 66 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -4748,11 +4748,120 @@ first. Fetch one real Geofabrik file (Alberta is 334 MB; a smaller province is f
 report blob count, blob size distribution, and whether node coordinates are
 geographically clustered per blob.
 
+#### 15.1.1 The answer, and it inverts the premise
+
+**Done**, and the premise was wrong. Six real Geofabrik files were measured with a
+standalone decoder written against `osmformat.proto` rather than against `src/osm/pbf.ts`,
+so that it was able to disagree with the shipped parser. Two streaming passes per file,
+memory-flat in the blob count.
+
+| file | size | OSMData blobs | nodes | ways |
+|---|---|---|---|---|
+| monaco | 0.66 MiB | 8 | 41,708 | 6,249 |
+| andorra | 3.33 MiB | 68 | 501,887 | 26,721 |
+| malta | 8.51 MiB | 119 | 789,467 | 148,678 |
+| bremen | 20.23 MiB | 252 | 1,665,822 | 329,294 |
+| iceland | 61.83 MiB | 1,395 | 10,583,300 | 537,915 |
+| **new-york** | **474.35 MiB** | **8,026** | **56,819,669** | **7,301,791** |
+
+**Node blobs are exactly 8,000 nodes each** (osmium's default; the only other size is the
+final partial block), and they are **not geographically clustered at all**. 99.9% of
+consecutive blobs' bounding boxes *overlap*; essentially none are nested and none are
+disjoint. The first New York node blob is 8,000 nodes spanning lon [−79.89, −73.99],
+lat [40.76, 45.00] — most of the state. Blobs are runs of 8,000 consecutive **node ids**,
+which correlate with creation date, not geography.
+
+So the assumption §15.1 was written on is false, and §15.1 said what would follow:
+*"the filter is still correct but the peak is not bounded by the box."* Half of that is
+right and the important half is wrong.
+
+**The peak is bounded by the box anyway — for a different reason.** The crop filters
+**per node at decode time**, not per blob, so a node outside the box is never stored at
+all. Blob interleaving is therefore irrelevant to the peak: the node map grows
+monotonically to exactly the final kept count and holds no out-of-box node at any point.
+Measured, in all six files: **peak resident nodes = 1.00× the in-box count.** And measured
+as heap, with `src/osm/pbf.ts` copied verbatim and only a bbox added:
+
+```
+bremen, no crop     1,665,822 nodes   peak heap 385.3 MiB
+bremen, 1/16 crop       59,199 nodes   peak heap  44.0 MiB     8.8x lower
+andorra, no crop       501,887 nodes   peak heap 107.1 MiB
+andorra, 1/16 crop     118,457 nodes   peak heap  34.2 MiB     3.1x lower
+```
+
+**Two facts that change the implementation, and one that changes the plan:**
+
+- **Single pass is safe, on a stronger ordering than §15.1 assumed.** In all six files node
+  blobs are a contiguous prefix, way blobs a contiguous suffix, and **zero blobs contain
+  both** — no way ever precedes any node. "Keep in-box nodes, then keep ways whose refs
+  survive" therefore cannot miss a way. This answers item 5 favourably, for this writer.
+- **Dilate by hundreds of metres, not kilometres.** 94.8–99.1% of ways touching the box are
+  already *entirely* inside it with **zero** dilation; `+0.005°` (≈555 m) reaches
+  99.3–99.9% for 19k–39k extra nodes. Ways whose refs were absent from the file: **0.00%**.
+- **Divide the *clip box*, not the node extent.** `osmium extract` pulls in nodes referenced
+  by ways crossing the boundary — measured up to **5,463 km** away in New York and 1,606 km
+  in Malta. The raw node extent is 6.5–27.5× the clip box's area, so "1/16 of the file"
+  sized from raw min/max is a box covering 99.98% of Malta's nodes. The `HeaderBlock` bbox is
+  the honest footprint, and it is free: it is blob 0.
+
+**The headline risk is not the crop. It is delivery.** The crop is a *memory* fix and not a
+*bandwidth* fix: 100% of the file is still downloaded and 64–75% is still inflated,
+whatever the box. On New York, every box from 1/4 down to 1/4096 of the state needed the
+same 64.4% of the bytes read. §15.1 item 3 — "the driver picks an area, not a province" —
+does **not** shrink the download, so §15.2 stays on the critical path and cannot be
+deferred behind the crop.
+
+And **area-bounded is not the same as city-sized**, which the roadmap had implied.
+Measured slope on Bremen: `peak MiB = 36.4 + 229 × kept nodes`, r ≈ 0.999. Against a ~2 GB
+budget that admits ~8 M nodes. On New York that is roughly an **86 km** box — not a city.
+A 10.7 km box over Manhattan still keeps 1.42 M nodes ≈ 325 MiB, because density is what
+it is:
+
+| box | side | nodes kept | % of NY nodes | bytes read |
+|---|---|---|---|---|
+| 1/4 | 342 km | 30,559,914 | 53.8% | 64.4% |
+| 1/16 | 171 km | 23,347,422 | 41.1% | 64.4% |
+| 1/64 | 86 km | 14,877,099 | 26.2% | 64.4% |
+| 1/256 | 43 km | 8,919,762 | 15.7% | 64.4% |
+| 1/1024 | 21 km | 3,490,618 | 6.1% | 64.4% |
+| 1/4096 | 10.7 km | 1,423,000 | 2.5% | 64.4% |
+
+**And item 4 cannot be done by re-tuning a constant**, which is the finding that changed
+this section's plan. `importguard` estimates nodes as `bytes / 8`. Measured file bytes per
+node across the six files: **6.1** (iceland), 7.0 (andorra), 8.8 (NY), 11.3 (malta), 12.7
+(bremen), **16.6** (monaco) — so 8 under-counts small extracts by up to 2×, in the
+permissive direction. And `BYTES_PER_NODE = 112` against a measured **229 B per kept
+node** is a 2.0× under-estimate, also permissive. Both are corrected below. But the deeper
+problem stands: **once a crop exists, the surviving node count is not knowable before the
+node phase has been read**, so a file-size-only estimate is structurally the wrong shape.
+What the guard needs is an area × density estimate, and a count reported *during* the node
+phase — which is why item 2 now builds that count rather than only a filtered dataset.
+
+**One hypothesis of the investigation's was wrong, and is recorded because that is the
+point of asking with permission to answer negatively.** The reader was suspected of being
+100× out on coordinates again (§4.1), because `DenseNodes.granularity` is never read. It is
+not: fields 17 and 19 are **absent from every one of the 1,323–8,026 DenseNodes blocks in
+all six files**, the stored values are true nanodegrees, and `/1e7` is correct. Running the
+shipped reader on real Andorra returns lat [42.32, 42.78]. Separately, the `HeaderBlock`
+bbox in these files is in 1e-9 degrees — 100× the DenseNodes unit — which is irrelevant to
+the reader because it skips it, and is why a naive "compare against the header" check fails.
+
+**One comment corrected as a side effect:** `pbf.ts` describes a blob as "~8 MB in a
+Geofabrik file". Measured maximum `datasize` across all six files is **1.03 MiB** and
+maximum `raw_size` **2.24 MiB**, so the per-blob transient is ~3.5 MB. The ceiling it sits
+under is 96 MiB, so nothing was at risk — but the figure was 8× high, and it is the kind of
+number a reader uses to reason about a streaming window.
+
 **2. The on-device bbox crop.** Add a bbox filter to `parseOsmPbfStream`: keep nodes
 inside a dilated box, then keep ways whose refs survive. Peak memory becomes a function
 of *area* rather than *province* — Calgary metro is a few million nodes against
 Alberta's ~44 M. No new format and no writer: build the dataset straight from the
 filtered stream. Roughly a hundred lines on the reader §14.17 left behind.
+
+*Shape confirmed by §15.1.1, with three constraints the roadmap did not have: the filter is
+per-node rather than per-blob, the box is the `HeaderBlock` bbox dilated by ~555 m, and the
+reader must report the kept-node count as it goes so the guard can be checked against a
+measurement instead of a size.*
 
 **3. Make the crop reachable from the UI.** The driver picks an area, not a province.
 A map-based picker, a "download the area I'm in" default, and recent areas. The memory

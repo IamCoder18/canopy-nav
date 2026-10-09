@@ -73,6 +73,16 @@ const TOTAL = /^test\/ +(\d+) unit tests, \d+ files$/m.exec(REAL)?.[1];
 if (!TOTAL) throw new Error('could not read the current unit-test total out of STATUS.md');
 
 /**
+ * The current e2e check count, read for the same reason `TOTAL` is.
+ *
+ * It moved 55 -> 66 in one commit, and hardcoding it broke three of these tests the same
+ * way `TOTAL` did. A figure this file re-derives on every other axis has no business
+ * being written into it by hand.
+ */
+const E2E = /test\/e2e\.mjs +(\d+) browser checks/.exec(REAL)?.[1];
+if (!E2E) throw new Error('could not read the current e2e count out of STATUS.md');
+
+/**
  * Replace exactly one occurrence, and fail loudly if the anchor has moved.
  *
  * The error is deliberately specific about the count, because "anchor appears 0 times" on
@@ -149,14 +159,14 @@ describe('the browser-gate figures are checked everywhere they are stated', () =
   // §6 and §8 state these in code blocks. The first version of the check read only bold
   // table cells, so both blocks went unread.
   it('rejects a stale e2e count in §8', () => {
-    const { out, code } = audit(substitute('# 55 browser checks against the built bundle', '# 46 browser checks against the built bundle'));
-    expect(out).toMatch(/the e2e gate is counted 55 and 46/);
+    const { out, code } = audit(substitute(`# ${E2E} browser checks against the built bundle`, '# 46 browser checks against the built bundle'));
+    expect(out).toMatch(new RegExp(`the e2e gate is counted ${E2E} and 46`));
     expect(code).toBe(1);
   });
 
   it('rejects a stale e2e count in §6', () => {
-    const { out, code } = audit(substitute('test/e2e.mjs           55 browser checks, built bundle', 'test/e2e.mjs           46 browser checks, built bundle'));
-    expect(out).toMatch(/the e2e gate is counted 55 and 46/);
+    const { out, code } = audit(substitute(`test/e2e.mjs           ${E2E} browser checks, built bundle`, 'test/e2e.mjs           46 browser checks, built bundle'));
+    expect(out).toMatch(new RegExp(`the e2e gate is counted ${E2E} and 46`));
     expect(code).toBe(1);
   });
 
@@ -262,7 +272,7 @@ describe('what this file is not', () => {
   it('finds several real things in one run, not just the first', () => {
     const { out, code } = audit(
       (doc) =>
-        substitute('# 55 browser checks against the built bundle', '# 46 browser checks against the built bundle')(
+        substitute(`# ${E2E} browser checks against the built bundle`, '# 46 browser checks against the built bundle')(
           substitute(`npm test             # ${TOTAL} unit tests`, 'npm test             # 1026 unit tests')(doc),
         ),
     );

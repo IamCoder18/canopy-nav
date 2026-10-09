@@ -32,25 +32,31 @@
  *
  * ## The estimate
  *
- * A Geofabrik `.osm.pbf` is roughly **8 compressed bytes per node**. Measured
- * against Alberta: 334 MB / 8 ≈ 44 M nodes, and Alberta has on the order of
- * tens of millions of OSM nodes, which is the right order of magnitude for the
- * province. So `estimatedNodes = bytes / 8`.
+ * A Geofabrik `.osm.pbf` is roughly **6–17 compressed bytes per node**, measured rather
+ * than guessed: 6.1 for Iceland, 16.6 for Monaco, 7.0 for Andorra, 8.8 for New York, 11.3
+ * for Malta, 12.7 for Bremen (§15.1.1). `PBF_BYTES_PER_NODE` below takes the low end, so
+ * `estimatedNodes = bytes / 6` over-counts rather than under-counts.
  *
- * Each node then costs, at peak, more than its slot in the graph. `buildDataset`
- * holds them in a `Map<number, RawNode>` of boxed `{id, lat, lon, tags?}` objects
- * while the typed arrays are built alongside — a boxed entry with a Map slot is
- * on the order of 100 bytes, against 32 B/node in the graph itself. `BYTES_PER_NODE`
- * below is deliberately set near that peak figure rather than the steady-state
- * one, because the peak is what kills the WebView and the steady state is what
- * the app would survive.
+ * Each node then costs, at peak, more than its slot in the graph. `buildDataset` holds
+ * them in a `Map<number, RawNode>` of boxed `{id, lat, lon, tags?}` objects while the
+ * typed arrays are built alongside. `BYTES_PER_NODE` below is **229**, and that is measured
+ * rather than reasoned: four nested crops of a real 20 MB extract fit
+ * `peak MiB = 36.4 + 229 × nodes` at r ≈ 0.999. It was 112, which under-estimated by 2.0×
+ * in the permissive direction.
  *
- * The consequence is stated plainly because it decides what this guard does in
- * practice: **a province-sized extract does not pass.** Not on a low-end phone,
- * not on a good one. `estimatedNodes` for Alberta is ~44 M, which at ~100 B/node
- * is ~4.4 GB against a budget of a few hundred MB. Alberta has no Geofabrik
- * sub-regions (verified: its extract page reports "No sub regions are defined for
- * this region"), so there is no smaller Alberta to download either.
+ * **And this estimate is now known to be the wrong shape**, which is worth stating at the
+ * top rather than leaving to be discovered. Once the §15.1 crop exists, the number of nodes
+ * that *survive* is not knowable before the node phase has been read — it depends on the
+ * box, not on the file. A size-derived estimate can only ever bound the worst case, which
+ * is what this does. The crop therefore reports its kept-node count as it goes, so a real
+ * measurement can be compared against this one rather than trusted in its place.
+ *
+ * The consequence is stated plainly because it decides what this guard does in practice:
+ * **a province-sized extract does not pass.** Not on a low-end phone, not on a good one.
+ * `estimatedNodes` for Alberta is ~58 M, which at 229 B/node is ~13 GB against a budget of
+ * a few hundred MB. Alberta has no Geofabrik sub-regions (verified: its extract page
+ * reports "No sub regions are defined for this region"), so there is no smaller Alberta to
+ * download either.
  *
  * That is a real limitation of on-device whole-province parsing, not a tuning
  * problem, and the guard's job is to say so with a number rather than to let a
@@ -75,14 +81,22 @@ export { MEMORY_FRACTION, THIN_HEADROOM };
 /**
  * Compressed bytes per node in a Geofabrik `.osm.pbf`.
  *
- * 8 is the figure that makes Alberta's 334 MB land on its real node count, and
- * it is the only number here derived from an observation rather than from a
- * type's memory layout. Both directions of error are live: an extract with more
- * ways per node than average reads high on nodes, and one dominated by long
- * ways reads low. `test/importguard.spec.ts` pins the constants so a change to
- * either is deliberate.
+ * **Measured across six real files** (§15.1.1): 6.1 (iceland), 7.0 (andorra), 8.8
+ * (new-york), 11.3 (malta), 12.7 (bremen), 16.6 (monaco). The previous value was 8,
+ * chosen because it is what makes Alberta's 334 MB land on its real node count — which is
+ * a single data point fitted, and it under-counts small extracts by up to 2×.
+ *
+ * **The low end is used deliberately.** This constant converts bytes into nodes, so
+ * *under*-counting nodes makes the guard more permissive, which is the one error it
+ * cannot afford: 6 rather than 8 refuses ~33% more files. The cost is that large rural
+ * extracts are over-estimated and refused when they might have fitted — which §15.1's
+ * crop is the answer to, and which is a far better failure than a killed WebView.
+ *
+ * Range matters here in a way it does not for `PARSE_BYTES_PER_NODE`: this figure
+ * describes the *format*, and small extracts have proportionally more ways, tags and
+ * shorter coordinate runs per node.
  */
-export const PBF_BYTES_PER_NODE = 8;
+export const PBF_BYTES_PER_NODE = 6;
 
 /**
  * Bytes per node at peak — the boxed `RawNode` in the parse-time `Map` plus its

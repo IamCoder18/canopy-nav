@@ -38,15 +38,52 @@ afterEach(() => {
 });
 
 describe('constants', () => {
-  it('derives 8 bytes per node, which is what makes Alberta land on its real size', () => {
-    // Geofabrik's Alberta extract is ~334 MB (checked 2026-10-07), and Alberta
-    // has tens of millions of nodes. 334 MB / 8 ≈ 44 M, which is the right
-    // order. Pinned so a change here is noticed.
-    expect(PBF_BYTES_PER_NODE).toBe(8);
+  it('uses the LOW end of the measured bytes-per-node range', () => {
+    // Measured across six real Geofabrik extracts (§15.1.1): 6.1 iceland, 7.0 andorra,
+    // 8.8 new-york, 11.3 malta, 12.7 bremen, 16.6 monaco compressed bytes per node.
+    //
+    // This constant converts bytes into nodes, so the *dangerous* error is under-counting
+    // them -- which makes the guard more permissive and lets through the files it exists
+    // to refuse. The low end therefore, deliberately, and at the cost of refusing large
+    // rural extracts that might have fitted. §15.1's crop is the answer to over-refusal;
+    // a killed WebView has no answer at all.
+    //
+    // Pinned so a change to it is noticed, and so the *reason* it is 6 rather than 8 is
+    // checked rather than assumed: a constant at 8 would still pass a range check, and
+    // 8 is precisely the fitted single-data-point value this replaced.
+    expect(PBF_BYTES_PER_NODE).toBe(6);
+    // And it must not be above the lowest measurement, which is the whole property.
+    const MEASURED_LOW = 6.1;
+    expect(PBF_BYTES_PER_NODE).toBeLessThanOrEqual(MEASURED_LOW);
+
+    // Alberta is 334 MB (checked 2026-10-07). At 6 B/node that is ~58 M nodes; the band
+    // is wide because the measurement spans small and large extracts, and the point of
+    // the assertion is the order of magnitude, not a fitted figure.
     const alberta = estimateParseBytes(334 * mb(1));
     const nodes = alberta / BYTES_PER_NODE;
     expect(nodes).toBeGreaterThan(30e6);
-    expect(nodes).toBeLessThan(60e6);
+    expect(nodes).toBeLessThan(80e6);
+  });
+
+  /**
+   * The parse-peak constant was measured, and the measurement is kept here as arithmetic
+   * rather than as a comment, because a comment stating a number cannot be checked.
+   *
+   * Four nested crops of a real 20.23 MiB Bremen extract fit `peak MiB = 36.4 + 229 ×
+   * nodes` at r ≈ 0.999. The value this replaced was 112, a 2.0× under-estimate in the
+   * permissive direction — the one direction a memory guard cannot afford.
+   */
+  it('counts the parse peak at the measured 229 B/node, not the old 112', () => {
+    const MEASURED_SLOPE = 229;
+    expect(BYTES_PER_NODE).toBe(MEASURED_SLOPE);
+    // The regression this replaced, stated as a number so it cannot recur quietly.
+    expect(BYTES_PER_NODE).toBeGreaterThan(112);
+    // Reproducing the fit: for Bremen no-crop, 1,665,822 nodes, the model predicts the
+    // measured 385.3 MiB peak to within a few per cent.
+    const bremenNodes = 1_665_822;
+    const modelled = 36.4 + MEASURED_SLOPE * bremenNodes / 1048576;
+    expect(modelled).toBeGreaterThan(385.3 * 0.9);
+    expect(modelled).toBeLessThan(385.3 * 1.1);
   });
 
   it('counts more per node than a resident graph does', () => {
@@ -74,7 +111,16 @@ describe('constants', () => {
 
 describe('estimateParseBytes', () => {
   it('is size-derived when no node count is supplied', () => {
-    expect(estimateParseBytes(8000)).toBe((8000 / PBF_BYTES_PER_NODE) * BYTES_PER_NODE);
+    // `estimateParseBytes` rounds the derived node count before multiplying, so this has
+    // to compare against the same rounded value rather than re-deriving it inline. It
+    // compared fine while `PBF_BYTES_PER_NODE` was 8, because `8000 / 8` is exact and
+    // the rounding was a no-op — the assertion never exercised it. Using a size that does
+    // not divide evenly is what makes the test worth having, and 8000 is kept for the
+    // 8,000-nodes-per-blob reason while the divisor no longer happens to match it.
+    const expected = Math.round(8000 / PBF_BYTES_PER_NODE) * BYTES_PER_NODE;
+    expect(estimateParseBytes(8000)).toBe(expected);
+    // And the rounding is real rather than decorative: 8000 is not divisible by 6.
+    expect(8000 / PBF_BYTES_PER_NODE).not.toBe(Math.round(8000 / PBF_BYTES_PER_NODE));
   });
 
   it('prefers a known node count over the size-derived one', () => {

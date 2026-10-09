@@ -51,14 +51,25 @@ export const BYTES_PER_NODE = 96;
  * The same measure, for the *parse* peak rather than a resident graph.
  *
  * Exported here so `importguard.ts` can be compared against it directly, and
- * deliberately set **higher** (112). A `RoadGraph` is compact typed arrays; the
- * peak of parsing an extract is a `Map<number, RawNode>` of boxed
- * `{id, lat, lon, tags?}` objects coexisting with the arrays being built. The
- * steady state is survivable and the peak is what kills a WebView, so a guard
- * sized for the steady state under-estimates by roughly half and passes the
- * cases it exists to refuse.
+ * deliberately set **higher** than `BYTES_PER_NODE`. A `RoadGraph` is compact typed
+ * arrays; the peak of parsing an extract is a `Map<number, RawNode>` of boxed
+ * `{id, lat, lon, tags?}` objects coexisting with the arrays being built. The steady
+ * state is survivable and the peak is what kills a WebView, so a guard sized for the
+ * steady state under-estimates and passes the cases it exists to refuse.
+ *
+ * **112 was a guess and measured 229** (§15.1.1). Four nested Bremen crops fit
+ * `peak MiB = 36.4 + 229 × kept nodes` with r ≈ 0.999, so 112 under-estimated the parse
+ * peak by 2.0× — in the permissive direction, which is the one direction a memory guard
+ * cannot afford. A `Map<number, RawNode>` costs far more per entry than a typed-array
+ * slot because both the key and the value are heap objects and V8's inline caches for
+ * neither apply; that was the reasoning that produced 112 and it was simply low.
+ *
+ * The fixed term (36.4 MiB) is the reader's own footprint — chunk queue, decompressor,
+ * graph arrays built alongside — and is not modelled per node, which is why this stays a
+ * linear figure. `importguard` does not use it: its budget is derived from the device,
+ * not from this module, and `test/importguard.spec.ts` pins the relationship instead.
  */
-export const PARSE_BYTES_PER_NODE = 112;
+export const PARSE_BYTES_PER_NODE = 229;
 
 /** Bytes per directed edge: `edgeTo` + `edgeCost` + `edgeFlags` + a name slot. */
 export const BYTES_PER_EDGE = 24;
