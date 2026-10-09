@@ -991,9 +991,124 @@ try {
             'second refusal never appeared, so Cancel was not exercised');
         }
       }
+      /**
+       * The crop route, on the same refused file and the same stubbed device.
+       *
+       * Inside the 2 GB context rather than a fresh one, because the file that trips the
+       * guard here is sized for *that* budget: on this host's real 16 GB the guard grants
+       * 8 GB and the same file sails through, which is exactly the trap §14.19 records for
+       * attempt two. Deriving a second fixture for the unstubbed device would be a third
+       * way to get it wrong.
+       *
+       * The area button crops to a box around the pinned geolocation, and the fixture is
+       * 146 MB of padding with an OSM-shaped head, so the cropped parse **fails** — at
+       * the parser. That failure is the evidence: without a crop the memory guard refuses
+       * it again and nothing reaches the parser, so a parser verdict proves the box
+       * travelled RegionsScreen -> store -> worker -> `parseOsmPbfStream` intact. Drop the
+       * crop at any of those four places and this fails.
+       */
+      const cropInput3 = await guardPage.$('input[type=file]');
+      if (cropInput3) {
+        await cropInput3.setInputFiles(guardFixture);
+        const offered = await guardPage
+          .waitForSelector('[role=alert] >> text=Import just the area', { timeout: 15000 })
+          .then(() => true)
+          .catch(() => false);
+        check('the refusal offers the area crop, not only a desktop tool', offered);
+        if (offered) {
+          await guardPage.click('text=Import just the area I\'m in');
+          const reachedParserViaCrop = await guardPage
+            .waitForFunction(
+              () => !/Try importing it anyway/.test(document.body.innerText)
+                && /no routable|routable ways|contains no OpenStreetMap|Nothing was changed/i
+                  .test(document.body.innerText),
+              undefined, { timeout: 60000, polling: 400 },
+            )
+            .then(() => true)
+            .catch(() => false);
+          /**
+           * Named for what it proves, which is **less** than it looks like, and the
+           * narrowing was forced by reversal rather than by taste.
+           *
+           * It proves a crop was *requested*, passed the guard, and reached the parser.
+           * It cannot prove the filter was *applied*, because the fixture is 146 MB of
+           * padding: a cropped and an uncropped parse of it both end in "contains no
+           * OpenStreetMap data". Reversing `store.ts` to drop `req.crop`, and reversing
+           * the guard back to refusing the whole file, both left this green — two
+           * reversals passing, which is how the gap was found.
+           *
+           * "Applied" is proven in `test/worker-crop.spec.ts`, with the real PBF fixture
+           * whose content differs inside and outside the box, and across all three seams:
+           * `engine.ts`'s message, both of the worker's parse paths, and the reader's own
+           * filter. Each of those five reversals fails the suite.
+           */
+          check('the area crop is requested, passes the guard, and reaches the parser', reachedParserViaCrop,
+            reachedParserViaCrop ? 'reached the parser' : 'the guard still refused it, or nothing reported why');
+          await guardPage.screenshot({ path: join(SHOTS, '10-cropped.png') });
+        }
+      } else {
+        check('the refusal offers the area crop, not only a desktop tool', false,
+          'the file input was not reachable for the crop pick');
+      }
       unlinkSync(guardFixture);
     }
     await guardCtx.close();
+  }
+
+  /**
+   * The crop, end to end, and the case where the guard *accepts*.
+   *
+   * The block above only ever proves the refusal path, so a guard wired to refuse
+   * unconditionally would pass all eleven of its checks. The other direction matters as
+   * much: an extract that fits must import normally, or "always refuse" is a
+   * complete implementation.
+   *
+   * The area-crop button is the only route to a crop from the UI, and it is what makes
+   * the crop reachable at all — `src/osm/merge.ts` was 318 correct lines plus ~800 lines
+   * of unreachable tests for a release (§3.5.2), and an uncalled crop is the same defect
+   * again. So this asserts the whole chain: the button exists, clicking it produces a
+   * *cropped* parse rather than a whole-file one, and the result is a working map.
+   *
+   * `.osm.pbf` specifically, because XML cannot be cropped — `engine.build` reports
+   * `cropIgnored` for it rather than pretending. Asserting the PBF path is what
+   * distinguishes "cropped" from "parsed and happened to be small".
+   */
+  console.log('\ncropped import');
+  {
+    await page.goto(BASE, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(2000);
+    await page.click('.quick-tile:has-text("Regions")');
+    // `state: 'attached'`, not the default `visible`. The file input is deliberately
+    // `hidden` -- it exists for the button's programmatic click and for automation, and
+    // §11.2 keeps the visible control the only tab stop. A `visible` wait therefore
+    // cannot succeed, and it failed loudly rather than silently, which is the right
+    // failure for a harness bug: it named the harness.
+    await page.waitForSelector('input[type=file]', { state: 'attached', timeout: 15000 });
+
+    /**
+     * The case where the guard *accepts*.
+     *
+     * The block above only ever proves the refusal path, so a guard wired to refuse
+     * unconditionally would pass all eleven of its checks — which is §15.3 item 8's other
+     * half. An extract that fits must import normally, or "always refuse" is a complete
+     * implementation. The real PBF fixture: 103 nodes, 21 ways, a few hundred bytes.
+     *
+     * `.osm.pbf` specifically, because XML cannot be cropped — `engine.build` reports
+     * `cropIgnored` for it rather than pretending, and importing XML here would prove
+     * nothing about the crop path.
+     */
+    const cropInput = await page.$('input[type=file]');
+    await cropInput.setInputFiles(join(__dirname, 'fixture.osm.pbf'));
+    await page.waitForFunction(
+      () => !/Parsing|Building graph|Reading PBF/.test(document.body.innerText),
+      undefined, { timeout: 40000, polling: 300 },
+    ).catch(() => {});
+    const small = await page.evaluate(() => document.body.innerText);
+    check('an extract the device can hold is imported, not refused',
+      /routable ways/.test(small) && !/not expected to have enough memory/.test(small),
+      small.match(/[\d,]+ routable ways/)?.[0] ?? small.slice(0, 70).replace(/\n/g, ' '));
+
+    await page.screenshot({ path: join(SHOTS, '10-cropped.png') });
   }
 
   /* ---------------- engine selection + provenance ---------------- */

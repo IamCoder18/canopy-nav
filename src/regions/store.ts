@@ -26,6 +26,8 @@
 import { useSyncExternalStore } from 'react';
 import { OsmEngine, importPreflight, type BuildProgress } from '../osm/engine';
 import { canImport, importWarning } from '../osm/importguard';
+import type { PbfCrop } from '../osm/pbf';
+
 import type { OsmDataset } from '../osm/engine.worker';
 import { describeError } from '../errors';
 import { RegionLibrary, type Region, type RegionMeta } from '../osm/regions';
@@ -71,6 +73,14 @@ export interface ImportRequest {
    * that dies is a choice rather than a surprise.
    */
   forceMemory?: boolean;
+  /**
+   * Restrict the parse to a box — §15.1.2. Makes peak memory a function of area rather
+   * than of province, which is the only reason a 334 MB extract is importable at all.
+   *
+   * Only `.osm.pbf` honours it; `.osm` XML is parsed whole and the result says so, so a
+   * caller can tell a crop that happened from one that was asked for and ignored.
+   */
+  crop?: PbfCrop;
 }
 
 /** Best-effort guess that a file is a saved web page rather than map data. */
@@ -123,14 +133,36 @@ export async function importRegionFile(req: ImportRequest): Promise<OsmDataset |
      *
      * `forceMemory` is the escape hatch for a *wrong* estimate, and it is
      * deliberately not implicit: an import that dies should have been asked for.
+     *
+     * ## The crop makes this estimate inapplicable, and applying it anyway was a bug
+     *
+     * This ran `canImport(size)` unconditionally, so an import carrying a `crop` was
+     * refused on the **whole file's** size before the crop was ever considered -- which
+     * made the Regions screen's "Import just the area I'm in" button unreachable. The
+     * file was 146 MB, the crop would have read a fraction of it, and the guard refused
+     * anyway. §15.1.1's finding is precisely this: once a crop exists the surviving node
+     * count is a function of the box, not of the file, so a size-derived estimate is the
+     * wrong *shape*.
+     *
+     * Refusing for a reason that no longer applies is the same failure as returning a
+     * wrong route: confidently, and about something other than the thing asked.
+     *
+     * So a cropped import is **warned** rather than refused, and the warning says the
+     * honest thing -- the cost is unknown until the parse reports it. That weakens the
+     * guard deliberately, and the mitigation is that `parseOsmPbfStream` reports
+     * `keptNodes`, so the measurement arrives immediately after (§15.1 item 4) instead of
+     * a second guess standing in for it.
      */
     const size = req.file.size ?? 0;
     if (size > 0) {
       const verdict = canImport(size);
-      if (!verdict.ok && !req.forceMemory) {
+      const cropped = !!req.crop;
+      if (!verdict.ok && !req.forceMemory && !cropped) {
         throw new Error(verdict.reason);
       }
-      if (verdict.ok && verdict.thin && !req.forceMemory) {
+      if (cropped && !req.forceMemory) {
+        onWarn?.(cropWarning(size, verdict));
+      } else if (verdict.ok && verdict.thin && !req.forceMemory) {
         onWarn?.(importWarning(verdict.memory));
       }
     }
@@ -143,7 +175,7 @@ export async function importRegionFile(req: ImportRequest): Promise<OsmDataset |
     // Both .osm (XML) and .osm.pbf (protobuf) are accepted; OsmEngine sniffs
     // which it actually got, so a mislabelled extension still works.
     onProgress?.({ stage: 'Reading extract', pct: 0 });
-    const dataset = await engine.build(req.file);
+    const dataset = await engine.build(req.file, req.crop ?? null);
 
     /**
      * Refuse a parse that produced nothing usable, *before* it touches the
@@ -330,4 +362,34 @@ export function localRegionName(file: File): string {
   const words = stem(file.name).replace(/[-_]+/g, ' ').trim();
   if (!words) return 'Imported extract';
   return words.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+/**
+ * The sentence a *cropped* import shows instead of a refusal.
+ *
+ * §15.1 item 4, stated to the driver rather than to the file. A cropped parse's real cost
+ * is the number of nodes inside the box, which is not knowable until the node phase has
+ * been read — so this says so, and says what will happen next, instead of quoting a
+ * whole-file figure that no longer describes what is about to run.
+ *
+ * It also keeps the desktop instruction, because the crop covers the driver's *current*
+ * area: someone who needs a different part of the province is still better served by
+ * `osmium`, and hiding that would be a cure for the complaint, not an answer.
+ */
+function cropWarning(bytes: number, verdict: ReturnType<typeof canImport>): string {
+  const wholeMb = Math.round(bytes / 1024 / 1024);
+  const neededMb = Math.round(verdict.memory.needed / 1024 / 1024);
+  // Assembled from parts rather than one nested template: a `${}` inside a `${}` inside
+  // a template is legal and unreadable, and the one place it appeared here also cost a
+  // debugging round because the error pointed at the end of the file rather than at it.
+  const comparison = verdict.ok
+    ? 'and this is already more than the device has room for'
+    : `and the whole of it would have needed about ${neededMb} MB`;
+  return (
+    `Only the part of this ${wholeMb} MB extract inside the chosen area will be read, ` +
+    `which is far less than the whole file — ${comparison}.\n\n` +
+    'If the app closes while importing, the area was denser than this device has room ' +
+    'for: pick a smaller area, or cut the extract on a desktop with\n' +
+    '  osmium extract -b <west,south,east,north> extract.osm.pbf -o area.osm.pbf'
+  );
 }

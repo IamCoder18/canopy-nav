@@ -83,6 +83,17 @@ const E2E = /test\/e2e\.mjs +(\d+) browser checks/.exec(REAL)?.[1];
 if (!E2E) throw new Error('could not read the current e2e count out of STATUS.md');
 
 /**
+ * The spec-file count, for the same reason.
+ *
+ * It has now moved three times (57 -> 58 -> 59) and every one of these anchors broke
+ * with it. The two figures move together whenever a spec file is added, so reading both
+ * from the document is the whole fix; hardcoding one and deriving the other would just
+ * move the breakage.
+ */
+const FILES = /unit tests, (\d+) files$/m.exec(REAL)?.[1];
+if (!FILES) throw new Error('could not read the current spec-file count out of STATUS.md');
+
+/**
  * Replace exactly one occurrence, and fail loudly if the anchor has moved.
  *
  * The error is deliberately specific about the count, because "anchor appears 0 times" on
@@ -122,17 +133,17 @@ describe('the unit-test total is checked', () => {
   });
 
   it('rejects a stale figure in the §2 verification table', () => {
-    const { code } = audit(substitute(`**${TOTAL} passing**, 58 files`, '**9999 passing**, 58 files'));
+    const { code } = audit(substitute(`**${TOTAL} passing**, ${FILES} files`, `**9999 passing**, ${FILES} files`));
     expect(code).toBe(1);
   });
 
   it('rejects a stale figure in the §6 layout block', () => {
-    const { code } = audit(substitute(`test/            ${TOTAL} unit tests, 58 files`, 'test/            1000 unit tests, 58 files'));
+    const { code } = audit(substitute(`test/            ${TOTAL} unit tests, ${FILES} files`, `test/            1000 unit tests, ${FILES} files`));
     expect(code).toBe(1);
   });
 
   it('rejects a spec-file count that disagrees with the test total', () => {
-    const { out, code } = audit(substitute(`**${TOTAL} passing**, 58 files`, `**${TOTAL} passing**, 55 files`));
+    const { out, code } = audit(substitute(`**${TOTAL} passing**, ${FILES} files`, `**${TOTAL} passing**, 55 files`));
     expect(out).toMatch(/current spec-file totals disagree/);
     expect(code).toBe(1);
   });

@@ -75,6 +75,7 @@ import {
   MEMORY_FRACTION, THIN_HEADROOM, PARSE_BYTES_PER_NODE, ASSUMED_HEAP_MB,
   type MemoryBudget,
 } from './mergeguard';
+import type { PbfCrop } from './pbf';
 
 export { MEMORY_FRACTION, THIN_HEADROOM };
 
@@ -215,6 +216,7 @@ export function canImport(bytes: number, nodeCount?: number, limitBytes?: number
     ? { bytes: limitBytes * PARSE_MEMORY_FRACTION, assumed: false }
     : rawHeapBytes();
 
+
   const needed = estimateParseBytes(bytes, nodeCount);
   const budget = Math.round(heap.bytes);
   const memory: MemoryBudget = {
@@ -266,6 +268,58 @@ function refusal(bytes: number, memory: MemoryBudget): string {
 }
 
 /**
+/**
+ * Worst-case node density, in nodes per square kilometre.
+ *
+ * **12,400**, from the smallest New York box in §15.1.1: a 10.7 km box over Manhattan
+ * kept 1,423,000 nodes, so 1,423,000 / 114.5 km² ~ 12,400. Manhattan is the densest place
+ * measured, and a *lower* assumed density would size the box larger than the budget
+ * allows -- so this is the conservative end of one data point rather than an average.
+ *
+ * Calgary, Edinburgh or a rural province are one to two orders of magnitude lighter, so a
+ * box sized for Manhattan is comfortably generous for almost everywhere real.
+ */
+export const WORST_CASE_NODES_PER_KM2 = 12_400;
+
+/** ~111 km per degree of latitude. Only the latitude axis is used, and only for sizing. */
+const KM_PER_DEG = 111.32;
+
+/**
+ * A box, centred on a point, as large as this device's budget can afford.
+ *
+ * Derived rather than a constant, because the honest size of "the area I'm in" depends on
+ * the device. The chain: budget / 229 B per kept node => how many nodes fit; that /
+ * 12,400 nodes per km² => how many km² fit; square root => a half-width.
+ *
+ * A fixed 0.12° is wrong at both ends. On a 2 GB phone that is ~8.8 M nodes' worth of
+ * Manhattan, which gets the WebView killed -- the exact failure this file exists to
+ * prevent. On a 16 GB machine it is needlessly small.
+ *
+ * Returns `null` for a position that is not a real coordinate, so a caller with no fix
+ * cannot be handed a box somewhere in the Gulf of Guinea. `NaN` from an uninitialised
+ * GPS is the realistic case, and a box built from it silently covers half the planet.
+ */
+export function affordableBoxAround(
+  pos: { lat: number; lon: number } | null | undefined,
+  budgetBytes: number,
+): PbfCrop | null {
+  if (!pos) return null;
+  const { lat, lon } = pos;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+
+  const maxNodes = Math.max(0, budgetBytes) / PARSE_BYTES_PER_NODE;
+  const halfDeg = Math.sqrt(maxNodes / WORST_CASE_NODES_PER_KM2) / KM_PER_DEG;
+
+  return {
+    west: lon - halfDeg,
+    south: lat - halfDeg,
+    east: lon + halfDeg,
+    north: lat + halfDeg,
+  };
+}
+
+/**
  * The warning shown when the estimate fits but the margin is thin.
  *
  * Not an error: the import proceeds and the region is added. The user is told
@@ -279,4 +333,19 @@ export function importWarning(memory: MemoryBudget): string {
     'closes while importing, or the map goes blank, that is why — remove another ' +
     'region and try again, or cut the extract to a smaller area.'
   );
+}
+
+/**
+ * The budget this device grants a single parse, in bytes.
+ *
+ * Exported because §15.1's default crop has to be sized against the *same* number the
+ * refusal quotes. Two readers of the device heap that disagree by a fraction would size a
+ * box the guard then refuses, which is the same class of bug as a guard with two
+ * constants — and `mergeguard` already documents that `heapLimitBytes` cannot be inverted,
+ * because it applies `MEMORY_FRACTION` on some branches and not others.
+ */
+export function importBudgetBytes(limitBytes?: number): number {
+  return limitBytes !== undefined
+    ? limitBytes * PARSE_MEMORY_FRACTION
+    : rawHeapBytes().bytes;
 }

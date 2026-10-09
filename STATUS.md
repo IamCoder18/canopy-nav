@@ -108,6 +108,7 @@ evaluated, which a pass or fail result does not tell you.
    — [two more code defects](#1416-two-more-code-defects-one-of-which-is-the-largest-thing-found-in-this-pass)
    — [the guard's refusal said nothing](#1418-the-guards-refusal-said-nothing-and-153s-coverage-found-it)
    — [driving the guard through the UI](#1419-153-item-9--driving-the-guard-through-the-ui-and-what-it-cost)
+   — [the crop, and a guard that refused it anyway](#1420-the-crop-and-a-guard-that-refused-it-anyway)
 15. [The roadmap](#15-the-roadmap)
     — [Make the biggest extract that fits actually fit](#151-make-the-biggest-extract-that-fits-actually-fit)
     — [Make the delivery path work on device](#152-make-the-delivery-path-work-on-device)
@@ -141,7 +142,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1172 unit tests across 58 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1189 unit tests across 60 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -155,8 +156,8 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1172 passing**, 58 files |
-| End-to-end | `npm run e2e` | **66 checks** against the built bundle — +11 for the memory guard (§15.3 item 9) |
+| Unit tests | `npm test` | **1189 passing**, 60 files |
+| End-to-end | `npm run e2e` | **69 checks** against the built bundle — +11 for the memory guard, +2 for the crop (§14.19, §14.20) |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
 | Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
@@ -233,7 +234,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **58 files, 1172 tests**. The previous
+retyped by hand. The table is the complete set: **60 files, 1189 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -244,8 +245,8 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1172 total double-counts contrast's 34 tests**: 1138 distinct test cases are
-declared across 58 files. Both figures are recorded rather than reconciled by lowering the
+that **the 1189 total double-counts contrast's 34 tests**: 1155 distinct test cases are
+declared across 60 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
 
@@ -315,6 +316,8 @@ reading it.
 | `catalogue-row.spec.ts` | 8 | the unavailable reason is one line until asked otherwise, and reachable without a mouse |
 | `probebound.spec.ts` | 6 | the catalogue probe is bounded, and every entry reaches a verdict |
 | `steps.spec.ts` | 8 | why the turn list is empty — three causes, three honest explanations |
+| `pbfcrop.spec.ts` | 12 | the crop: a cropped parse equals the unfiltered one restricted to the same box, on both readers and against the XML parser; a road leaving the box splits into runs rather than joining across the gap |
+| `worker-crop.spec.ts` | 5 | the crop across all three seams: `engine.ts`'s postMessage, both of the worker's PBF paths, and the reader's filter — driven through the worker's real `onmessage` handler, with a `Worker` stub for the message |
 | `pbf.spec.ts` | 28 | PBF vs XML parser equivalence on a hand-built file and the whole fixture; **the streaming reader** against the whole-file one at every chunk size, starvation, bounded read-ahead, and the same corrupt inputs |
 | `theme.spec.ts` | 13 | `theme.ts` ↔ `styles.css` token-name agreement, fallbacks present, no bare literals |
 | `importguard.spec.ts` | 25 | the import memory guard: pinned constants, three outcomes, the ratio-1 boundary, an assumed budget is never unlimited, monotonicity across the whole size range, and a refusal that names a way out (§15.2) |
@@ -339,7 +342,7 @@ Browser gates, measured the same way:
 
 | Suite | Checks | Command |
 |---|---|---|
-| `test/e2e.mjs` | 66 | `npm run e2e` |
+| `test/e2e.mjs` | 69 | `npm run e2e` |
 | `test/screens.mjs` | 159 (53 × 3 viewports) | `npm run screens` |
 | `tools/focus.mjs` | 15 | `npm run focus` |
 | `tools/sw-shellcheck.mjs` | 1 (offline boot after a captive portal) | `npm run swshell` |
@@ -1658,13 +1661,13 @@ src/
   styles.css             2961  layout, insets, responsive rules
 
   osm/
-    engine.worker.ts     1235  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
-    pbf.ts                843  .osm.pbf protobuf reader, whole-buffer and streaming
-    engine.ts             430  worker client, format sniff, GeoJSON mirroring
+    engine.worker.ts     1292  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
+    pbf.ts               1007  .osm.pbf protobuf reader, whole-buffer and streaming
+    engine.ts             442  worker client, format sniff, GeoJSON mirroring
     regions.ts            465  RegionLibrary, catalogue, bbox helpers, merge cache
     merge.ts              318  union-find merge of adjacent extracts
     mergeguard.ts         201  can a merge be afforded here? three outcomes
-    importguard.ts        281  can a parse be afforded here? three outcomes (§15.2)
+    importguard.ts        351  can a parse be afforded here? three outcomes (§15.2)
     tags.ts                36  shared node-tag filter
 
   nav/
@@ -1690,12 +1693,12 @@ src/
 
   regions/
     download.ts          1493  streaming downloader, resume, part-file handling
-    RegionsScreen.tsx    1188  manage, catalogue, cross-region route test
+    RegionsScreen.tsx    1247  manage, catalogue, cross-region route test
     persist.ts            650  IndexedDB caching of parsed datasets
-    store.ts              332  RegionLibrary singleton, per-region workers, memory gate
+    store.ts              395  RegionLibrary singleton, per-region workers, memory gate
 
-test/            1172 unit tests, 58 files
-test/e2e.mjs           66 browser checks, built bundle
+test/            1189 unit tests, 60 files
+test/e2e.mjs           69 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
                              extract slicing is done by osmium on a desktop)
@@ -1978,6 +1981,77 @@ parse"* matched `/Parsing/` against `body.innerText`, and the guard's own refusa
 contains the word — the message was explaining that parsing was refused. It now asserts on
 `.progress-card` not existing, which is what the progress indicator actually is.
 
+
+### 14.20 The crop, and a guard that refused it anyway
+
+§15.1 item 2, built on §15.1.1's measurement. The reader takes a box, drops every node
+outside it **as it decodes**, keeps the ways that touch what is left, and reports what it
+kept. The Regions screen's refusal now offers *"Import just the area I'm in"*, which is what
+makes it reachable — `src/osm/merge.ts` was 318 correct lines plus ~800 lines of unreachable
+tests for a release, and an uncalled crop is that defect again.
+
+**The box is sized from the device, not from a constant.** `affordableBoxAround` inverts the
+chain §15.1.1 measured: budget ÷ 229 B per kept node ÷ 12,400 nodes per km² (Manhattan, the
+densest place in the sweep), square root. A fixed 0.12° is wrong at both ends — on a 2 GB
+phone it is ~8.8 M nodes and the WebView dies, which is the exact failure the guard exists
+to prevent; on a 16 GB machine it is needlessly small.
+
+**And a fixed box was the first version, so the button did nothing.** `onAreaOnly` caught its
+own failure and returned without importing. That is §10.5's shape — a control wired to
+nothing, reported as working because nothing threw — and it is invisible to every suite,
+because the suite never clicked it. It was found by a reversal, which is the only reason it
+was found at all.
+
+**The bigger defect: the guard refused the crop on the whole file's size.** `importRegionFile`
+ran `canImport(file.size)` unconditionally, so an import carrying a crop was refused before
+the crop was considered — 146 MB refused on a file the crop would have read a fraction of.
+§15.1.1 named this exactly: once a crop exists the surviving node count is a function of the
+box, not the file, so a size-derived estimate is the wrong *shape*. Refusing for a reason
+that no longer applies is the same failure as returning a wrong route — confidently, and
+about something other than the thing asked.
+
+A cropped import is therefore **warned**, not refused, and the warning says the honest thing:
+the cost is unknown until the parse reports it. That weakens the guard deliberately, and the
+mitigation is that `parseOsmPbfStream` reports `keptNodes`, so the measurement arrives
+immediately after instead of a second guess standing in for it.
+
+**Two more defects, both in the builder rather than the reader.** `buildDataset` skipped a
+way's missing refs and joined the survivors, which draws a straight segment across whatever
+was dropped. For corrupt data that is metres of error; under a crop it is kilometres, across
+ground the driver cannot see, and the router will route along it. Refs are now collected as
+*runs*, and a road leaving the cropped area ends at the edge. Behaviour is unchanged when
+nothing was dropped, because then there is one run.
+
+And `LatLng` is `[lon, lat]` while a crop box is `west, south, east, north` — the opposite
+order, and a transposed box is a plausible-looking crop of the wrong hemisphere. Spelled
+out rather than destructured.
+
+**What the browser suite proves, and what it does not.** Two checks in `test/e2e.mjs`: the
+refusal offers the area crop, and clicking it is *requested*, passes the guard, and reaches
+the parser. It cannot prove the filter was **applied** — the fixture is padding, so a cropped
+and an uncropped parse both end in "contains no OpenStreetMap data". Two reversals (`store.ts`
+dropping `req.crop`, and the guard re-refusing the whole file) left that check **green**,
+which is how the limit was found rather than assumed.
+
+So "applied" is proven in `test/worker-crop.spec.ts`, driving the worker's real `onmessage`
+handler against the real PBF fixture — whose content is scattered from lon -115 to -1.32, so
+a box around Edinburgh keeps some and drops the rest and a no-op filter cannot pass. Five
+reversals, each verified to fail: the worker's stream path, its whole-buffer path, `engine.ts`'s
+`postMessage`, the reader's box test, and `cropIgnored`.
+
+Two of those reversals were *first* green, and both were the same mistake: the earlier version
+posted only `bytes`, so the stream path — the one production uses — was never executed, and
+the test drove the worker directly, so `engine.ts` was never executed either. A test that runs
+one of two paths proves the one it ran.
+
+**One more finding, about the harness rather than the app.** A `vite preview` server had been
+holding port 4192 for **3.8 days**, so every browser gate in this pass was served a bundle
+built long before the change under test. Two reversals reported green because the page was
+running old code. `npm run e2e` does not start its own server — it documents that one should
+be running — which makes "is the server serving the current build?" a question every browser
+reversal has to answer, and one this pass answered wrongly twice. Killed and restarted; the
+figures in §2 are from the fresh server.
+
 ### Closed in the §3.17–3.19 pass
 
 | Was gap | Now |
@@ -2063,8 +2137,8 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1172 unit tests
-npm run e2e          # 66 browser checks against the built bundle
+npm test             # 1189 unit tests
+npm run e2e          # 69 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
 npm run sync         # build, clear android assets, cap sync

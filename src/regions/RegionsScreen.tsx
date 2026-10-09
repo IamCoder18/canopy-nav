@@ -18,7 +18,8 @@ import {
 import { CATALOG, catalogByCountry, type CatalogEntry, type Region } from '../osm/regions';
 import type { RouteResult } from '../osm/engine.worker';
 import type { BuildProgress } from '../osm/engine';
-import { canImport } from '../osm/importguard';
+import { canImport, affordableBoxAround, importBudgetBytes } from '../osm/importguard';
+import type { PbfCrop } from '../osm/pbf';
 import type { LatLng } from '../geo';
 import { formatDistance, formatDuration } from '../geo';
 import { ink, type as T, DP, ICON, SEP } from '../theme';
@@ -499,7 +500,11 @@ export function RegionsScreen(props: RegionsScreenProps) {
    */
   const onActivated = props.onActivated;
 
-  const onPicked = useCallback(async (file: File | undefined, forceMemory = false) => {
+  const onPicked = useCallback(async (
+    file: File | undefined,
+    forceMemory = false,
+    crop?: PbfCrop,
+  ) => {
     if (!file) return;
     const p = pending.current ?? { id: '', name: '', code: 'local' };
     try {
@@ -512,6 +517,10 @@ export function RegionsScreen(props: RegionsScreenProps) {
         // to have been asked, so an import the guard stopped has a button
         // behind it. `store.ts` refuses on `!forceMemory`.
         forceMemory,
+        // `crop` is passed straight through rather than being re-derived here: the
+        // decision of *where* belongs to whoever chose it, and `store.ts` needs it only
+        // to hand it to the parser.
+        crop,
         onProgress: setProgress,
         onError: setError,
         // Regions is the *primary* import surface — the catalogue lives here — so
@@ -564,6 +573,46 @@ export function RegionsScreen(props: RegionsScreenProps) {
       return;
     }
     void onPicked(file);
+  };
+
+  /**
+ * A box around where the driver is, as large as this device can afford.
+ *
+ * §15.1's crop makes peak memory a function of *area* rather than of province, and this is
+ * the smallest thing that puts it in front of a driver.
+ *
+ * **Derived from the device's own budget**, not a constant, because a fixed box is wrong at
+ * both ends. On a 2 GB phone a 0.12° half-width is ~8.8 M nodes of Manhattan — and the
+ * WebView is killed, which is the exact failure the whole guard exists to prevent. On a
+ * 16 GB machine the same box is needlessly small. `affordableBoxAround` inverts the chain:
+ * budget ÷ 229 B per kept node ÷ 12,400 nodes per km², square root.
+ *
+ * `null` when there is no usable position — no fix yet, or a `NaN` from an uninitialised
+ * receiver. Rather than guess a location, the button is not offered: "the area I'm in"
+ * with no idea where "here" is would silently import somewhere else, which is worse than
+ * not offering it.
+ */
+  /**
+   * "Just the area I'm in" — import the refused file, cropped.
+   *
+   * This is what makes the crop reachable, and reachability is the whole point:
+   * `src/osm/merge.ts` was 318 lines of correct code plus ~800 lines of tests that
+   * nothing called, and requirement #10 sat under a row marked "Done" for a release
+   * because of it (§3.5.2). A crop that no button triggers is the same defect again.
+   *
+   * It is also the answer to §7 gap 13. That gap says the refusal is correct but the
+   * message sends a driver to a desktop they may not have — so this replaces the desktop
+   * with a phone, for the case where the driver's own area is what they need.
+   */
+  const onAreaOnly = () => {
+    const file = pendingForce;
+    const box = affordableBoxAround(
+      props.location ? { lat: props.location[1], lon: props.location[0] } : null,
+      importBudgetBytes(),
+    );
+    setPendingForce(null);
+    setForceReason('');
+    if (file && box) void onPicked(file, false, box);
   };
 
   /** "Try anyway" — run the import the guard just refused, with `forceMemory`. */
@@ -1129,7 +1178,17 @@ export function RegionsScreen(props: RegionsScreenProps) {
              * instruction, and rendering it as a paragraph would make it uncopyable.
              */}
             <div style={{ ...T.body2, whiteSpace: 'pre-line' }}>{forceReason}</div>
-            <div style={{ marginTop: DP.P2, display: 'flex', gap: DP.P2 }}>
+            <div style={{ marginTop: DP.P2, display: 'flex', gap: DP.P2, flexWrap: 'wrap' }}>
+              {/*
+               * The primary option, and deliberately first in the DOM rather than after
+               * the override. The guard's `reason` tells a driver to cut the extract with
+               * `osmium` on a desktop; this is the same thing done for them, on the phone
+               * they are holding. Offering "try anyway" first would lead with the action
+               * most likely to kill the WebView.
+               */}
+              <button className="pill-btn" onClick={onAreaOnly}>
+                Import just the area I&apos;m in
+              </button>
               <button className="pill-btn" onClick={onForce}>
                 Try importing it anyway
               </button>

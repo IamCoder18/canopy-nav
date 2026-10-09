@@ -8,6 +8,7 @@
 import type { LatLng } from '../geo';
 import type { OsmDataset, GazEntry, RouteResult } from './engine.worker';
 import { searchGazetteer, RENDER_MIN_ZOOM } from './engine.worker';
+import type { PbfCrop } from './pbf';
 
 type Handler = (ev: MessageEvent) => void;
 
@@ -196,7 +197,16 @@ export class OsmEngine {
    * file picker and picking the wrong parser produces a baffling error deep
    * inside the decoder.
    */
-  async build(file: OsmFile): Promise<OsmDataset> {
+  /**
+   * Parse a file into a routable graph.
+   *
+   * `crop` restricts the parse to a box -- §15.1's fix for the fact that a province
+   * extract does not fit in a phone's heap. Only `.osm.pbf` honours it: the XML parser
+   * bounds the *file* with its element-boundary streaming but not the node map, and
+   * cropping XML needs a different pass. Silently ignoring it there would be worse than
+   * refusing, so `cropApplied` on the result says which of the two happened.
+   */
+  async build(file: OsmFile, crop?: PbfCrop | null): Promise<OsmDataset> {
     if (this.buildPromise) return this.buildPromise;
 
     const name = file.name ?? '';
@@ -296,14 +306,16 @@ export class OsmEngine {
             // one terminal value.
             const stream = file.stream();
             worker.postMessage(
-              { type: 'build', payload: { stream, format: 'pbf', totalBytes } },
+              { type: 'build', payload: { stream, format: 'pbf', totalBytes, crop: crop ?? null } },
               [stream as unknown as Transferable],
             );
           } else {
             // No `stream` (a plain Blob-shaped object, or a test fixture): fall
             // back to the whole-buffer form, which the worker still handles.
             const bytes = await file.arrayBuffer();
-            worker.postMessage({ type: 'build', payload: { bytes, format: 'pbf' } }, [bytes]);
+            worker.postMessage(
+              { type: 'build', payload: { bytes, format: 'pbf', crop: crop ?? null } }, [bytes],
+            );
           }
         } catch (err) {
           reject(err as Error);

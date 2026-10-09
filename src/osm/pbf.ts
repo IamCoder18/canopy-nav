@@ -247,9 +247,114 @@ class Scratch {
 
 type TaggedNode = RawNode & { tags?: Record<string, string> };
 
+/**
+ * A crop box, in degrees: west, south, east, north.
+ *
+ * ## Why a crop exists at all
+ *
+ * A province extract does not fit in a phone's heap — §15.1.1 measured 334 MB of Alberta
+ * as ~58 M nodes, and `importguard` refuses it on every device including an 8 GiB one.
+ * Cropping to an area makes peak memory a function of *area* rather than of province.
+ *
+ * ## What the measurement decided, and what it overruled
+ *
+ * The obvious worry is that OSM PBF blobs are not geographically sorted, so a crop would
+ * have to keep out-of-box nodes around until the end. Measured across six real Geofabrik
+ * extracts: **they are not sorted.** Node blobs are runs of 8,000 consecutive node *ids* —
+ * creation-date order — and 99.9% of consecutive bounding boxes overlap.
+ *
+ * That does not matter, and the reason is worth being precise about, because it is the
+ * whole design: the filter is applied **per node as it is decoded**, never per blob. An
+ * out-of-box node is therefore never stored at all, and the node map grows monotonically
+ * to exactly the kept count. Measured peak resident = 1.00× the in-box count in all six
+ * files, and 8.8× lower heap on a real 20 MB extract.
+ *
+ * It also means there is **no point** trying to skip blobs: 79–100% of node blobs contain
+ * at least one in-box node, so blob-level skipping would save nothing and cost the
+ * ability to handle a writer that does cluster.
+ *
+ * ## Dilation, and why the default is small
+ *
+ * Ways whose refs cross the boundary lose those refs, which would break their geometry.
+ * Measured: 94.8–99.1% of ways *touching* the box are already **entirely inside** it with
+ * zero dilation, and `DEFAULT_DILATION_DEG` (~555 m) reaches 99.3–99.9% for 19k–39k extra
+ * nodes. So the box is dilated by a small, fixed amount and the caller can widen it.
+ *
+ * The way *filter* is deliberately the loose one: a way is kept if it touches the box at
+ * all. Dropping ways that merely pass nearby would be tidier, but a way with one surviving
+ * ref can still contribute a usable stub, and the builder already discards runs shorter
+ * than two nodes.
+ */
+export interface PbfCrop {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+}
+
+/** ~555 m of latitude. See `PbfCrop` for the measurement behind this. */
+export const DEFAULT_DILATION_DEG = 0.005;
+
+/**
+ * Dilation in *degrees*, not metres, and deliberately not converted.
+ *
+ * A degree of longitude is 111 km at the equator and 0 km at the poles, so a metres-accurate
+ * dilation needs a cosine and would then be box-dependent. What this is actually buying is
+ * enough slack for a way's endpoint nodes to land inside the box despite rounding and
+ * tagging position, and 0.005° covers that everywhere. Stating it in the same unit as the
+ * box keeps the comparison in `parseDenseNodes` a pair of `<=` on numbers already in hand.
+ */
+export function dilate(box: PbfCrop, by = DEFAULT_DILATION_DEG): PbfCrop {
+  return {
+    west: box.west - by,
+    south: box.south - by,
+    east: box.east + by,
+    north: box.north + by,
+  };
+}
+
+/** Does a coordinate fall inside the (already dilated) box? */
+function inBox(box: PbfCrop, lat: number, lon: number): boolean {
+  // Longitude compared on both sides, so a box that crosses the antimeridian works.
+  if (box.west <= box.east) {
+    if (lon < box.west || lon > box.east) return false;
+  } else if (lon < box.west && lon > box.east) {
+    return false;
+  }
+  return lat >= box.south && lat <= box.north;
+}
+
 interface ParseOutput {
   nodes: Map<number, RawNode>;
   ways: RawWay[];
+  /**
+   * The crop in force, or `null` for an unfiltered parse.
+   *
+   * On the `ParseOutput` rather than threaded through six call sites: both node decoders
+   * and the way decoder need it, and `parsePrimitiveBlock` already passes this object
+   * down. A separate parameter would have been five edits and one chance to forget.
+   */
+  crop: PbfCrop | null;
+  /**
+   * Nodes seen and discarded, and nodes kept.
+   *
+   * §15.1 item 4's finding is that a file-size estimate is structurally the wrong shape
+   * once a crop exists — the surviving count is not knowable before the node phase is read.
+   * So the reader reports it, and the guard compares against this instead of being trusted
+   * in its place. Without it the only number available is an estimate derived from a
+   * constant that measured 2× low.
+   */
+  seenNodes: number;
+  keptNodes: number;
+}
+
+/** Record a decoded node, honouring any crop. Returns whether it was kept. */
+function keepNode(out: ParseOutput, node: TaggedNode): boolean {
+  out.seenNodes++;
+  if (out.crop && !inBox(out.crop, node.lat, node.lon)) return false;
+  out.nodes.set(node.id, node);
+  out.keptNodes++;
+  return true;
 }
 
 /** `Node` — id=1 sint64, keys=2 packed, vals=3 packed, lat=8, lon=9 (nanodegrees). */
@@ -294,7 +399,7 @@ function parseNode(r: Reader, st: StringTable, out: ParseOutput): void {
   const node: TaggedNode = { id, lat: dLat, lon: dLon };
   const tags = readTags(keys, vals, st);
   if (tags) node.tags = tags;
-  out.nodes.set(id, node);
+  keepNode(out, node);
 }
 
 /**
@@ -351,7 +456,7 @@ function parseDenseNodes(r: Reader, st: StringTable, out: ParseOutput): void {
       }
       if (tags) node.tags = tags;
     }
-    out.nodes.set(node.id, node);
+    keepNode(out, node);
   }
 }
 
@@ -382,6 +487,13 @@ function parseWay(r: Reader, st: StringTable, out: ParseOutput): void {
 
   const wayRefs = refs ? deltas(refs) : [];
   if (wayRefs.length < 2) return;
+
+  // Under a crop, a way is kept if **any** ref survived. Deliberately loose: a way with
+  // one surviving ref can still contribute a usable stub, and the builder already
+  // discards runs shorter than two nodes. Requiring *all* refs would silently delete
+  // every road that crosses the box boundary, which is the road a driver is most likely
+  // to be on when they leave the cropped area.
+  if (out.crop && !wayRefs.some((ref) => out.nodes.has(ref))) return;
 
   out.ways.push({ id, refs: wayRefs, tags });
 }
@@ -684,12 +796,39 @@ class ByteQueue {
  * without a denominator would be inventing progress nothing supports, which is
  * the same defect as `parseOsmXmlStream`'s no-hint branch documents.
  */
+/**
+ * Crop statistics, so a caller can compare the guard's estimate against what the file
+ * actually held.
+ *
+ * §15.1 item 4: `importguard` estimates nodes from a file size and a constant that
+ * measured 2× low, and once a crop exists that estimate is structurally the wrong shape —
+ * the surviving count depends on the box, not the file. These are the numbers the guard
+ * should be checked against instead of trusted in place of.
+ */
+export interface PbfCropStats {
+  /** Nodes decoded, including those outside the box. */
+  seenNodes: number;
+  /** Nodes kept — i.e. inside the dilated box. Equals `nodes.size` when cropped. */
+  keptNodes: number;
+  /** Ways kept. */
+  ways: number;
+  /** Whether a crop was in force, so `keptNodes === seenNodes` is distinguishable. */
+  cropped: boolean;
+}
+
 export async function parseOsmPbfStream(
   source: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
   onProgress: (pct: number) => void = () => {},
   totalBytes?: number,
-): Promise<{ nodes: Map<number, RawNode>; ways: RawWay[] }> {
-  const out: ParseOutput = { nodes: new Map<number, RawNode>(), ways: [] };
+  crop?: PbfCrop | null,
+): Promise<{ nodes: Map<number, RawNode>; ways: RawWay[]; stats: PbfCropStats }> {
+  const out: ParseOutput = {
+    nodes: new Map<number, RawNode>(),
+    ways: [],
+    crop: crop ? dilate(crop) : null,
+    seenNodes: 0,
+    keptNodes: 0,
+  };
   const scratch = new Scratch();
   const queue = new ByteQueue(source);
   const hasTotal = typeof totalBytes === 'number' && totalBytes > 0;
@@ -762,7 +901,16 @@ export async function parseOsmPbfStream(
   }
 
   onProgress(1);
-  return { nodes: out.nodes, ways: out.ways };
+  return {
+    nodes: out.nodes,
+    ways: out.ways,
+    stats: {
+      seenNodes: out.seenNodes,
+      keptNodes: out.keptNodes,
+      ways: out.ways.length,
+      cropped: out.crop !== null,
+    },
+  };
 }
 
 /* ------------------------------- public ------------------------------- */
@@ -783,7 +931,8 @@ export async function parseOsmPbfStream(
 export async function parseOsmPbf(
   bytes: Uint8Array,
   onProgress: (pct: number) => void = () => {},
-): Promise<{ nodes: Map<number, RawNode>; ways: RawWay[] }> {
+  crop?: PbfCrop | null,
+): Promise<{ nodes: Map<number, RawNode>; ways: RawWay[]; stats: PbfCropStats }> {
   if (!(bytes instanceof Uint8Array)) {
     throw new PbfFormatError('parseOsmPbf expects the file contents as a Uint8Array');
   }
@@ -795,7 +944,13 @@ export async function parseOsmPbf(
     );
   }
 
-  const out: ParseOutput = { nodes: new Map<number, RawNode>(), ways: [] };
+  const out: ParseOutput = {
+    nodes: new Map<number, RawNode>(),
+    ways: [],
+    crop: crop ? dilate(crop) : null,
+    seenNodes: 0,
+    keptNodes: 0,
+  };
   const scratch = new Scratch();
   let dataBlobs = 0;
   let reported = 0;
@@ -840,5 +995,14 @@ export async function parseOsmPbf(
   }
 
   onProgress(1);
-  return { nodes: out.nodes, ways: out.ways };
+  return {
+    nodes: out.nodes,
+    ways: out.ways,
+    stats: {
+      seenNodes: out.seenNodes,
+      keptNodes: out.keptNodes,
+      ways: out.ways.length,
+      cropped: out.crop !== null,
+    },
+  };
 }

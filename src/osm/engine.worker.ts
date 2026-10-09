@@ -488,16 +488,38 @@ export function buildDataset(
     const speed = speedOf(t);
     const name = t.name ?? t.ref ?? '';
 
-    // A way whose endpoints are missing is unusable for geometry; a way missing
-    // only interior nodes can still contribute the segments it does have.
-    const refs: number[] = [];
+    /**
+     * The way's refs, as *runs* of consecutive present nodes.
+     *
+     * Previously this was one flat array with missing refs skipped, which silently joined
+     * the survivors: a gap in the middle became a straight segment drawn across whatever
+     * was missing. For corrupt data that is a few metres of error and the
+     * `metres > 20000` guard below used to catch the worst of it.
+     *
+     * **It stops being a few metres the moment a crop exists.** Under §15.1's bbox filter
+     * 2.4–7.4% of the refs of a way *touching* the box fall outside it, and those can be
+     * kilometres apart — so the flat join would draw a road straight across country the
+     * driver cannot see, and route along it. A road that leaves the cropped area has to
+     * *end* at the edge, which is what a run boundary is.
+     *
+     * Behaviour is identical when nothing was dropped, because then there is one run: the
+     * common case is untouched and only the previously-wrong case changes.
+     */
+    const runs: number[][] = [];
+    let run: number[] = [];
     for (const ref of w.refs) {
       const n = nodes.get(ref);
-      if (!n) continue;
-      refs.push(ref);
+      if (!n) {
+        if (run.length) runs.push(run);
+        run = [];
+        continue;
+      }
+      run.push(ref);
       intern(ref); // ensure the node exists in the graph
     }
-    if (refs.length < 2) continue;
+    if (run.length) runs.push(run);
+    const usable = runs.filter((r) => r.length >= 2);
+    if (usable.length === 0) continue;
 
     if (speed > 0) {
       routableWays++;
@@ -506,48 +528,54 @@ export function buildDataset(
       // flags are set when that direction is permitted
       const flags = onewayF ? FLAG_ONEWAY_F : onewayB ? FLAG_ONEWAY_B : FLAG_ONEWAY_F | FLAG_ONEWAY_B;
 
-      for (let i = 0; i < refs.length - 1; i++) {
-        const a = idx.get(refs[i])!;
-        const b = idx.get(refs[i + 1])!;
-        const na = nodes.get(refs[i])!;
-        const nb = nodes.get(refs[i + 1])!;
-        const metres = haversineM(na.lon, na.lat, nb.lon, nb.lat);
-        if (metres > 20000) continue; // bad data or a disconnected island
+      for (const refs of usable) {
+        for (let i = 0; i < refs.length - 1; i++) {
+          const a = idx.get(refs[i])!;
+          const b = idx.get(refs[i + 1])!;
+          const na = nodes.get(refs[i])!;
+          const nb = nodes.get(refs[i + 1])!;
+          const metres = haversineM(na.lon, na.lat, nb.lon, nb.lat);
+          if (metres > 20000) continue; // bad data or a disconnected island
 
-        // Car routing prefers real decision points, so pass-through nodes carry
-        // a small penalty. This keeps the A* frontier on junctions, which is
-        // what makes it fast on dense networks.
-        const isJ = i === 0 || i === refs.length - 2 ||
-          isJunction(nodeTags.get(refs[i]) ?? {}) || isJunction(nodeTags.get(refs[i + 1]) ?? {});
-        const meta = { metres, flags, name, speed, turnPenalty: isJ ? 0 : 6 };
+          // Car routing prefers real decision points, so pass-through nodes carry
+          // a small penalty. This keeps the A* frontier on junctions, which is
+          // what makes it fast on dense networks.
+          const isJ = i === 0 || i === refs.length - 2 ||
+            isJunction(nodeTags.get(refs[i]) ?? {}) || isJunction(nodeTags.get(refs[i + 1]) ?? {});
+          const meta = { metres, flags, name, speed, turnPenalty: isJ ? 0 : 6 };
 
-        if (flags & FLAG_ONEWAY_F) addEdge(a, b, meta);
-        if (flags & FLAG_ONEWAY_B) addEdge(b, a, meta);
-      }
+          if (flags & FLAG_ONEWAY_F) addEdge(a, b, meta);
+          if (flags & FLAG_ONEWAY_B) addEdge(b, a, meta);
+        }
 
-      if (RENDER_MIN_ZOOM[hw] !== undefined) {
-        roads.push({
-          class: hw,
-          pts: simplifyLine(refs.map((r) => {
-            const n = nodes.get(r)!;
-            return [n.lon, n.lat] as LatLng;
-          }), 4),
-        });
+        if (RENDER_MIN_ZOOM[hw] !== undefined) {
+          // One polyline per run, so a road leaving the crop is drawn up to the edge and
+          // stops, rather than being drawn as one line through the gap.
+          roads.push({
+            class: hw,
+            pts: simplifyLine(refs.map((r) => {
+              const n = nodes.get(r)!;
+              return [n.lon, n.lat] as LatLng;
+            }), 4),
+          });
+        }
       }
     } else {
       // Not routable, but still drawable.
-      const pts: LatLng[] = refs.map((r) => {
-        const n = nodes.get(r)!;
-        return [n.lon, n.lat] as LatLng;
-      });
-      if (t.waterway || t.water || t.natural === 'water') {
-        water.push({ class: t.waterway ?? 'water', rings: [simplifyLine(pts, 6)] });
-      } else if (
-        t.natural === 'wood' || t.natural === 'grassland' || t.natural === 'scrub' ||
-        t.landuse === 'forest' || t.landuse === 'grass' || t.landuse === 'meadow' ||
-        t.landuse === 'recreation_ground' || t.leisure === 'park' || t.leisure === 'garden'
-      ) {
-        if (pts.length > 2) green.push({ class: t.landuse ?? t.leisure ?? t.natural ?? 'green', rings: [pts] });
+      for (const refs of usable) {
+        const pts: LatLng[] = refs.map((r) => {
+          const n = nodes.get(r)!;
+          return [n.lon, n.lat] as LatLng;
+        });
+        if (t.waterway || t.water || t.natural === 'water') {
+          water.push({ class: t.waterway ?? 'water', rings: [simplifyLine(pts, 6)] });
+        } else if (
+          t.natural === 'wood' || t.natural === 'grassland' || t.natural === 'scrub' ||
+          t.landuse === 'forest' || t.landuse === 'grass' || t.landuse === 'meadow' ||
+          t.landuse === 'recreation_ground' || t.leisure === 'park' || t.leisure === 'garden'
+        ) {
+          if (pts.length > 2) green.push({ class: t.landuse ?? t.leisure ?? t.natural ?? 'green', rings: [pts] });
+        }
       }
     }
     if (ways.length > 0 && (w.id & 1023) === 0) onProgress(0.5 + 0.4 * (w.id / (ways[ways.length - 1].id || 1)));
@@ -1128,7 +1156,7 @@ export function searchGazetteer(
 /* --------------------------- worker plumbing ----------------------- */
 
 // Static import: the parser is part of the same worker bundle.
-import { parseOsmPbf, parseOsmPbfStream } from './pbf';
+import { parseOsmPbf, parseOsmPbfStream, type PbfCrop, type PbfCropStats } from './pbf';
 import { isInterestingTag } from './tags';
 
 
@@ -1178,7 +1206,7 @@ if (typeof self !== 'undefined' && typeof (self as any).postMessage === 'functio
         // buffer here, so the format Geofabrik actually publishes was the one
         // format held whole -- see STATUS.md 14.16, which recorded that as the
         // largest single piece of engineering left in the app.
-        const { text, bytes, format, stream, totalChars, totalBytes } = payload as
+        const { text, bytes, format, stream, totalChars, totalBytes, crop } = payload as
           {
             text?: string;
             bytes?: ArrayBuffer;
@@ -1186,6 +1214,7 @@ if (typeof self !== 'undefined' && typeof (self as any).postMessage === 'functio
             stream?: ReadableStream<Uint8Array>;
             totalChars?: number;
             totalBytes?: number;
+            crop?: PbfCrop | null;
           };
         const post = (stage: string, pct: number) =>
           (self as any).postMessage({ type: 'progress', stage, pct });
@@ -1196,6 +1225,20 @@ if (typeof self !== 'undefined' && typeof (self as any).postMessage === 'functio
 
         let nodes: Map<number, RawNode>;
         let ways: RawWay[];
+        /**
+         * What the parse actually kept, when it could be cropped. §15.1 item 4: a
+         * file-size estimate is the wrong shape once a crop exists, because the surviving
+         * count depends on the box and not the file — so the reader reports it and the
+         * guard can be compared against a measurement.
+         */
+        let cropStats: PbfCropStats | null = null;
+        // `stats` is scoped to the PBF branch; declared here so the destructuring below
+        // has something to bind to, and immediately folded into `cropStats`.
+        let stats: PbfCropStats;
+        // A crop asked for on a format that cannot honour one. Recorded rather than
+        // ignored: the caller is trying to avoid being OOM-killed, and an ignored crop is
+        // an OOM kill with extra steps.
+        let cropIgnored = false;
 
         if (isPbf) {
           if (stream) {
@@ -1206,19 +1249,27 @@ if (typeof self !== 'undefined' && typeof (self as any).postMessage === 'functio
             // any of it. The parser therefore holds one blob at a time rather
             // than concatenating the whole file, which is what the loop here
             // used to do.
-            ({ nodes, ways } = await parseOsmPbfStream(
+            ({ nodes, ways, stats } = await parseOsmPbfStream(
               stream,
               (p) => post(label, p * 0.5),
               totalBytes,
+              crop,
             ));
+            cropStats = stats;
           } else {
-            ({ nodes, ways } = await parseOsmPbf(new Uint8Array(bytes!), (p) => post(label, p * 0.5)));
+            ({ nodes, ways, stats } = await parseOsmPbf(
+              new Uint8Array(bytes!), (p) => post(label, p * 0.5), crop,
+            ));
+            cropStats = stats;
           }
-        } else if (stream) {
-          const decoded = decodeStream(stream);
-          ({ nodes, ways } = await parseOsmXmlStream(decoded, (p) => post(label, p * 0.5), totalChars));
         } else {
-          ({ nodes, ways } = parseOsmXml(text ?? '', (p) => post(label, p * 0.5)));
+          cropIgnored = !!crop;
+          if (stream) {
+            const decoded = decodeStream(stream);
+            ({ nodes, ways } = await parseOsmXmlStream(decoded, (p) => post(label, p * 0.5), totalChars));
+          } else {
+            ({ nodes, ways } = parseOsmXml(text ?? '', (p) => post(label, p * 0.5)));
+          }
         }
 
         post('Building graph', 0.5);
@@ -1226,7 +1277,13 @@ if (typeof self !== 'undefined' && typeof (self as any).postMessage === 'functio
         // returning, so the boxed `RawNode` map is released here rather than
         // staying reachable for the life of the worker. See its docstring.
         const ds = buildDataset(nodes, ways, (p) => post('Building graph', 0.5 + p * 0.5));
-        (self as any).postMessage({ type: 'built', payload: ds });
+        // `cropApplied` / `cropStats` / `cropIgnored` travel with the dataset rather than
+        // being logged: the caller's memory guard is estimated from a file size, and the
+        // only thing that can correct it is what the parse actually kept.
+        (self as any).postMessage({
+          type: 'built',
+          payload: { ...ds, cropApplied: !!cropStats?.cropped, cropStats, cropIgnored },
+        });
       }
     } catch (err) {
       (self as any).postMessage({ type: 'error', message: (err as Error).message });
