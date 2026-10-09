@@ -5118,6 +5118,24 @@ path, and the crop is the way out of that.
 `buildDataset` could consume ways and node coordinates together and never materialise
 the map — but only if the format's ordering allows, which is what (1) determines.
 
+**Answered, and it is no.** §15.1.1 measured the ordering across six real extracts: node blobs
+are a contiguous **prefix** and way blobs a contiguous **suffix**, with no blob containing
+both, so no way ever precedes any node. That is the *friendly* ordering, and it still does not
+help, because the reader has to hand every node to `buildDataset` before any way can name it.
+The map is required, not because nodes and ways interleave but because a way references nodes
+that were read thousands of blobs earlier.
+
+So the map stays, and `buildDataset` keeps consuming it — clearing it before returning, so the
+peak is not the steady state for the life of the region. What the crop changes is *how many*
+nodes go into it, which is a function of area: a metro box on a province extract is a few
+million nodes rather than ~44 M. That is the whole of the available win, and §15.1.1's 8.8×
+measured heap reduction on a real 20 MB extract is what it buys.
+
+The second half of the question — whether the *format* could be read differently — has an
+answer too, and it is the architecture §15.1 already declines: MVT tiles plus a prebuilt
+routing graph, streamed by viewport, the Organic Maps / Maps.me shape. A different design
+rather than a bigger version of this one.
+
 **What this does not reach.** A driver who genuinely needs province-wide routing on a
 phone will not get it from any of the above. That case wants MVT tiles plus a prebuilt
 routing graph, streamed by viewport — the Organic Maps / Maps.me shape. It is a
