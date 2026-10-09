@@ -181,6 +181,88 @@ describe('the browser-gate figures are checked everywhere they are stated', () =
     expect(code).toBe(1);
   });
 
+  /**
+   * Absence is not agreement.
+   *
+   * The defect an adversarial review of the previous two commits found here, and it was the
+   * same one those commits had just fixed twice elsewhere: `disagree()` returned success
+   * for an *empty* list, so rewording every e2e figure form to non-numeric text produced
+   * `all checks passed`, exit 0. A check that has stopped matching reports the same thing
+   * as a check that found nothing wrong.
+   */
+  it('rejects a gate whose figures have vanished', () => {
+    // Chained `substitute` calls rather than a `reduce` over pairs. `substitute` throws if
+    // an anchor appears zero or many times, so an anchor that drifts out of date is a loud
+    // failure rather than a mutation that silently does nothing -- which is what the first
+    // version of this test was: a `reduce` with no initial value, whose accumulator was
+    // the first *string* of the pair list.
+    // Each `substitute` returns a function over the document, so the *innermost* call is
+    // the one given the document -- the shape is `s1(s2(s3(s4(doc))))`. Getting that
+    // backwards passes a function where a string is expected, and the audit fails with
+    // `doc.split is not a function`, which names neither the mutation nor the cause.
+    const { out, code } = audit((doc) =>
+      substitute(`npm run e2e          # ${E2E} browser checks against the built bundle`,
+        'npm run e2e          # several browser checks against the built bundle')(
+        substitute(`test/e2e.mjs           ${E2E} browser checks, built bundle`,
+          'test/e2e.mjs           some browser checks, built bundle')(
+          substitute(`| \`test/e2e.mjs\` | ${E2E} |`, '| `test/e2e.mjs` | many |')(
+            substitute(`**${E2E} checks** against the built bundle`,
+              '**lots of checks** against the built bundle')(doc),
+          ),
+        ),
+      ),
+    );
+    expect(out).toMatch(/the e2e gate has no figure anywhere in this file/);
+    expect(code).toBe(1);
+  });
+
+  /**
+   * The three gates that were not compared at all.
+   *
+   * `GATE_FIGURES` listed e2e, screens and focus. §2's table also states reflow, textscale
+   * and swshell, so a stale copy of any of those three was invisible — the same failure as
+   * the seventh wrong figure, one level up: two places disagreeing with a gate built to
+   * compare them not looking.
+   */
+  it('rejects a stale reflow count', () => {
+    const { out, code } = audit(substitute('**12 checks, all passing**', '**11 checks, all passing**'));
+    expect(out).toMatch(new RegExp('the reflow gate is counted 11 and 12'));
+    expect(code).toBe(1);
+  });
+
+  it('rejects a stale textscale count', () => {
+    // One of its two copies, not both -- changing both leaves them agreeing, which is the
+    // mistake a first attempt at this test made.
+    const { out, code } = audit(
+      substitute('| `tools/textscale-check.mjs` | 13 — a gate', '| `tools/textscale-check.mjs` | 14 — a gate'),
+    );
+    expect(out).toMatch(/the textscale gate is counted 13 and 14/);
+    expect(code).toBe(1);
+  });
+
+  /**
+   * A loose token would read the wrong column.
+   *
+   * §2's breakdown table has `textscale.spec.ts` and `textscale-layout.spec.ts` rows, with
+   * counts of 16 and 13. Matching textscale figures by the word "textscale" therefore
+   * compares a browser gate against two unit-test files, which is not a disagreement but a
+   * comparison of two things that measure different quantities -- the "screens gate given
+   * the e2e number" mistake, one level down. This asserts a spec row is not read as one.
+   */
+  it('does not read a spec-file row as a gate figure', () => {
+    const { code } = audit(
+      substitute('| `textscale.spec.ts` | 16 |', '| `textscale.spec.ts` | 99 |'),
+    );
+    expect(code).toBe(0);
+  });
+
+  it('rejects a screens total that is really the per-viewport base', () => {
+    // The §2 row reads "53 checks x 3 viewports = 159". An earlier pattern captured the
+    // first number, so 53 was counted as a *total* and put 53 and 159 in one column.
+    const { code } = audit(substitute('**53 checks × 3 viewports = 159**', '**54 checks × 3 viewports = 159**'));
+    expect(code).toBe(1);
+  });
+
   it('rejects a stale focus count in §6', () => {
     const { code } = audit(substitute('tools/focus.mjs         297 15 keyboard/focus checks', 'tools/focus.mjs         297 17 keyboard/focus checks'));
     expect(code).toBe(1);

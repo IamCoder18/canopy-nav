@@ -289,98 +289,164 @@ if (existsSync(reportPath)) {
  * it. The same shape as the `waitForFunction` bug: reading a value without reading
  * what it belongs to.
  */
+/**
+ * Each browser gate's figure, and only that gate's.
+ *
+ * ## Why a *line predicate* and not a token
+ *
+ * The first version matched figures by scanning every line for a gate's *name* —
+ * `\btextscale\b`, say. The §2 breakdown table has rows named `textscale.spec.ts` and
+ * `textscale-layout.spec.ts`, whose counts are 16 and 13, so a loose token compares a
+ * browser check count against two spec counts: not a disagreement, but a comparison of two
+ * things that do not measure the same thing — which is the "screens gate given the e2e
+ * number" mistake one level down.
+ *
+ * So every gate is bound to the lines that actually name *its command or its tool*: the §2
+ * verification row (`npm run reflow`), the §2 per-tool row (`| `tools/reflow.mjs` |`), the
+ * §6 layout row, and the §8 command block. A spec row cannot match any of those.
+ */
 const GATE_FIGURES = [
   {
     name: 'e2e',
-    token: /\be2e\b/,
+    // Every gate's figure must be findable. An empty list is not agreement.
+    mustFind: true,
+    lines: /\be2e\b/,
+    excludes: /spec\.ts/,
     res: [
       /\*\*(\d+) checks/g,
-      /\be2e (\d+)\b/g,
-      /\| `test\/e2e\.mjs` \| (\d+) \|/g,
-      /# (\d+) browser checks/g, // §8's command block
-      /test\/e2e\.mjs\s+(\d+) browser checks/g, // §6's layout block
+      /\| `test\/e2e\.mjs` \| (\d+)/g,
+      /# (\d+) browser checks/g,                  // §8's command block
+      /test\/e2e\.mjs\s+(\d+) browser checks/g,  // §6's layout block
     ],
   },
   {
     name: 'screens',
-    token: /\bscreens\b/,
-    // "53 checks x 3 viewports = 159" and the per-tool breakdown row.
-    // Two quantities here, not one: `53 checks × 3 viewports = 159` states a
-    // per-viewport base, and `test/screens.mjs | 159` states the total. Compared
-    // against each other they are a false positive, so the base is compared with
-    // the base and the total with the total.
-    baseRes: [/(\d+) checks × \d+ viewports/g, /screens (\d+) ×/g],
-    totalRes: [/\| `test\/screens\.mjs` \| (\d+)/g, /\*\*(\d+) checks × \d+ viewports = (\d+)\*\*/g],
+    mustFind: true,
+    lines: /\bscreens\b/,
+    excludes: /spec\.ts/,
+    // Two quantities, not one: a per-viewport base and a total. Compared like with like,
+    // because 53 and 159 are not two answers to the same question.
+    baseRes: [
+      /(\d+) checks × \d+ viewports/g,
+      /screens (\d+) ×/g,
+      /screens\.mjs\s+(\d+) checks x \d+ viewports/g,
+    ],
+    totalRes: [
+      /\| `test\/screens\.mjs` \| (\d+)/g,
+      // The **total** is the number after the `=`, not the first one. The earlier version
+      // captured group 1 -- the per-viewport base -- and so counted the §2 row's `53` as a
+      // total, which put 53 and 159 in the same column and reported a disagreement between
+      // a base and a total. The first number is matched and discarded.
+      /\*\*\d+ checks × \d+ viewports = (\d+)\*\*/g,
+    ],
   },
   {
     name: 'focus',
-    token: /\bfocus\b/,
+    mustFind: true,
+    lines: /\bfocus\b/,
+    excludes: /spec\.ts/,
     res: [
       /\*\*(\d+) checks\*\* in a real browser/g,
-      /(\d+) keyboard\/focus checks/g,
-      /(\d+) keyboard and focus checks/g, // §8 says "keyboard and focus"
-      /\| `tools\/focus\.mjs` \| (\d+) \|/g,
-      /tools\/focus\.mjs\s+\d+\s+(\d+) keyboard/g, // §6's layout block
+      /\| `tools\/focus\.mjs` \| (\d+)/g,
+      /# (\d+) keyboard and focus checks/g,              // §8 says "keyboard and focus"
+      /# (\d+) keyboard\/focus checks/g,                // §6 says "keyboard/focus"
+      /tools\/focus\.mjs\s+\d+\s+(\d+) keyboard/g,      // §6's layout row
+    ],
+  },
+  {
+    name: 'reflow',
+    mustFind: true,
+    lines: /npm run reflow|tools\/reflow\.mjs/,
+    excludes: /spec\.ts/,
+    res: [
+      /\*\*(\d+) checks/g,                            // §2's verification row
+      /\| `tools\/reflow\.mjs` \| (\d+)/g,           // §2's per-tool row
+    ],
+  },
+  {
+    name: 'textscale',
+    mustFind: true,
+    lines: /npm run textscale|tools\/textscale-check\.mjs/,
+    excludes: /spec\.ts/,
+    res: [
+      /\*\*(\d+) checks/g,                            // §2's verification row
+      /\| `tools\/textscale-check\.mjs` \| (\d+)/g,
+    ],
+  },
+  {
+    name: 'swshell',
+    mustFind: true,
+    lines: /npm run swshell|tools\/sw-shellcheck\.mjs/,
+    excludes: /spec\.ts/,
+    res: [
+      /\| `tools\/sw-shellcheck\.mjs` \| (\d+)/g,
     ],
   },
 ];
 
 const lines = doc.split('\n');
-const gateCounts = (gate) => {
+
+/**
+ * The figures one gate is counted at, read only from lines that name that gate.
+ *
+ * The historical-figure exclusion is line-scoped and looks one line up as well, because a
+ * heading can wrap away from the figure it introduces. It is deliberately narrow: a
+ * paragraph-level exclusion swallowed all of §2's table once already, hiding a wrong e2e
+ * figure under a prose note three rows above it.
+ */
+const gateCounts = (gate, patterns) => {
   const out = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (!gate.token.test(line)) continue;
-
-    // A heading can wrap away from the figure it introduces, so the historical
-    // marker is looked for on this line and the one above. Narrow on purpose: a
-    // paragraph-level exclusion swallowed all of §2's table once already, hiding a
-    // wrong e2e figure under a prose note three rows up.
+    if (!gate.lines.test(line)) continue;
+    if (gate.excludes?.test(line)) continue;
     if (/re-derived rather than remembered|as of that revision/i.test(line + '\n' + (lines[i - 1] ?? ''))) {
       continue;
     }
-    for (const re of gate.res ?? []) {
+    for (const re of patterns) {
       for (const m of line.matchAll(re)) out.push(Number(m[1]));
     }
   }
   return [...new Set(out)].filter((n) => Number.isInteger(n) && n > 0 && n < 500);
 };
 
-const disagree = (label, counts) => {
+const disagree = (label, counts, gate) => {
   if (counts.length > 1) {
     problems.push(
       `the ${label} gate is counted ${counts.join(' and ')} on lines that name it; `
       + 'the smaller figures are stale',
+    );
+    return;
+  }
+  /**
+   * No figures found is not agreement.
+   *
+   * This is the defect the previous commit fixed for the unit-test total and the §6 line
+   * counts, and it was still live one function away: every pattern is written against a
+   * *form*, so a document that stops using that form leaves `counts` empty — and an empty
+   * list is vacuously consistent, which is exactly what was being reported.
+   *
+   * Demonstrated before the fix: rewording all four e2e figure forms to non-numeric text
+   * produced `all checks passed`, exit 0. `disagreement` and `absence` are different
+   * failures and only one of them was detected.
+   */
+  if (counts.length === 0 && gate.mustFind) {
+    problems.push(
+      `the ${label} gate has no figure anywhere in this file, so nothing was compared; `
+      + 'the patterns no longer match how this document states it',
     );
   }
 };
 
 for (const gate of GATE_FIGURES) {
   if (gate.baseRes) {
-    // Compared like with like: the per-viewport base against itself, and the
-    // total against itself. Mixing them is a false positive — 53 and 159 are not
-    // two answers to the same question.
-    const base = [];
-    const total = [];
-    for (let i = 0; i < lines.length; i++) {
-      if (!gate.token.test(lines[i])) continue;
-      if (/re-derived rather than remembered|as of that revision/i.test(lines[i] + (lines[i - 1] ?? ''))) continue;
-      for (const m of lines[i].matchAll(/(\d+) checks × \d+ viewports = (\d+)/g)) { base.push(Number(m[1])); total.push(Number(m[2])); }
-      for (const m of lines[i].matchAll(/screens (\d+) [x×]/g)) base.push(Number(m[1]));
-      for (const m of lines[i].matchAll(/(\d+) checks x (\d+) viewports \((\d+) total\)/g)) { base.push(Number(m[1])); total.push(Number(m[3])); }
-      for (const m of lines[i].matchAll(/\| `test\/screens\.mjs` \| (\d+)/g)) total.push(Number(m[1]));
-    }
-    const uniq = (a) => [...new Set(a)].filter((n) => n > 0 && n < 500);
-    disagree(`${gate.name} (per viewport)`, uniq(base));
-    disagree(`${gate.name} (total)`, uniq(total));
-    // And the arithmetic itself.
-    for (const m of doc.matchAll(/(\d+) checks [x×] (\d+) viewports = (\d+)/g)) {
-      const [, a, b, c] = m.map(Number);
-      if (a * b !== c) problems.push(`§2 says ${a} × ${b} = ${c}, which is not ${a * b}`);
-    }
+    // Compared like with like: the per-viewport base against itself, and the total against
+    // itself. Mixing them is a false positive — 53 and 159 answer different questions.
+    disagree(`${gate.name} (per viewport)`, gateCounts(gate, gate.baseRes), gate);
+    disagree(`${gate.name} (total)`, gateCounts(gate, gate.totalRes), gate);
     continue;
   }
-  disagree(gate.name, gateCounts(gate));
+  disagree(gate.name, gateCounts(gate, gate.res ?? []), gate);
 }
 
 /** Every `checks × N = M` in this file must multiply out. */
@@ -388,7 +454,6 @@ for (const m of doc.matchAll(/(\d+) checks × (\d+) viewports = (\d+)/g)) {
   const [, a, b, c] = m.map(Number);
   if (a * b !== c) problems.push(`§2 says ${a} × ${b} = ${c}, which is not ${a * b}`);
 }
-
 /* ------------------------------- report ------------------------------- */
 
 console.log(`STATUS.md audit: ${listed.length} spec files listed, §7 gap list ends at ${maxGap}`);

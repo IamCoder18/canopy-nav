@@ -73,7 +73,8 @@ evaluated, which a pass or fail result does not tell you.
    — including row 10, corrected from "Done" to **Not done** (§3.5.2)
 2. [Verification state](#2-verification-state)
    — [the gate itself had stopped looking](#21-the-gate-itself-had-stopped-looking--which-is-the-eighth)
-   — [a gate recorded as 14/14 that failed one run in four](#22-a-gate-recorded-as-1414-that-failed-one-run-in-four)
+   — [three more holes in the gate](#22-three-more-holes-in-the-gate-all-the-same-shape)
+   — [a gate recorded as 14/14 that failed one run in four](#23-a-gate-recorded-as-1414-that-failed-one-run-in-four)
 3. [Features: what, how, why](#3-features-what-how-why)
 4. [Bugs found and fixed](#4-bugs-found-and-fixed)
 5. [Architecture decisions](#5-architecture-decisions)
@@ -142,7 +143,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1189 unit tests across 60 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1194 unit tests across 60 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -156,14 +157,14 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1189 passing**, 60 files |
+| Unit tests | `npm test` | **1194 passing**, 60 files |
 | End-to-end | `npm run e2e` | **69 checks** against the built bundle — +11 for the memory guard, +2 for the crop (§14.19, §14.20) |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
 | Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
 | Offline shell | `npm run swshell` | a captive portal answered 2 navigations, then the network went off: the app still boots, 5 launcher tiles |
 | Reflow at large text | `npm run reflow` | **12 checks, all passing** — was 3 failing at the start of §14 |
-| Text-scale detection | `npm run textscale` | **13 checks** — the large-text layout switches on for every way a platform can scale text (§14.8). Was recorded as 14 and as passing; it failed **3 of 12 runs** (§2.2) |
+| Text-scale detection | `npm run textscale` | **13 checks** — the large-text layout switches on for every way a platform can scale text (§14.8). Was recorded as 14 and as passing; it failed **3 of 12 runs** (§2.3) |
 | Bundle budget | `npm run bundle` | entry 112.0 kB / 130, initial 117.5 / 150, largest 282.0 / 300, total JS 417.8 / 460 (gzip) |
 | Offline cold start | verified in-browser | reload with the network off renders the app: 5 tiles, map sized, 0 console errors |
 | Release | v0.11.3 tag | **CI green, Release green**, APK attached |
@@ -234,7 +235,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **60 files, 1189 tests**. The previous
+retyped by hand. The table is the complete set: **60 files, 1194 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -245,7 +246,7 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1189 total double-counts contrast's 34 tests**: 1155 distinct test cases are
+that **the 1194 total double-counts contrast's 34 tests**: 1160 distinct test cases are
 declared across 60 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
@@ -336,7 +337,7 @@ reading it.
 | `tdz.spec.ts` | 5 | no `useMemo` in `App` closes over a binding declared later |
 | `app-render.spec.ts` | 4 | `App` renders; the root landmark is labelled and names the current screen |
 | `icons.spec.ts` | 4 | every maneuver kind renders distinct geometry |
-| `status-audit.spec.ts` | 18 | STATUS.md checked by mutating it: a stale figure in every place one is stated, a dead anchor, a wrong `×`, and the limit — it cannot read a claim for truth |
+| `status-audit.spec.ts` | 23 | STATUS.md checked by mutating it: a stale figure in every place one is stated, a dead anchor, a wrong `×`, and the limit — it cannot read a claim for truth |
 
 Browser gates, measured the same way:
 
@@ -347,6 +348,13 @@ Browser gates, measured the same way:
 | `tools/focus.mjs` | 15 | `npm run focus` |
 | `tools/sw-shellcheck.mjs` | 1 (offline boot after a captive portal) | `npm run swshell` |
 | `tools/reflow.mjs` | 12 passing — a diagnostic, §12.7; green as of §14 | `npm run reflow` |
+| `tools/textscale-check.mjs` | 13 — a gate; was 3-in-12 flaky (§2.3) | `npm run textscale` |
+
+**Six gates are compared against each other here**, and the row for each one has to exist
+for that to mean anything. `tools/textscale-check.mjs` had no row until this pass, so its
+figure appeared in exactly one place — which makes it a claim no disagreement check can
+contradict, and §2.1's whole subject is that a figure stated once is a claim rather than a
+measurement. Adding the row is the fix; there is no way to check a single copy.
 
 **Seven counts in this document have now been wrong at least once, and each was wrong the
 same way.** The e2e count (§2). The screen figure, recorded as both "29 × 3 = 87" and "50 × 3
@@ -470,7 +478,54 @@ of the truth still passes, and the test says so in its own body rather than impl
 strength it does not have. A check that cannot read prose for truth is worth having and is
 not sufficient, and this section's whole history is the argument for that sentence.
 
-### 2.2 A gate recorded as 14/14 that failed one run in four
+### 2.2 Three more holes in the gate, all the same shape
+
+An adversarial review of the two commits above found all three, and each was found by asking
+*what does this pattern actually match* rather than by reading the code.
+
+**The browser-gate check could not detect absence.** `disagree()` pushed a problem when a
+gate was counted two different ways and returned success otherwise — so a document in which it
+was counted **zero** ways also returned success. Demonstrated: rewording all four e2e figure
+forms to non-numeric text gave `all checks passed`, exit 0. This is the same defect the
+previous commit fixed for the unit-test total and the §6 line counts, one function away.
+`mustFind` now makes "found nothing" a complaint, and it is the difference between
+*disagreement* and *absence*, which are two failures and had one detector.
+
+**Three of six browser gates were not compared at all.** `GATE_FIGURES` listed e2e, screens
+and focus. §2's table also states reflow, textscale and swshell, so a stale copy of any of
+those was invisible — the seventh wrong figure's failure again, one level up: two places
+disagreeing, and a gate built to compare them not looking. All six are compared now, and each
+is verified to catch both a disagreement and an absence.
+
+**Matching gates by name was wrong in a way that looked like it worked.** The first attempt
+used the gate's *name* as the line predicate, so `\btextscale\b` also matched §2's breakdown
+rows for `textscale.spec.ts` and `textscale-layout.spec.ts` — unit-test files with counts of
+16 and 13. That is not a disagreement; it is a comparison of a browser check count against
+two spec counts, which is "the screens gate given the e2e number" one level down. Every gate
+is now bound to the lines naming *its command or its tool*.
+
+And a fourth, found while fixing the third: §2's screens row states the base and the total in
+one bold cell, and the total pattern captured the **first** number in it — so the base was
+being compared against the total as though they answered the same question. Base and total are
+now matched separately, and the total pattern discards the base.
+
+*Written without quoting that cell verbatim*, which is what the paragraph above at the end of
+§2.1 warns about: reproducing a figure in order to explain it puts the figure back, and the
+audit is right to object. It did, twice, before this sentence was reworded — and the second
+complaint was about the *tests* rather than the document, which is the honest direction for a
+gate to fail in.
+
+**Two of the six gates still have only one copy of their figure**, so for `swshell` absence
+is checkable and disagreement is not. That is a property of the document rather than of the
+audit, and it is recorded instead of papered over: a single copy is a claim, and §2.1's
+argument applies to it too. `textscale` *had* one copy until this pass, so §2's per-tool table
+now has a row for it — there is no way to check a figure that appears once.
+
+`test/status-audit.spec.ts` grew five tests for these (23 in all), and three reversals were
+verified to fail: absence no longer complained of, the textscale gate read by a bare token,
+and the screens total capturing the base.
+
+### 2.3 A gate recorded as 14/14 that failed one run in four
 
 Running the gates rather than reading them turned up something the tables above had
 recorded as clean. `npm run textscale` is a **gate** — it is in `npm run status`'s own
@@ -1697,7 +1752,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              395  RegionLibrary singleton, per-region workers, memory gate
 
-test/            1189 unit tests, 60 files
+test/            1194 unit tests, 60 files
 test/e2e.mjs           69 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1710,11 +1765,11 @@ tools/reflow.mjs        368 chrome overlap at 100/175/200% text (§13.8) — a
                              reports nothing stops being read (§12.7)
 tools/textscale-check.mjs 376 does the app notice a text scale that leaves
                              the root font size alone (§14.8) — a gate;
-                             was 3-in-12 flaky (§2.2)
+                             was 3-in-12 flaky (§2.3)
 tools/focus.mjs         297 15 keyboard/focus checks in a real browser (§11)
 tools/shots.mjs         195 screenshot every screen + computed styles (§11)
 tools/sw-shellcheck.mjs  99 offline boot after a captive portal (§13.3) — a gate
-tools/status-audit.mjs   406 STATUS.md checked against the files it describes
+tools/status-audit.mjs   471 STATUS.md checked against the files it describes
 tools/diag-route.mjs     55 throwaway used to read a failing e2e check (§3.19)
 ```
 
@@ -2137,7 +2192,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1189 unit tests
+npm test             # 1194 unit tests
 npm run e2e          # 69 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
