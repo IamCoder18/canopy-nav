@@ -225,6 +225,13 @@ export const FIX_INTERVAL_MS = 1000;
  *
  * The same trap is waiting for a real machine: a backgrounded tab, a suspended app, or a
  * laptop that slept all produce the same gap, so this is not a debug-tool bug.
+ *
+ * **This constant is not the fix for that crash — the skip block below it is.** It bounds
+ * the worst case at one boundary value: the block skips when the gap is strictly greater
+ * than `MAX_FIXES_PER_TICK * FIX_INTERVAL_MS` and leaves exactly that value to the loop. An
+ * adversarial review found the cap verified by nothing and this comment crediting it for
+ * stopping a renderer crash; it is kept because it is cheap and because a boundary is a
+ * boundary, and the credit now goes where the work is.
  */
 const MAX_FIXES_PER_TICK = 4;
 
@@ -323,8 +330,18 @@ export function tick(
 
   if (!frozen && !stopped) {
     let along = s.along + (reversing ? -opts.speed : opts.speed) * (dt / 1000);
-    // A `reverse` that reaches the start stops there rather than running off the end, which
-    // would produce positions the app would rightly refuse.
+    /*
+     * Both ends stop the car.
+     *
+     * A `reverse` that reaches the start stops there rather than running off the end, which
+     * would produce positions the app would rightly refuse.
+     *
+     * And reaching the destination stops the car too — it used to clamp `along` to `total`
+     * and carry on reporting `speed: 13`, so a simulator sitting at the arrival point was
+     * indistinguishable from a working one by anything on the panel. The fixture routes in
+     * this app are ~250 m, so that state arrives after about twenty seconds and is what
+     * anyone using the tool for longer would be looking at.
+     */
     if (reversing && along < 0) along = 0;
     if (!reversing && along > total) along = total;
     s = { ...s, along };
@@ -380,9 +397,12 @@ export function tick(
       pos = [pos[0] + a / (111320 * Math.cos((pos[1] * Math.PI) / 180)), pos[1] + b / 111320];
     }
 
+    const atDestination = total > 0 && s.along >= total - 1;
     fixes.push({
       pos,
-      speed: reversing ? -speed : stopped ? 0 : speed,
+      // `atDestination` before `reversing`: driving backwards from the end is not a thing,
+      // and `reverse` winning here would report -13 m/s at a stationary car.
+      speed: atDestination ? 0 : reversing ? -speed : stopped ? 0 : speed,
       heading,
       accuracy: opts.accuracy,
       ts: at,
@@ -412,10 +432,25 @@ export function withFault(state: SimulatorState, fault: Fault, at?: number): Sim
   return { ...state, queue: [...state.queue, f] };
 }
 
-/** How far along the route the car is, for the UI. */
+/**
+ * How far along the route the car is, for the UI.
+ *
+ * **Clamped to [0, 1].** It was `along / total` raw, which could exceed 1 and render a
+ * percentage above 100 and a slider value past its own `max`. Unreachable through
+ * `positionAlong`, which clamps -- but `state.along` is set by `scrubTo` too, and a clamp
+ * that only exists in one of the two writers is a clamp that is one bug away from not being
+ * one.
+ */
 export function progressFraction(state: SimulatorState, route: LatLng[]): number {
   const total = lineLength(route);
-  return total <= 0 ? 0 : state.along / total;
+  if (total <= 0) return 0;
+  return Math.max(0, Math.min(1, state.along / total));
+}
+
+/** Whether the car has reached the end of the route. */
+export function hasArrived(state: SimulatorState, route: LatLng[]): boolean {
+  const total = lineLength(route);
+  return total > 0 && state.along >= total - 1;
 }
 
 /** The vertex index the car is nearest — for the UI's "at segment N of M". */

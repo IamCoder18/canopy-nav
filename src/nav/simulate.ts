@@ -41,7 +41,7 @@
  * run that found something can be repeated exactly.
  */
 
-import type { LatLng } from '../geo';
+import { lineLength, type LatLng } from '../geo';
 import {
   initialState, tick, withFault, progressFraction,
   type Fault, type SimulatorOptions, type SimulatorState,
@@ -49,8 +49,16 @@ import {
 import type { Fix } from './location';
 
 export type SimHandle = {
-  /** Where to drive. Re-read every fix, so a reroute is followed rather than ignored. */
+  /**
+   * Where to drive, re-read on every fix.
+   *
+   * Point `SimHandle.setRoute` at the app's *current* geometry rather than passing a closure
+   * built during one render: a reroute replaces the array, and a closure captured at click
+   * time keeps serving the pre-reroute one.
+   */
   route: () => LatLng[];
+  /** Replace the route source. The app calls this whenever `route.geometry` changes. */
+  setRoute: (fn: () => LatLng[]) => void;
   /** Stop the synthetic clock. The real receiver is untouched throughout. */
   stop: () => void;
   /** Inject a fault now, or at `atMs` on the simulator's clock. */
@@ -132,33 +140,54 @@ export function installPositionSource(): void {
   realWatch = g.watchPosition.bind(g);
   realClear = g.clearWatch.bind(g);
 
-  g.watchPosition = ((
-    success: PositionCallback,
-    error?: PositionErrorCallback | null,
-    options?: PositionOptions,
-  ) => {
-    const id = nextId++;
-    watches.set(id, { success, error: error ?? null });
-    // The real provider is subscribed for every watch, always. Stopping the simulator
-    // therefore restores real fixes with no re-subscription, so nothing is leaked and a
-    // device with the simulator on by accident loses nothing.
-    const rid = realWatch!(
-      (p) => deliverReal(p),
-      error ? (e) => deliverError(e) : undefined,
-      options,
-    );
-    realIds.set(id, rid);
-    return id;
+  /*
+   * The assignments are guarded, and that is not belt-and-braces.
+   *
+   * This is called at module scope from `main.tsx`, before `createRoot`. A module is strict
+   * mode, and assigning to a non-writable host property *throws* there rather than failing
+   * silently -- so an engine or a locked-down WebView that refuses the write would have taken
+   * the whole app to a blank page, with the trace pointing at line 8 of `main.tsx`.
+   *
+   * A debug affordance may fail to install. It may not take the app down with it.
+   */
+  try {
+    g.watchPosition = ((
+      success: PositionCallback,
+      error?: PositionErrorCallback | null,
+      options?: PositionOptions,
+    ) => {
+      const id = nextId++;
+      watches.set(id, { success, error: error ?? null });
+      // The real provider is subscribed for every watch, always. Stopping the simulator
+      // therefore restores real fixes with no re-subscription, so nothing is leaked and a
+      // device with the simulator on by accident loses nothing.
+      const rid = realWatch!(
+        (p) => deliverReal(p),
+        error ? (e) => deliverError(e) : undefined,
+        options,
+      );
+      realIds.set(id, rid);
+      return id;
   }) as Geolocation['watchPosition'];
 
-  g.clearWatch = ((id: number) => {
-    const rid = realIds.get(id);
-    if (rid !== undefined) realClear!(rid);
-    realIds.delete(id);
-    watches.delete(id);
-  }) as Geolocation['clearWatch'];
+    g.clearWatch = ((id: number) => {
+      const rid = realIds.get(id);
+      if (rid !== undefined) realClear!(rid);
+      realIds.delete(id);
+      watches.delete(id);
+    }) as Geolocation['clearWatch'];
+    installed = true;
+  } catch {
+    // A refused write leaves the platform untouched, which is the correct outcome: the
+    // simulator simply is not available, and the app runs exactly as it would without this
+    // file having been imported. `installed` stays false, so `startSimulator` will say so.
+    installed = false;
+  }
+}
 
-  installed = true;
+/** Whether the multiplexer is actually in place. */
+export function positionSourceInstalled(): boolean {
+  return installed;
 }
 
 function deliverError(e: GeolocationPositionError) {
@@ -181,7 +210,6 @@ function deliverError(e: GeolocationPositionError) {
 type Running = {
   handle: SimHandle;
   timer: ReturnType<typeof setInterval>;
-  state: SimulatorState;
   opts: { route: LatLng[]; speed: number; accuracy: number; jitter: number; seed: number };
 };
 
@@ -209,7 +237,18 @@ export function startSimulator(
   installPositionSource();
   stopSimulator();
 
-  const getRoute = routeFn ?? (() => options.route);
+  /*
+   * The route, read fresh -- and read from a *ref*, not from the closure.
+   *
+   * The first version took `() => simRoute` from a click-time render. A reroute replaces
+   * `route.geometry` with a new array, and the closure kept returning the old one: the
+   * simulator drove the pre-reroute geometry while the app followed the new one, so the two
+   * silently disagreed and the panel divided the old route's progress by the new route's
+   * length. The claim on `SimHandle.route` -- "re-read every fix, so a reroute is followed" --
+   * was false of the code that carried it.
+   */
+  const routeRef: { current: () => LatLng[] } = { current: routeFn ?? (() => options.route) };
+  const getRoute = () => routeRef.current();
   if (getRoute().length < 2) return null;
 
   let state = initialState(options);
@@ -237,7 +276,10 @@ export function startSimulator(
 
   const handle: SimHandle = {
     route: getRoute,
-    stop: stopSimulator,
+    setRoute: (fn) => { routeRef.current = fn; },
+    // Bound to this run, not to the module function: `stopSimulator` stops whichever run is
+    // current, so an old handle's `stop()` used to stop the *new* one.
+    stop: () => stopRun(running),
     fault: (f, atMs) => {
       state = withFault(state, f, atMs);
       notify(state);
@@ -250,28 +292,43 @@ export function startSimulator(
     state: () => state,
   };
 
-  running = { handle, timer, state, opts };
+  running = { handle, timer, opts };
   notify(state);
   return handle;
 }
 
 /**
+/**
  * Stop the synthetic clock.
  *
- * Watches registered *after* this point were given `real: false` at subscribe time, so they
- * are not waiting on a real provider and will go quiet until the app re-subscribes — which
- * `useLocation` does not do on its own. That is a real limitation, stated rather than papered
- * over: the panel says the simulator stopped, and the honest statement is that a driver who
- * toggles it off mid-session needs a reload to get the real GPS back on the existing watch.
- * The receiver is never dropped, so nothing is leaked.
+ * **The real receiver resumes immediately and no re-subscription is needed.** Every watch is
+ * subscribed to the real provider from the moment it is registered —
+ * `installPositionSource` does that unconditionally — and `deliverReal` suppresses delivery
+ * only while `running`. Nulling `running` is the whole of the restore.
+ *
+ * Which corrects an earlier claim in this file and in STATUS.md §14.22, both of which said
+ * a driver would need a reload. That was invented: it followed from a per-watch `real` flag
+ * that does not exist in this file, and it was never tested. The reload is not needed.
  */
+/** Stop a specific run. Separate so a stale handle cannot stop a newer one. */
+function stopRun(target: Running | null): void {
+  if (!target || target !== running) return;
+  stopSimulator();
+}
+
 export function stopSimulator(): void {
   if (!running) return;
   clearInterval(running.timer);
-  const finished = running.state;
+  // Read through the handle, which closes over the live state. A `running.state` field
+  // cannot work: the interval reassigns the closure variable and never touches the field, so
+  // the field stays on `initialState`'s object with `emitted: 0` forever.
+  const finished = running.handle.state();
   running = null;
+  // The counts are kept. The run happened, and a debug panel that forgets it the moment you
+  // stop looking is worse than useless when the question is "did that work".
   notify({ ...finished, active: [], queue: [] });
 }
+
 
 /** Whether the synthetic clock is running. */
 export function simulatorInstalled(): boolean {
@@ -312,14 +369,19 @@ export function uninstallPositionSource(): void {
   installed = false;
 }
 
+/**
+ * `lineLength`, not a second implementation of it.
+ *
+ * This re-derived the route length with a flat equirectangular approximation, while
+ * `simulator.ts` and the panel both use `geo.lineLength`. On the test route the two disagreed
+ * by 0.11%, which is small and entirely sufficient: `scrubTo(1.0)` set `along` *past* the
+ * end, the panel rendered `100%` from `round(1.0011 * 100)`, and the slider was handed
+ * `value={1001}` against `max={1000}`.
+ *
+ * One measurement, one function.
+ */
 function totalOf(route: LatLng[]): number {
-  let m = 0;
-  for (let i = 0; i + 1 < route.length; i++) {
-    const a = route[i]!;
-    const b = route[i + 1]!;
-    m += Math.hypot((b[0] - a[0]) * Math.cos((a[1] * Math.PI) / 180) * 111320, (b[1] - a[1]) * 111320);
-  }
-  return m;
+  return lineLength(route);
 }
 
 /** `Fix` → a `GeolocationPosition`, so the app's own conversion runs unchanged. */

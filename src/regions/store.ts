@@ -210,9 +210,17 @@ export async function importRegionFile(req: ImportRequest): Promise<OsmDataset |
      */
     if (dataset.cropIgnored) {
       onWarn?.(
-        'Only the area inside the chosen box was read from this file — the format it is in '
-        + 'does not support cropping, so the whole of it was parsed. If the app closes while '
-        + 'importing, convert it to .osm.pbf first.',
+        // One sentence, saying one thing.
+        //
+        // The first version read: "Only the area inside the chosen box was read from this
+        // file -- the format it is in does not support cropping, so the whole of it was
+        // parsed." Two opposite claims in one string, in the warning whose entire purpose is
+        // to tell a driver that asking for a metro area got them the province. A message that
+        // contradicts itself cannot be acted on, and the reader has no way to tell which half
+        // is true.
+        'This file was read in full: ' + (req.file.name || 'the extract')
+        + ' is a format that cannot be cropped, so the chosen area was ignored. If the app '
+        + 'closes while importing, convert it to .osm.pbf first and try again.',
       );
     }
     const cropStats = dataset.cropStats;

@@ -147,7 +147,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1250 unit tests across 63 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1261 unit tests across 64 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -161,8 +161,8 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1250 passing**, 63 files |
-| End-to-end | `npm run e2e` | **81 checks** against the built bundle — +11 for the memory guard, +2 for the crop, +9 for the drive simulator |
+| Unit tests | `npm test` | **1261 passing**, 64 files |
+| End-to-end | `npm run e2e` | **81 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
 | Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
@@ -170,7 +170,7 @@ stands. **Bold** = fully working and verified.
 | Reflow at large text | `npm run reflow` | **12 checks, all passing** — was 3 failing at the start of §14 |
 | Text-scale detection | `npm run textscale` | **13 checks** — the large-text layout switches on for every way a platform can scale text (§14.8). Was recorded as 14 and as passing; it failed **3 of 12 runs** (§2.3) |
 | Memory gate | `npm run memory` | **8 checks** — the boxed node map measured at **116–133 B/node** against the 229 B/node budget, plus four structural properties (§15.3 item 10) |
-| Bundle budget | `npm run bundle` | entry 112.0 kB / 130, initial 117.5 / 150, largest 282.0 / 300, total JS 417.8 / 460 (gzip) |
+| Bundle budget | `npm run bundle` | entry 119.2 kB / 130, initial 125.6 / 150, largest 282.1 / 300, total JS 426.7 / 460 (gzip) |
 | Offline cold start | verified in-browser | reload with the network off renders the app: 5 tiles, map sized, 0 console errors |
 | Release | v0.11.3 tag | **CI green, Release green**, APK attached |
 | APK | `npm run apk` | debug APK, `com.canopy.nav`, minSdk 23, targetSdk 35 |
@@ -240,7 +240,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **63 files, 1250 tests**. The previous
+retyped by hand. The table is the complete set: **64 files, 1261 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -251,8 +251,8 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1250 total double-counts contrast's 34 tests**: 1216 distinct test cases are
-declared across 63 files. Both figures are recorded rather than reconciled by lowering the
+that **the 1261 total double-counts contrast's 34 tests**: 1227 distinct test cases are
+declared across 64 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
 
@@ -323,8 +323,9 @@ reading it.
 | `probebound.spec.ts` | 6 | the catalogue probe is bounded, and every entry reaches a verdict |
 | `steps.spec.ts` | 8 | why the turn list is empty — three causes, three honest explanations |
 | `pbfcrop.spec.ts` | 12 | the crop: a cropped parse equals the unfiltered one restricted to the same box, on both readers and against the XML parser; a road leaving the box splits into runs rather than joining across the gap |
+| `import-cropwarn.spec.ts` | 8 | §15.1 item 4's consumer half: what `importRegionFile` does with the counts the reader reports, driven through the real import path with the parse stubbed |
 | `guidance.spec.ts` | 15 | the offline turn inference, and the trace of how it decided: every window it looked at, with the two bearings, the signed turn, and — for the ones it rejected — the number and the threshold it missed |
-| `simulator.spec.ts` | 32 | the drive simulator's pure core: a seeded generator, metre-accurate interpolation, seven fault kinds, and the catch-up bound that stops a `Date.now()` clock replaying the time since 1970 |
+| `simulator.spec.ts` | 35 | the drive simulator's pure core: a seeded generator, metre-accurate interpolation, seven fault kinds, and the catch-up bound that stops a `Date.now()` clock replaying the time since 1970 |
 | `memory.spec.ts` | 8 | the memory gate: the boxed node map measured against the same 229 B/node the guard uses, plus the structural properties that keep the file out of memory |
 | `worker-crop.spec.ts` | 6 | the crop across all three seams: `engine.ts`'s postMessage, both of the worker's PBF paths, and the reader's filter — driven through the worker's real `onmessage` handler, with a `Worker` stub for the message |
 | `pbf.spec.ts` | 28 | PBF vs XML parser equivalence on a hand-built file and the whole fixture; **the streaming reader** against the whole-file one at every chunk size, starvation, bounded read-ahead, and the same corrupt inputs |
@@ -363,6 +364,25 @@ for that to mean anything. `tools/textscale-check.mjs` had no row until this pas
 figure appeared in exactly one place — which makes it a claim no disagreement check can
 contradict, and §2.1's whole subject is that a figure stated once is a claim rather than a
 measurement. Adding the row is the fix; there is no way to check a single copy.
+
+**A row that was stale for two commits, and the reason nothing caught it.** The bundle row
+above read *entry 112.0, initial 117.5, total JS 417.8* while the builds measured *112.0 →
+115.5 → 118.3* across the three commits before this one. `simulate.ts` is imported by
+`main.tsx`, so the whole simulator lands in the **entry** chunk — confirmed by the literals
+being present in `main-*.js` and absent from every lazy chunk. The commits that added it said
+"bundle in budget", which the gate confirms and the recorded number does not.
+
+`GATE_FIGURES` covers e2e, screens, focus, reflow, textscale and swshell. **`memory`,
+`bundle` and `lint` are single-copy claims** — §2.2's own rule, applied to §2's own table,
+three rows down from the section that states every count in the table is measured.
+
+**One figure was removed rather than corrected.** This table's e2e row used to decompose
+the total — "+11 for the memory guard, +2 for the crop, +9 for the drive simulator". An
+adversarial review measured every block and got **12, 1 and 11**: all three wrong. Worse, the
+drive-simulator block emits 2 checks without a route and 11 with one, so the figure was
+branch-dependent before it was wrong — §2.3's own rule about a number nobody re-derived.
+`GATE_FIGURES` compares the total across the document and never decomposes it, so nothing
+downstream could have caught it. The total is the checkable number; the breakdown is not.
 
 **Seven counts in this document have now been wrong at least once, and each was wrong the
 same way.** The e2e count (§2). The screen figure, recorded as both "29 × 3 = 87" and "50 × 3
@@ -1725,7 +1745,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx                4253  screens, navigation state, focus + announcements,
+  App.tsx                4308  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            222  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
@@ -1773,9 +1793,9 @@ src/
     download.ts          1493  streaming downloader, resume, part-file handling
     RegionsScreen.tsx    1247  manage, catalogue, cross-region route test
     persist.ts            650  IndexedDB caching of parsed datasets
-    store.ts              436  RegionLibrary singleton, per-region workers, memory gate
+    store.ts              444  RegionLibrary singleton, per-region workers, memory gate
 
-test/            1250 unit tests, 63 files
+test/            1261 unit tests, 64 files
 test/e2e.mjs           81 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -2298,7 +2318,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1250 unit tests
+npm test             # 1261 unit tests
 npm run e2e          # 81 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -5081,10 +5101,58 @@ fifth — the fourth no-op reversal of this kind in the project — was written 
 `void fraction; void total;` and refused to compile, which is the reminder: *the reversal did
 not take* and *the check passed* have to be told apart by reading the build, not the check.
 
-**One honest limit.** Stopping the simulator mid-session does not re-subscribe the app's
-existing watch to the real receiver, so a driver who toggles it off needs a reload to get the
-real GPS back. Nothing is leaked — the receiver stays subscribed throughout and its fixes
-resume at once — but it is what the code says rather than what would be nicer to say.
+**One thing this section got wrong, corrected.** It previously said that stopping the
+simulator mid-session left the app's existing watch attached to nothing, so a driver who
+toggled it off would **need a reload** to get the real GPS back — and in the same sentence,
+that the receiver's fixes "resume at once". Both cannot be true, and an adversarial review
+established which: **no reload is needed.** Every watch is subscribed to the real provider
+from the moment it is registered, and delivery is suppressed only while the simulator is
+running, so nulling its state *is* the restore. Verified against a stubbed
+`navigator.geolocation`, which received a real fix the instant the simulator stopped.
+
+The false half had a traceable origin: `stopSimulator`'s own docstring described a per-watch
+`real` flag that does not exist anywhere in the file. Which is this document's own subject
+wearing a different hat — a symptom was consistent with a defect, the defect had already been
+found and fixed, and the *explanation* was invented to fit the stale symptom.
+
+**And the evidence figure below was one this code could not produce.** `stopSimulator`
+always notified `emitted: 0`, because `running.state` held the object `initialState` returned
+and the interval reassigned the closure variable instead. So the e2e clock check's passing
+run read *0 fixes at stop, 0 four seconds later*, and the reversal the review re-ran read
+*(7 at stop, 11 four seconds later)* — neither of which is the `(17 at stop, 21 four seconds
+later)` recorded here. A recorded figure the code cannot emit is worse than no figure. It
+now reads from a run, and the panel shows the real count instead of a zero.
+
+Three more from the same review, all product-facing rather than test-facing:
+
+- **The panel reported a receipt that had not happened.** `useLocation` types `fix` as
+  non-optional and seeds it with `simulatedFix()`, so the "no position" branch was
+  unreachable: with the simulator delivering nothing, the panel said *App last received
+  51.0447, −114.0719 at 0 km/h* — the Calgary placeholder, from nowhere. A check asserting the
+  **absence** of that string passed, because the string could never appear. The panel now
+  compares `fix.ts` against its own mount time and says "no position yet" until something
+  genuinely arrives.
+- **A "Start" button that started nothing.** The guard was `simRoute === null`, so a route
+  with `geometry: []` rendered a working-looking control that `startSimulator` refused to
+  start — and `simRoute[0]!` in the teleport button is the same case, one click from a crash.
+- **The reroute claim on `SimHandle.route` was false.** It said the route is re-read "so a
+  reroute is followed"; the closure was captured at click time and kept serving the
+  pre-reroute array, so the simulator drove the old geometry while the app followed the new
+  one. It comes from a ref the panel refreshes every render now.
+
+Two more the same review found in code the tests agreed with, because nothing was checking:
+
+- `installPositionSource` runs at module scope from `main.tsx`, **before** `createRoot`. A
+  module is strict mode and assigning to a non-writable host property *throws* there — so an
+  engine or locked-down WebView that refused the write would have taken the whole app to a
+  blank page, with the trace pointing at line 8 of `main.tsx`. The assignments are guarded;
+  a debug affordance may fail to install, and it may not take the app down.
+- `stopSimulator` is reachable from a stale handle, which stopped whichever run was
+  *current* rather than its own. It now takes the run it is asked to stop.
+- `totalOf` re-derived the route length with a flat equirectangular approximation while
+  `geo.lineLength` did it everywhere else. On the test route they disagreed by 0.11%, which
+  is small and entirely sufficient: `scrubTo(1.0)` set `along` *past* the end and handed the
+  slider `value={1001}` against `max={1000}`. One measurement, one function.
 
 ## 15. The roadmap
 

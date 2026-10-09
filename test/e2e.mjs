@@ -346,8 +346,20 @@ console.log('\ndrive simulator');
       fixEarly.length > 0 && fixLate.length > 0 && fixEarly !== fixLate,
       `"${fixEarly}" then "${fixLate}"`);
 
-    check('the panel says so plainly when the app has received nothing',
-      !/App has received no position/.test(fixLate), fixLate.slice(0, 90));
+    /*
+     * The panel's receipt, asserted in the positive.
+     *
+     * The previous form asserted `!/App has received no position/` — a negative against a
+     * string that could never appear, because `useLocation` types `fix` as non-optional and
+     * seeds it with `simulatedFix()`. The panel was rendering the Calgary placeholder at
+     * 0 km/h as a receipt that had never happened, and the check called it a pass.
+     *
+     * The positive form is the claim: with the simulator running, the app has received a
+     * position, and it says so with a real coordinate.
+     */
+    check('the panel reports a position the app actually received',
+      /App received [\d-]+\.\d+, [\d-]+\.\d+ at \d+ km\/h/.test(fixLate),
+      fixLate.slice(0, 90));
 
     /*
      * The guidance trace, which is the item §7 gap 6 has needed for four passes.
@@ -407,9 +419,44 @@ console.log('\ndrive simulator');
     await page.waitForTimeout(1000);
     check('stopping it takes the panel down',
       (await page.$('[data-testid=sim-panel]')) === null);
-    const restored = await page.evaluate(() =>
-      typeof navigator.geolocation.watchPosition === 'function');
-    check('it hands the real watchPosition back', restored);
+    /*
+     * What actually happens on stop, asserted rather than asserted-adjacent.
+     *
+     * The previous check here was `typeof navigator.geolocation.watchPosition === 'function'`
+     * — true before the multiplexer, during it, and after it, so it could not fail. And it
+     * was named "it hands the real watchPosition back", which is *false*: `stopSimulator`
+     * nulls its state and does not touch the method. `uninstallPositionSource` is the only
+     * thing that restores it and nothing calls it.
+     *
+     * So the permanent multiplexing is now stated as the fact it is, and the check that
+     * matters is the behavioural one: real fixes resume with no reload, which is what the
+     * code does and what the old docstring said it did not.
+     */
+    /*
+     * Real positions resume the moment the simulator stops, with no reload.
+     *
+     * Measured by watching what the app receives. The page's geolocation is pinned, so a fix
+     * arriving now is the real provider's, not the simulator's -- and `deliverReal` is
+     * suppressed only while a simulator is running.
+     */
+    /*
+     * This Chromium context has **no real position at all** — the app has been on its
+     * simulated fallback throughout — so "real fixes resume" cannot be observed here and is
+     * not asserted. It was verified against a stubbed `navigator.geolocation`, which saw a
+     * real fix delivered the instant `running` was nulled; §14.22 records that.
+     *
+     * What *is* observable, and is the property §14.19's panel exists for, is that with
+     * nothing delivered the panel says so rather than showing the fallback as a receipt. The
+     * previous version of this check asserted the *absence* of a string that could never
+     * appear, because `useLocation` seeds `fix` with `simulatedFix()` and types it
+     * non-optional — so the panel rendered the Calgary placeholder at 0 km/h as a position it
+     * had received from somewhere, and the check called that a pass.
+     */
+    await page.waitForTimeout(3500);
+    const realBack = await page.evaluate(() =>
+      document.querySelector('[data-testid=sim-app-fix]')?.textContent ?? '');
+    check('with nothing delivered the panel says so, rather than showing the fallback',
+      /App has received no position yet/.test(realBack), realBack.slice(0, 90));
 
     /*
      * The interval is actually cleared.
@@ -1332,7 +1379,7 @@ console.log('\ndrive simulator');
    * `cropIgnored` for it rather than pretending. Asserting the PBF path is what
    * distinguishes "cropped" from "parsed and happened to be small".
    */
-  console.log('\ncropped import');
+  console.log('\nimport an extract that fits');
   {
     await page.goto(BASE, { waitUntil: 'networkidle' });
     await page.waitForTimeout(2000);
@@ -1363,6 +1410,17 @@ console.log('\ndrive simulator');
       undefined, { timeout: 40000, polling: 300 },
     ).catch(() => {});
     const small = await page.evaluate(() => document.body.innerText);
+    /*
+     * This block is NOT about cropping, whatever it used to be named.
+     *
+     * It does `setInputFiles(fixture.osm.pbf)` and asserts the region loaded. There is no
+     * crop in it: the crop is exercised in the memory-guard block above, under a `2 GB`
+     * stub, because that is the only place the guard lets a crop through at all.
+     *
+     * The old name was `cropped import` with a comment claiming clicking the area button
+     * "produces a cropped parse rather than a whole-file one" — a check named for one thing
+     * and measuring another, which is §13.16 verbatim.
+     */
     check('an extract the device can hold is imported, not refused',
       /routable ways/.test(small) && !/not expected to have enough memory/.test(small),
       small.match(/[\d,]+ routable ways/)?.[0] ?? small.slice(0, 70).replace(/\n/g, ' '));

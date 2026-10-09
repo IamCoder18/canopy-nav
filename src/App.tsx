@@ -3951,7 +3951,44 @@ function SettingsScreen(props: {
   const [simState, setSimState] = useState<SimulatorState | null>(simulatorState());
   useEffect(() => onSimulatorChange((s) => { setSimState(s); setSimTick((n) => n + 1); }), []);
   const simRunning = simulatorInstalled();
-  const simRoute = props.simRoute ?? null;
+  /**
+   * Whether the app has received a position *since this panel was opened*.
+   *
+   * `useLocation` cannot answer this — its `fix` is always populated, with a simulated
+   * placeholder — so the panel does the comparison itself and holds the mount time in a ref
+   * that does not move on re-render.
+   */
+  const simMountedAt = useRef(Date.now());
+  const [, forceSimRender] = useState(0);
+  useEffect(() => {
+    if (!simRunning) return;
+    const id = setInterval(() => forceSimRender((n) => n + 1), 500);
+    return () => clearInterval(id);
+  }, [simRunning]);
+  const simReceivedFix = !!props.simAppFix && props.simAppFix.ts >= simMountedAt.current;
+  /**
+   * The route to drive, or `null` when there is nothing to drive.
+   *
+   * `null` for an **empty** geometry too, not just an absent one. The guard used to be
+   * `=== null`, so a route with `geometry: []` rendered a working-looking "Start" button that
+   * started nothing — `startSimulator` returns `null` for a route under two points and the
+   * button reads "Start" forever. §4.6's shape, in a debug control.
+   *
+   * `simRoute[0]!` is reached by the teleport button, which is the same case, so the guard
+   * is the only thing standing between it and a crash.
+   */
+  const simRoute = (props.simRoute ?? []).length >= 2 ? props.simRoute! : null;
+
+  /**
+   * The route, in a ref the panel refreshes on every render.
+   *
+   * The simulator asks for the route on every fix, and a closure built at click time keeps
+   * serving that render's array for the rest of the session — so a reroute replaced
+   * `route.geometry` and the simulator went on driving the old one while the app followed the
+   * new one. A ref is the only thing that is current without being rebuilt.
+   */
+  const simRouteRef = useRef(simRoute);
+  simRouteRef.current = simRoute;
   const simFrac = simRoute && simState ? progressFraction(simState, simRoute) : 0;
   const simEmitted = simState?.emitted ?? 0;
   const simActive = simState?.active ?? [];
@@ -4038,7 +4075,11 @@ function SettingsScreen(props: {
                 <button
                   className={simRunning ? 'on' : ''}
                   data-testid="sim-toggle"
-                  onClick={() => (simRunning ? stopSimulator() : startSimulator({ route: simRoute, speed: 13, jitter: 2, seed: 1 }, () => simRoute))}
+                  onClick={() => {
+                    if (simRunning) { stopSimulator(); return; }
+                    startSimulator({ route: simRoute, speed: 13, jitter: 2, seed: 1 },
+                      () => simRouteRef.current ?? []);
+                  }}
                 >
                   {simRunning ? 'Driving' : 'Start'}
                 </button>
@@ -4077,12 +4118,26 @@ function SettingsScreen(props: {
                   </div>
                 </div>
               )}
-                  <div data-testid="sim-app-fix" style={{ ...T.sub3, color: ink.secondary }}>
-            {props.simAppFix
-              ? `App last received ${props.simAppFix.pos[1].toFixed(4)}, `
-                + `${props.simAppFix.pos[0].toFixed(4)} at `
-                + `${Math.round(props.simAppFix.speed * 3.6)} km/h`
-              : 'App has received no position'}
+                  {/*
+            The fix the app last received — and *only* once it has received one.
+
+            `useLocation` types its `fix` as non-optional and seeds it with
+            `simulatedFix()`, so this was always truthy and the "no position" branch was
+            unreachable: with the simulator delivering nothing, the panel cheerfully reported
+            the Calgary placeholder at 0 km/h as though it had been received from somewhere.
+            An adversarial review found it, and it is exactly the failure this panel exists to
+            diagnose — it was reporting a receipt that had not happened.
+
+            So the claim is `fix.ts` newer than the panel mounted. A device fix that arrives
+            independently would also satisfy it, which is honest: the panel says what the app
+            has, not where it came from.
+          */}
+          <div data-testid="sim-app-fix" style={{ ...T.sub3, color: ink.secondary }}>
+            {simReceivedFix
+              ? `App received ${props.simAppFix!.pos[1].toFixed(4)}, `
+                + `${props.simAppFix!.pos[0].toFixed(4)} at `
+                + `${Math.round(props.simAppFix!.speed * 3.6)} km/h`
+              : 'App has received no position yet'}
           </div>
           <div data-testid="sim-state" style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P2 }}>
             {`${simEmitted} fixes · ${Math.round(simFrac * 100)}% along · `}

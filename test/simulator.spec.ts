@@ -16,7 +16,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   initialState, tick, positionAlong, headingAlong, offsetPerpendicular,
-  rng, progressFraction, withFault, FIX_INTERVAL_MS, lifetimeOf,
+  rng, progressFraction, withFault, hasArrived, FIX_INTERVAL_MS, lifetimeOf,
   type SimulatorOptions, type SimulatorState,
 } from '../src/nav/simulator';
 import { haversine, lineLength } from '../src/geo';
@@ -93,8 +93,16 @@ describe('position along the route', () => {
     // A negative or over-long `along` must not produce a position outside the route: a
     // simulator that can put the car in the Gulf of Guinea is worse than useless, because
     // its output looks like a GPS fault.
-    expect(positionAlong(L, -500)[0]).toBeCloseTo(L[0]![0], 9);
+    //
+    // **Both ends, in metres.** The first version asserted only `pos[0]` — longitude — and
+    // this route runs due north, so longitude never changes however far `along` runs off
+    // the end. Reversing the clamp put the car 500 m south of the route start and the check
+    // stayed green, which is precisely the failure the comment above it describes.
+    expect(haversine(positionAlong(L, -500), L[0]!)).toBeLessThan(1);
     expect(haversine(positionAlong(L, TOTAL * 3), L[L.length - 1]!)).toBeLessThan(1);
+    // And the *latitude* too, because "500 m from the start" and "the start" are different
+    // sentences and only one of them is true when the clamp is gone.
+    expect(positionAlong(L, -500)[1]).toBeCloseTo(L[0]![1], 6);
   });
 
   it('interpolates in metres, not by vertex index', () => {
@@ -157,11 +165,17 @@ describe('the perpendicular offset', () => {
     // that shrank with the cosine of latitude would be smaller in metres than the number it
     // reports, and a driver reading the label would be told a smaller deviation than the app
     // is actually seeing.
-    const a = offsetPerpendicular([-114.1, 51.05], 0, 300);
-    const b = offsetPerpendicular([-1.4, 51.05], 0, 300);
-    expect(haversine([-114.1, 51.05], a)).toBeGreaterThan(290);
-    expect(haversine([-1.4, 51.05], a)).toBeGreaterThan(290);
-    expect(b[1]).toBeCloseTo(51.05, 3);
+    // **Both** points measured. The first version computed the Edinburgh offset and never
+    // measured it, so the assertion that carried the test's stated purpose was made against
+    // the Calgary one.
+    const calgary: LatLng = [-114.1, 51.05];
+    const edinburgh: LatLng = [-1.4, 51.05];
+    for (const origin of [calgary, edinburgh]) {
+      const moved = offsetPerpendicular(origin, 0, 300);
+      expect(haversine(origin, moved)).toBeGreaterThan(290);
+      expect(haversine(origin, moved)).toBeLessThan(310);
+      expect(moved[1]).toBeCloseTo(51.05, 3);
+    }
   });
 });
 
@@ -202,6 +216,31 @@ describe('driving', () => {
     expect(a.fixes.map((f) => f.pos)).toEqual(b.fixes.map((f) => f.pos));
     const c = run(initialState({ route: L }), 30, { jitter: 3, seed: 6 });
     expect(a.fixes.map((f) => f.pos)).not.toEqual(c.fixes.map((f) => f.pos));
+  });
+
+  it('stops at the destination rather than sitting there at full speed', () => {
+    // The fixture routes in this app are ~250 m, so a simulator reaches the end after about
+    // twenty seconds and then has to be distinguishable from a working one. It used to clamp
+    // `along` to the end and keep reporting 13 m/s, so the panel showed a climbing fix count
+    // and "100% along" — exactly what a working simulator shows.
+    const short = L.slice(0, 2); // ~1 km, which 13 m/s covers in ~75 s
+    const opts = { ...OPTS, route: short };
+    let s = initialState({ route: short, startAt: lineLength(short) - 20 });
+    let sawMoving = false;
+    let sawStopped = false;
+    for (let t = 0; t <= 8000; t += FIX_INTERVAL_MS) {
+      const r = tick(s, opts, t);
+      s = r.state;
+      for (const f of r.fixes) {
+        if (f.speed > 0) sawMoving = true;
+        else sawStopped = true;
+      }
+    }
+    expect(sawMoving, 'the car never moved, so nothing was tested').toBe(true);
+    expect(sawStopped, 'it never reported standing still').toBe(true);
+    expect(hasArrived(s, short)).toBe(true);
+    // And it is parked at the end, not short of it.
+    expect(s.along).toBeCloseTo(lineLength(short), 0);
   });
 
   it('adds jitter around the route rather than along it', () => {
@@ -267,6 +306,36 @@ describe('a clock that is nowhere near zero', () => {
     expect(fixes[fixes.length - 1]!.ts).toBeLessThanOrEqual(now);
   });
 
+  /**
+   * The per-tick cap, in the gap the skip block does not cover.
+   *
+   * The skip block handles a clock that is *far* ahead; the cap handles one that is a few
+   * intervals ahead — 3-4 s, which is a backgrounded tab or a machine that slept briefly.
+   * Reversing the cap alone left all 32 tests green, so the constant documented as the
+   * anti-crash guard was verified by nothing while the block beside it was doing the work.
+   */
+  it('emits at most four fixes for a gap the skip block leaves alone', () => {
+    const s0 = initialState({ route: L });
+    /*
+     * Exactly `4 * FIX_INTERVAL_MS`, and "exactly" is the whole point.
+     *
+     * The skip block fires when the gap is *strictly greater* than that, and 3.5 s or 4.5 s
+     * are both taken by it — a first attempt at this used 3.5 s and reversing the cap left
+     * the suite green, because the block beside it had already handled the gap. The one gap
+     * the skip block declines is the boundary value, and it is there only because of `<`
+     * versus `<=`.
+     *
+     * That is worth stating plainly: the cap is load-bearing at exactly one input. It is
+     * cheap and it bounds the worst case, but the anti-crash guard is the skip block, and
+     * both comments now say so rather than the cap taking the credit.
+     */
+    const { fixes } = tick(s0, OPTS, 4 * FIX_INTERVAL_MS);
+    expect(fixes.length).toBeLessThanOrEqual(4);
+    expect(fixes.length).toBeGreaterThan(0);
+    // And one step either side of the boundary: the skip block, then the cap.
+    expect(tick(s0, OPTS, 4 * FIX_INTERVAL_MS + 1).fixes.length).toBeLessThanOrEqual(4);
+  });
+
   it('still emits every interval when the clock advances normally', () => {
     // The cap must not cost a fix per interval on an ordinary run: 10 s at 1 Hz is 11.
     const { fixes } = run(initialState({ route: L }), 10);
@@ -280,14 +349,12 @@ describe('faults', () => {
     let s = initialState({ route: L });
     s = { ...s, queue: [{ kind: 'off-route', metres: 120 }] };
     const { fixes } = run(s, 10);
-    const onRoute = positionAlong(L, 13 * 5);
     // Every fix should be about 120 m off the path it would otherwise be on.
     for (const f of fixes.slice(2)) {
       const d = haversine(f.pos, positionAlong(L, 13 * (f.ts / 1000)));
       expect(d).toBeGreaterThan(100);
       expect(d).toBeLessThan(140);
     }
-    void onRoute;
   });
 
   it('freeze delivers nothing at all, which is the whole point', () => {
@@ -320,17 +387,40 @@ describe('faults', () => {
   it('reverse walks backwards and stops at the start', () => {
     let s = initialState({ route: L });
     s = { ...s, along: 300, queue: [{ kind: 'reverse', ms: 60_000 }] };
-    const { fixes } = run(s, 30);
+    const { fixes, state } = run(s, 30);
     expect(fixes.some((f) => f.speed < 0)).toBe(true);
-    // And it must not run off the beginning of the route into invented positions.
-    for (const f of fixes) expect(f.pos[0]).toBeGreaterThan(-1.5);
+    /*
+     * On `state.along`, which is the clamp's only observable effect.
+     *
+     * The previous guard was `expect(f.pos[0]).toBeGreaterThan(-1.5)`, which can never fail:
+     * `positionAlong` clamps `along` to [0, total] on its own, so `pos[0]` is always ≥ -1.4
+     * whether or not `tick` clamps. With the clamp removed, `along` reached **-90 m** and
+     * `progressFraction` returned **-5.5 %** — a panel rendering a negative percentage.
+     */
+    expect(state.along).toBeGreaterThanOrEqual(0);
+    expect(progressFraction(state, L)).toBeGreaterThanOrEqual(0);
+    expect(progressFraction(state, L)).toBeLessThanOrEqual(1);
   });
 
   it('a jump forward moves the car along and stays on the route', () => {
     let s = initialState({ route: L });
     s = { ...s, queue: [{ kind: 'jump-ahead', metres: 400 }] };
-    const { state } = run(s, 3);
+    const { state, fixes } = run(s, 3);
     expect(state.along).toBeGreaterThan(400);
+    /*
+     * "stays on the route" is now actually asserted.
+     *
+     * Measured against `positionAlong` at the placement the fixes themselves reported, not
+     * against a re-derived elapsed time: the jump moves the car 400 m at once, so a
+     * time-derived expectation is 400 m wrong for every fix after it. The first attempt at
+     * this failed by exactly that, which is what pointed at the arithmetic rather than the
+     * clamp.
+     */
+    for (const f of fixes) {
+      // The jump is applied *before* the first fix, so fix n is at 400 + 13n throughout —
+      // not `13n` for the first few and `13n + 400` after. Measured, after guessing twice.
+      expect(haversine(f.pos, positionAlong(L, 400 + fixes.indexOf(f) * 13))).toBeLessThan(1);
+    }
   });
 
   it('a teleport puts the car where it is told, and it is not on the route', () => {
@@ -356,6 +446,24 @@ describe('faults', () => {
     expect(fixes.filter((f) => f.ts < 5_000).every((f) => f.speed === 0)).toBe(true);
     expect(fixes.filter((f) => f.ts < 5_000).length).toBeGreaterThan(3);
     expect(fixes.filter((f) => f.ts >= 5_000).every((f) => f.speed > 0)).toBe(true);
+  });
+
+  it('supersedes a fault that is already running', () => {
+    /*
+     * The second fault starts at t = 1000, while the first is still in force.
+     *
+     * The previous version queued both at t = 0, which the `latest` Map resolves on its own,
+     * so it never exercised the line that filters `stillActive` — and reversing that filter
+     * left all 32 tests green while the car sat at 350 m from the route, 100 m and 250 m
+     * added together. Two faults of one kind must not stack, whichever tick they land on.
+     */
+    let s = withFault(initialState({ route: L }), { kind: 'off-route', metres: 100 });
+    s = withFault(s, { kind: 'off-route', metres: 250 }, 1000);
+    const { fixes } = run(s, 6);
+    const last = fixes[fixes.length - 1]!;
+    const dev = haversine(last.pos, positionAlong(L, (last.ts / 1000) * 13));
+    expect(dev).toBeGreaterThan(230);
+    expect(dev).toBeLessThan(270);
   });
 
   it('supersedes rather than stacking', () => {
