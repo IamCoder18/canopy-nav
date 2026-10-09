@@ -247,9 +247,32 @@ const largeLayoutApplied = (page) => page.evaluate(() => {
   return bar ? getComputedStyle(bar).getPropertyValue('flex-wrap').trim() : '(absent)';
 });
 
-/** A check that is meaningless unless the harness reached the navigation screen. */
+/**
+ * A check that is meaningless unless the harness reached the navigation screen.
+ *
+ * **Applied to every check in a block, not just the three that read navigation chrome.**
+ * An earlier version used it only for those three, which left nine others reporting a
+ * harness miss as a product failure — §2.3's own defect, in the file §2.3 says fixed it.
+ * So each block declares which checks are independent of the screen, and everything else
+ * goes through this.
+ *
+ * The exemptions are two per block and are genuinely independent: the detector's verdict is
+ * a `data-` attribute on `<html>`, and the root font size is read off the document, neither
+ * of which needs the navigation screen to exist.
+ */
+const SCREEN_INDEPENDENT = new Set([
+  'an unscaled app is marked normal',
+  'a platform that enlarges the root font size is detected',
+  'a platform that scales rendered text is detected',
+  'a platform that zooms the rendered text is detected',
+  'the setting can be turned up mid-session',
+  'lowering the setting again turns the large layout back off',
+  'the text was scaled without compounding',
+  'the root font size is genuinely untouched',
+]);
+
 const navCheck = (name, ok, detail = '') => {
-  if (currentBlockIsVoid) {
+  if (currentBlockIsVoid && !SCREEN_INDEPENDENT.has(name)) {
     console.log(`  SKIP  ${name} - the navigation screen was never reached`);
     return;
   }
@@ -275,7 +298,7 @@ const newNavContext = async (browser, label) => {
 console.log('\ntext scaling the root font size only');
 {
   const { ctx, page } = await newNavContext(browser, 'root font size');
-  check('an unscaled app is marked normal', await page.evaluate(
+    navCheck('an unscaled app is marked normal', await page.evaluate(
     () => document.documentElement.dataset.textsize === 'normal',
   ));
 
@@ -283,11 +306,11 @@ console.log('\ntext scaling the root font size only');
     document.documentElement.style.setProperty('font-size', '28px', 'important');
   });
   const sawRoot = await waitForVerdict('large')(page);
-  check('a platform that enlarges the root font size is detected', sawRoot,
+    navCheck('a platform that enlarges the root font size is detected', sawRoot,
     sawRoot ? '' : `data-textsize stayed "${await page.evaluate(() => document.documentElement.dataset.textsize)}"`);
-  navCheck('and the large-text layout is applied',
-    (await largeLayoutApplied(page)) === 'wrap',
-    `eta-bar flex-wrap: ${await largeLayoutApplied(page)}`);
+    navCheck('and the large-text layout is applied',
+      (await largeLayoutApplied(page)) === 'wrap',
+      `eta-bar flex-wrap: ${await largeLayoutApplied(page)}`);
   await page.screenshot({ path: join(SHOTS, 'textscale-root.png') });
   await ctx.close();
 }
@@ -299,8 +322,8 @@ console.log('\ntext scaling the rendered text, root untouched');
   const scaled = await page.evaluate(SCALE_TEXT_ONLY(1.75));
   // The precondition this whole block exists for: the root really is still 16px, so
   // the root-only detector could not possibly have seen this.
-  check('the text was scaled without compounding', scaled > 0, `${scaled} text elements`);
-  check('the root font size is genuinely untouched',
+    navCheck('the text was scaled without compounding', scaled > 0, `${scaled} text elements`);
+    navCheck('the root font size is genuinely untouched',
     Math.abs(await rootPx(page) - 16) < 0.01,
     `root is ${await rootPx(page)}px`);
   navCheck('the rendered text really did grow', await page.evaluate(
@@ -311,7 +334,7 @@ console.log('\ntext scaling the rendered text, root untouched');
   ), `eta-value is ${await page.evaluate(() => document.querySelector('.eta-value') ? getComputedStyle(document.querySelector('.eta-value')).fontSize : '(none)')}`);
 
   const sawText = await waitForVerdict('large')(page);
-  check('a platform that scales rendered text is detected', sawText,
+    navCheck('a platform that scales rendered text is detected', sawText,
     sawText ? 'this is the case the root-only detector missed'
             : `the app never noticed 1.75x type: data-textsize stayed "${await page.evaluate(() => document.documentElement.dataset.textsize)}"`);
   navCheck('and the large-text layout is applied',
@@ -328,12 +351,12 @@ console.log('\ntext scaling by zoom, root untouched');
   // `zoom` on the body is the closest a browser gets to WebView text zoom: the root's
   // computed size is unchanged and only rendering is scaled.
   await page.evaluate(() => { document.body.style.zoom = '1.75'; });
-  check('the root font size is genuinely untouched',
+    navCheck('the root font size is genuinely untouched',
     Math.abs(await rootPx(page) - 16) < 0.01,
     `root is ${await rootPx(page)}px`);
 
   const sawZoom = await waitForVerdict('large')(page);
-  check('a platform that zooms the rendered text is detected', sawZoom,
+    navCheck('a platform that zooms the rendered text is detected', sawZoom,
     sawZoom ? '' : `data-textsize stayed "${await page.evaluate(() => document.documentElement.dataset.textsize)}"`);
   await ctx.close();
 }
@@ -344,12 +367,12 @@ console.log('\nunscaled again, after scaling');
   const { ctx, page } = await newNavContext(browser, 'scaled back down');
   await page.evaluate(SCALE_TEXT_ONLY(1.75));
   const scaledUp = await waitForVerdict('large')(page);
-  check('the setting can be turned up mid-session', scaledUp,
+    navCheck('the setting can be turned up mid-session', scaledUp,
     scaledUp ? '' : `data-textsize stayed "${await page.evaluate(() => document.documentElement.dataset.textsize)}"`);
 
   await page.evaluate(RESTORE_TEXT);
   const scaledDown = await waitForVerdict('normal')(page);
-  check('lowering the setting again turns the large layout back off', scaledDown,
+    navCheck('lowering the setting again turns the large layout back off', scaledDown,
     scaledDown ? '' : `data-textsize stayed "${await page.evaluate(() => document.documentElement.dataset.textsize)}"`);
   navCheck('and normal type really is back',
     await page.evaluate(() => {

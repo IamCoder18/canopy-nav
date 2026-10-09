@@ -573,6 +573,21 @@ Four changes, in the order the reasoning required:
    gate that measured nothing is the worst outcome available, so that state is now
    unreachable.
 
+   **Two corrections to this, both found by review (§14.21) and both verified.** The `SKIP`
+   gate covered only the four checks that read navigation chrome, leaving nine to report a
+   harness miss as a product failure — the very defect §2.3 exists to prevent, in the file
+   §2.3 says fixed it. Every check now goes through it, with an explicit list of the eight
+   that genuinely do not need the screen: they read a `data-` attribute on `<html>` or the
+   root font size, neither of which depends on a screen existing.
+
+   And the fix for that had its own bug, which the reversal found: whether a block was "void"
+   was derived from *did this block add a harness failure*, which is wrong once an earlier
+   block has already failed — the later blocks skip their setup, record nothing new, and are
+   judged sound while reporting a harness miss as three product failures. Measured under a
+   forced miss: **4 SKIPs and 0 FAILs** across all four blocks, where the first attempt gave
+   **1 SKIP and 3 FAILs**. `openNavigating` now returns whether it reached the screen, and each
+   block's setup is guarded on *its own* outcome rather than on the global failure list.
+
 Measured after: **12 of 12 runs green**, against 9 of 12 before. And the fix is not merely
 "less flaky" — verified against a deliberately broken `src/textscale.ts` (the detector
 pinned to `normal`), where the gate reports **6 product failures naming the real cause**
@@ -1764,7 +1779,7 @@ tools/reflow.mjs        368 chrome overlap at 100/175/200% text (§13.8) — a
                              diagnostic, still not a gate: it needs a
                              browser and takes minutes, and one that
                              reports nothing stops being read (§12.7)
-tools/textscale-check.mjs 376 does the app notice a text scale that leaves
+tools/textscale-check.mjs 399 does the app notice a text scale that leaves
                              the root font size alone (§14.8) — a gate;
                              was 3-in-12 flaky (§2.3)
 tools/focus.mjs         297 15 keyboard/focus checks in a real browser (§11)

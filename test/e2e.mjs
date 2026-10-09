@@ -834,13 +834,17 @@ try {
     const GUARD_BYTES = Math.ceil((GUARD_BUDGET_MB * 1024 * 1024 * 2) / 112) * 8;
     {
       // Real XML head so preflight passes it through, padding tail because this file is
-      // never parsed — and the override click below proves that too.
+      // never parsed -- the override and crop clicks below prove that, by ending at the
+      // parser rather than at the guard.
       const head = Buffer.from('<?xml version="1.0"?>\n<osm version="0.6" generator="e2e">\n', 'utf8');
       const fd = openSync(guardFixture, 'w');
       writeSync(fd, head);
-      // Written in 4 MB chunks rather than one `Buffer.alloc`: the derived size is
-      // ~150 MB here and would be ~2.4 GB on a machine with a larger budget, and a single
-      // allocation that large is its own failure mode.
+      // Written in 4 MB chunks rather than one `Buffer.alloc`. The size is derived from
+      // `GUARD_DEVICE_MEMORY_GB`, which is a constant here, so it is the same on every host
+      // -- an earlier version of this comment claimed it varied with the machine's budget,
+      // which was true of a size derived from `navigator.deviceMemory` and stopped being
+      // true when that was replaced by a stub. Chunked regardless, because 146 MB in one
+      // allocation is still not something a CI runner should have to do.
       const chunk = Buffer.alloc(4 * 1024 * 1024);
       for (let written = head.length; written < GUARD_BYTES; written += chunk.length) {
         writeSync(fd, chunk, 0, Math.min(chunk.length, GUARD_BYTES - written));
@@ -940,9 +944,10 @@ try {
        * exactly -- `offroute.ts` had six exports and the app called two, and every
        * implementation of rerouting was tested.
        *
-       * Clicking it runs a real parse of a 40 MB file whose body is padding, so it fails
+       * Clicking it runs a real parse of a file whose body is padding, so it fails
        * *further along*. That is fine and is the point: this asserts the **override was
-       * honoured** -- the absence of the memory message -- not that an import succeeded.
+       * honoured** -- the parser answered and the guard's sentence is gone -- not that an
+       * import succeeded.
        *
        * §14.17 records why the obvious assertion is wrong: `importRegionFile` returns
        * `null` for a refusal *and* for a failure, so "the return value was non-null"
