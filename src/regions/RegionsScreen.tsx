@@ -91,6 +91,25 @@ export function RegionsScreen(props: RegionsScreenProps) {
    * a stale oversized file cannot be revived by a later tap elsewhere.
    */
   const [pendingForce, setPendingForce] = useState<File | null>(null);
+  /**
+   * The guard's own refusal sentence, kept when the file is held for the override.
+   *
+   * `canImport` returns a `reason` written to be acted on — it names the shortfall and
+   * the budget in the same units and gives the one instruction that actually reduces the
+   * problem (`osmium extract -b`). This state threw that away and replaced it with "This
+   * device is not expected to have enough memory to read that file."
+   *
+   * Which is the same defect as §10.5's dead-catalogue probe: the diagnosis is computed
+   * and then not shown. A driver told a 146 MB file will not fit learns nothing they can
+   * act on and cannot disagree with the estimate either — and §14.17's position is that
+   * they are entitled to disagree, which needs the figures.
+   *
+   * The `null` case is real rather than defensive: `canImport` also returns
+   * `ok: false` when the device will not report its heap at all, where `reason` explains
+   * *that* instead. `pendingForce` without a reason would render an empty card, so the
+   * fallback is a real sentence rather than nothing.
+   */
+  const [forceReason, setForceReason] = useState<string>('');
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
   /**
@@ -538,8 +557,10 @@ export function RegionsScreen(props: RegionsScreenProps) {
     //
     // This is a repeat call of a pure function over a constant and a device
     // reading, not a second parse: it costs a division.
-    if (!canImport(file.size ?? 0).ok) {
+    const verdict = canImport(file.size ?? 0);
+    if (!verdict.ok) {
       setPendingForce(file);
+      setForceReason(verdict.reason);
       return;
     }
     void onPicked(file);
@@ -549,6 +570,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
   const onForce = () => {
     const file = pendingForce;
     setPendingForce(null);
+    setForceReason('');
     if (file) void onPicked(file, true);
   };
 
@@ -1095,16 +1117,25 @@ export function RegionsScreen(props: RegionsScreenProps) {
          */}
         {pendingForce && (
           <div className="hint-card warn" role="alert" style={{ marginTop: DP.P3 }}>
-            <div style={{ ...T.body2 }}>
-              This device is not expected to have enough memory to read that file.
-            </div>
+            {/*
+             * The guard's own words, not a paraphrase. It names the file, the memory it
+             * needs, the budget this device reported, and the one command that makes the
+             * file smaller — and §14.17's argument for the override existing at all is
+             * that a driver can disagree with an estimate, which is only possible if the
+             * estimate is on screen.
+             *
+             * `white-space: pre-line` so the indented `osmium` line in `reason` survives:
+             * the string is written as pre-formatted text because the command is the
+             * instruction, and rendering it as a paragraph would make it uncopyable.
+             */}
+            <div style={{ ...T.body2, whiteSpace: 'pre-line' }}>{forceReason}</div>
             <div style={{ marginTop: DP.P2, display: 'flex', gap: DP.P2 }}>
               <button className="pill-btn" onClick={onForce}>
                 Try importing it anyway
               </button>
               <button
                 className="pill-btn"
-                onClick={() => setPendingForce(null)}
+                onClick={() => { setPendingForce(null); setForceReason(''); }}
               >
                 Cancel
               </button>

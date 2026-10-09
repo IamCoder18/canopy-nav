@@ -11,7 +11,7 @@
  * Requires `npm run build` first and the preview server running on E2E_PORT.
  */
 
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, unlinkSync, openSync, writeSync, closeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -781,6 +781,219 @@ try {
     check('unavailable rows stay focusable and carry their reason', catalogue.allFocusable && catalogue.allExplain,
       `${catalogue.rows.filter((r) => r.disabled).length} inert rows, all focusable: ${catalogue.allFocusable}, all explained: ${catalogue.allExplain}`);
     await page.screenshot({ path: join(SHOTS, '8-regions-offline.png') });
+
+    /**
+     * §15.3 item 9 — the memory guard, through the UI.
+     *
+     * Nothing in this suite imported anything the guard would refuse, so the refusal
+     * path had **no browser coverage at all** while being one of only two ways the
+     * province import can be stopped before it kills the WebView. Its unit tests cover
+     * `canImport` and `importRegionFile`; neither renders the screen, and §3.19 is the
+     * record of what happens when a browser-only defect sits behind a green unit run.
+     *
+     * A file large enough to trip it is generated rather than committed, and it has to
+     * **look like OSM data**, because `importPreflight` runs first and refuses anything
+     * whose first 32 bytes are neither XML nor a PBF blob header.
+     *
+     * That is the whole reason this block needed three attempts, and each failure was a
+     * correct check reported as though it were a bug:
+     *
+     * 1. 40 MB of zeros → `importPreflight` said "not OpenStreetMap data", which is right.
+     * 2. The same file opened with real XML → preflight passed, and *no refusal appeared*,
+     *    because 40 MB was simply not big enough. `navigator.deviceMemory` reports **16**
+     *    here, so `rawHeapBytes` grants 16 GB × 0.5 = **8 GB**, and 40 MB estimates to
+     *    ~560 MB — a ratio of 0.07, comfortably a pass. The guard was working exactly as
+     *    designed and this test had picked a file that fits.
+     *
+     * And the file has to be big enough for *the device the test runs on*, which is the
+     * second honest failure. `navigator.deviceMemory` reports **16** in this Chromium, so
+     * `rawHeapBytes` grants 16 GB × 0.5 = **8 GB**, and a 40 MB file estimates to ~560 MB —
+     * a ratio of 0.07. The guard was right and the file simply fit.
+     *
+     * Rather than write a multi-gigabyte file to provoke a refusal on a big machine (which
+     * is its own failure mode in CI, and a fixture that grows with the host), the device
+     * figure is **stubbed down** in a fresh context. That is the honest direction: this
+     * block tests the guard's *wiring* — refuse, offer an override, honour it, cancel —
+     * not its constants, which `test/importguard.spec.ts` pins directly. Testing the
+     * wiring needs a low-end device, and one is exactly what a 2 GB phone is.
+     */
+    console.log('\nmemory guard');
+    const guardFixture = join(SHOTS, 'guard-probe.osm');
+    const GUARD_DEVICE_MEMORY_GB = 2;
+    // The budget `rawHeapBytes` will grant: deviceMemory in GB, halved. Spelled out here
+    // rather than left to the reader to derive, because the file size below is chosen
+    // against it and the two must not drift.
+    const GUARD_BUDGET_MB = GUARD_DEVICE_MEMORY_GB * 1024 * 0.5;
+    // `estimateParseBytes` is `bytes / 8 * 112`, so the file size that overflows a budget
+    // of B bytes is `B * 8 / 112`. Doubled for margin, and the whole expression is derived
+    // from the budget rather than picked: the third version of this block used a hand-set
+    // 40 MB, which is only refused on a device below ~1.4 GB, and the suite ran on a
+    // machine reporting 16 GB — so the guard correctly let it through and this suite
+    // reported a broken guard. A "big enough" number written once is this document's
+    // recurring failure; deriving it is the fix.
+    const GUARD_BYTES = Math.ceil((GUARD_BUDGET_MB * 1024 * 1024 * 2) / 112) * 8;
+    {
+      // Real XML head so preflight passes it through, padding tail because this file is
+      // never parsed — and the override click below proves that too.
+      const head = Buffer.from('<?xml version="1.0"?>\n<osm version="0.6" generator="e2e">\n', 'utf8');
+      const fd = openSync(guardFixture, 'w');
+      writeSync(fd, head);
+      // Written in 4 MB chunks rather than one `Buffer.alloc`: the derived size is
+      // ~150 MB here and would be ~2.4 GB on a machine with a larger budget, and a single
+      // allocation that large is its own failure mode.
+      const chunk = Buffer.alloc(4 * 1024 * 1024);
+      for (let written = head.length; written < GUARD_BYTES; written += chunk.length) {
+        writeSync(fd, chunk, 0, Math.min(chunk.length, GUARD_BYTES - written));
+      }
+      closeSync(fd);
+      console.log(`  (guard fixture: ${(GUARD_BYTES / 1048576).toFixed(0)} MB, which`
+        + ` estimates to ~${(GUARD_BYTES / 8 * 112 / 1048576).toFixed(0)} MB against a`
+        + ` ${GUARD_BUDGET_MB.toFixed(0)} MB budget)`);
+    }
+
+    // A separate context, so the stub cannot leak into any other check in this suite.
+    // `addInitScript` runs before any page script, which matters: `rawHeapBytes` reads
+    // `navigator.deviceMemory` when it is asked, and a stub applied after the app's
+    // modules have evaluated would be too late.
+    const guardCtx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+    await guardCtx.addInitScript((gb) => {
+      Object.defineProperty(navigator, 'deviceMemory', { get: () => gb, configurable: true });
+    }, GUARD_DEVICE_MEMORY_GB);
+    const guardPage = await guardCtx.newPage();
+    guardPage.on('pageerror', (e) => pageErrors.push(`guard page: ${e.message}`));
+    await guardPage.goto(BASE, { waitUntil: 'networkidle' });
+    await guardPage.waitForTimeout(2000);
+    await guardPage.click('.quick-tile:has-text("Regions")');
+    await guardPage.waitForTimeout(1500);
+    {
+      const seen = await guardPage.evaluate(() => navigator.deviceMemory);
+      check('the stubbed device figure is what the page sees', seen === GUARD_DEVICE_MEMORY_GB,
+        `${seen} GB -> ${GUARD_BUDGET_MB} MB budget`);
+    }
+    const guardInput = await guardPage.$('input[type=file]');
+    check('the import picker is reachable from the regions screen', !!guardInput);
+    if (guardInput) {
+      await guardInput.setInputFiles(guardFixture);
+      // The refusal is an inline `role="alert"` card offering an override, so wait for
+      // the card rather than sleeping -- the mistake §2.2 records in the textscale
+      // harness, not repeated here.
+      // Keyed on the override control, because that is what makes this card the refusal
+      // card — and because the card's *text* is the guard's own `reason`, which is a
+      // different string every time the estimate changes. Matching on the paraphrase the
+      // screen used to show would test the wording rather than the behaviour.
+      const refused = await guardPage
+        .waitForSelector('[role=alert] >> text=Try importing it anyway', { timeout: 15000 })
+        .then(() => true)
+        .catch(() => false);
+      check('an extract the device cannot hold is refused before it is parsed', refused);
+
+      const refusal = await guardPage.evaluate(() => {
+        const card = [...document.querySelectorAll('[role=alert]')]
+          .find((c) => /Try importing it anyway/.test(c.textContent ?? ''));
+        if (!card) return null;
+        const buttons = [...card.querySelectorAll('button')];
+        return {
+          text: (card.textContent ?? '').trim(),
+          hasOverride: buttons.some((b) => /Try importing it anyway/.test(b.textContent ?? '')),
+          hasCancel: buttons.some((b) => /Cancel/.test(b.textContent ?? '')),
+          // The refusal has to say what to do about it, or it is a wall rather than a
+          // message. `osmium extract -b` is the instruction the guard's copy gives.
+          names: /osmium extract -b/.test(card.textContent ?? ''),
+          // And it must not have started a parse behind the warning. Keyed on the progress
+          // card's element rather than the word "Parsing", which the guard's own refusal
+          // copy contains — the first version of this check matched `/Parsing/` against
+          // `body.innerText` and failed for the best possible reason: the message was
+          // explaining that parsing was refused.
+          parsing: !!document.querySelector('.progress-card'),
+          // It has to cite the budget it compared against. A guard that refuses without
+          // saying what it thought and what it had is a wall, and §14.17's whole argument
+          // is that a driver is entitled to disagree with an estimate -- which needs the
+          // figures to be disagreed with.
+          cites: /available/i.test(card.textContent ?? ''),
+        };
+      });
+      check('the refusal offers an override and a way out', !!refusal?.hasOverride && !!refusal?.hasCancel);
+      check('the refusal names a way to make the file smaller', !!refusal?.names,
+        refusal?.text.split('\n')[0] ?? '(no card)');
+      check('the refusal states the budget it compared against', refusal?.cites === true);
+      check('refusing does not also start the parse', refusal?.parsing === false);
+      await guardPage.screenshot({ path: join(SHOTS, '9-memory-guard.png') });
+
+      /**
+       * And the override, because the escape hatch is the thing most likely to rot: it
+       * is one `forceMemory: true` away from being unreachable, which is §3.11's shape
+       * exactly -- `offroute.ts` had six exports and the app called two, and every
+       * implementation of rerouting was tested.
+       *
+       * Clicking it runs a real parse of a 40 MB file whose body is padding, so it fails
+       * *further along*. That is fine and is the point: this asserts the **override was
+       * honoured** -- the absence of the memory message -- not that an import succeeded.
+       *
+       * §14.17 records why the obvious assertion is wrong: `importRegionFile` returns
+       * `null` for a refusal *and* for a failure, so "the return value was non-null"
+       * cannot tell them apart. Asserting on the absence of the memory message is the
+       * actual claim, because that is precisely what the override changes.
+       */
+      const overrideClicked = await guardPage
+        .click('text=Try importing it anyway')
+        .then(() => true)
+        .catch(() => false);
+      check('the override control is clickable', overrideClicked);
+      // Waits for the card to go rather than sleeping: the click's own state update is
+      // what removes it, so this observes the transition instead of guessing its timing.
+      const overrideHonoured = await guardPage
+        .waitForFunction(
+          () => !/Try importing it anyway/.test(document.body.innerText),
+          undefined, { timeout: 20000, polling: 300 },
+        )
+        .then(() => true)
+        .catch(() => false);
+      check('the override gets past the memory guard', overrideClicked && overrideHonoured,
+        overrideHonoured ? 'memory guard no longer applies' : 'memory message still present');
+      // And it really did reach the parser, rather than being refused a second time by
+      // the same gate with a different message. Distinguishing "honoured" from "silently
+      // never ran" is the whole claim of this block.
+      const reachedParser = await guardPage
+        .waitForFunction(
+          () => /no routable|routable ways|contains no OpenStreetMap/i.test(document.body.innerText),
+          undefined, { timeout: 30000, polling: 300 },
+        )
+        .then(() => true)
+        .catch(() => false);
+      check('the override reached the parser rather than being refused again', reachedParser);
+
+      /**
+       * Cancel, from a second refused file -- because a control only exercised *after*
+       * an override has been clicked is not the same as one that can be reached. What
+       * this adds over the checks above is that the card **dismisses**, rather than
+       * re-arming on every subsequent pick.
+       */
+      const guardInput2 = await guardPage.$('input[type=file]');
+      if (guardInput2) {
+        await guardInput2.setInputFiles(guardFixture);
+        const refusedAgain = await guardPage
+          .waitForSelector('[role=alert] >> text=Try importing it anyway', { timeout: 15000 })
+          .then(() => true)
+          .catch(() => false);
+        if (refusedAgain) {
+          await guardPage.click('text=Cancel');
+          const dismissed = await guardPage
+            .waitForFunction(
+              () => !/Try importing it anyway/.test(document.body.innerText),
+              undefined, { timeout: 10000, polling: 200 },
+            )
+            .then(() => true)
+            .catch(() => false);
+          check('the refusal can be dismissed without importing', dismissed,
+            dismissed ? 'card gone' : 'card still present after Cancel');
+        } else {
+          check('the refusal can be dismissed without importing', false,
+            'second refusal never appeared, so Cancel was not exercised');
+        }
+      }
+      unlinkSync(guardFixture);
+    }
+    await guardCtx.close();
   }
 
   /* ---------------- engine selection + provenance ---------------- */

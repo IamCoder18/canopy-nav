@@ -106,6 +106,8 @@ evaluated, which a pass or fail result does not tell you.
    — [the imported road network was never drawn](#1414-the-imported-road-network-was-never-drawn)
    — [three more, and the shape they share](#1415-three-more-and-the-shape-they-share-with-1414)
    — [two more code defects](#1416-two-more-code-defects-one-of-which-is-the-largest-thing-found-in-this-pass)
+   — [the guard's refusal said nothing](#1418-the-guards-refusal-said-nothing-and-153s-coverage-found-it)
+   — [driving the guard through the UI](#1419-153-item-9--driving-the-guard-through-the-ui-and-what-it-cost)
 15. [The roadmap](#15-the-roadmap)
     — [Make the biggest extract that fits actually fit](#151-make-the-biggest-extract-that-fits-actually-fit)
     — [Make the delivery path work on device](#152-make-the-delivery-path-work-on-device)
@@ -154,7 +156,7 @@ stands. **Bold** = fully working and verified.
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
 | Unit tests | `npm test` | **1171 passing**, 58 files |
-| End-to-end | `npm run e2e` | **55 checks** against the built bundle |
+| End-to-end | `npm run e2e` | **66 checks** against the built bundle — +11 for the memory guard (§15.3 item 9) |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
 | Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
@@ -337,7 +339,7 @@ Browser gates, measured the same way:
 
 | Suite | Checks | Command |
 |---|---|---|
-| `test/e2e.mjs` | 55 | `npm run e2e` |
+| `test/e2e.mjs` | 66 | `npm run e2e` |
 | `test/screens.mjs` | 159 (53 × 3 viewports) | `npm run screens` |
 | `tools/focus.mjs` | 15 | `npm run focus` |
 | `tools/sw-shellcheck.mjs` | 1 (offline boot after a captive portal) | `npm run swshell` |
@@ -1688,12 +1690,12 @@ src/
 
   regions/
     download.ts          1493  streaming downloader, resume, part-file handling
-    RegionsScreen.tsx    1157  manage, catalogue, cross-region route test
+    RegionsScreen.tsx    1188  manage, catalogue, cross-region route test
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              332  RegionLibrary singleton, per-region workers, memory gate
 
 test/            1171 unit tests, 58 files
-test/e2e.mjs           55 browser checks, built bundle
+test/e2e.mjs           66 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
                              extract slicing is done by osmium on a desktop)
@@ -1914,9 +1916,67 @@ or "gap 18" are to the *old* numbering and say so; the current numbers are 1–1
 
     The refusal is correct. What is not shipped is any way to act on it *inside the
     app* — the message sends a driver to a desktop they may not have. §15.1 is the
-    on-device bbox crop that closes that, and it is the first item there for a
+on-device bbox crop that closes that, and it is the first item there for a
     reason: without it, the largest catalogue entries are unusable and the guard is
     only a well-worded wall.
+
+### 14.18 The guard's refusal said nothing, and §15.3's coverage found it
+
+`RegionsScreen` calls `canImport(file.size)`, which returns a `reason` written
+carefully — the file's size, the memory it needs, the budget this device reported, why
+the system would kill the parse rather than raise, and the one command that fixes it —
+and then **discarded it**, replacing the whole thing with *"This device is not expected
+to have enough memory to read that file."* Same shape as §10.5's dead catalogue probe:
+the diagnosis is computed and thrown away.
+
+It matters more here than there, because the override exists precisely so a driver can
+**disagree** with the estimate. `forceMemory` is documented as "a user who has just
+watched a progress bar say 'this needs 4 GB' is entitled to disagree with it" — and the
+user was never shown the 4 GB. The card now renders `reason` itself, with
+`white-space: pre-line` so the indented `osmium` line stays copyable.
+
+### 14.19 §15.3 item 9 — driving the guard through the UI, and what it cost
+
+The refusal path had **no browser coverage at all**. `test/importguard.spec.ts` covers
+`canImport` and `test/import.spec.ts` covers `importRegionFile`'s use of it, but nothing
+rendered the card — so §14.18 shipped behind two green unit suites, on the one control
+that stands between a 334 MB file and a killed WebView. §3.19's exact shape.
+
+Eleven checks now drive it. Making them *true* took three attempts, and **every failure
+was a correct check the test had misdiagnosed** — worth recording, because two of them
+would have been "fixed" by changing code that was right:
+
+1. **40 MB of zeros.** `importPreflight` reported "it is not OpenStreetMap data" — right.
+   It sniffs the first 32 bytes, and zeros are neither XML nor a PBF blob header.
+2. **The same file with a real `<osm version="0.6">` head.** Preflight passed it, and *no
+   refusal appeared* — because 40 MB was not big enough. `navigator.deviceMemory` reports
+   **16** in this Chromium, so `rawHeapBytes` grants 8 GB and 40 MB estimates to ~560 MB:
+   a ratio of 0.07. The guard was working exactly as designed and the fixture simply fit.
+3. **A size derived from the budget.** `estimateParseBytes` is `bytes / 8 * 112`, so the
+   file that overflows a budget of *B* is `B × 8 / 112`. The fixture is built from the
+   stubbed device figure, and the suite prints both numbers so the margin is visible rather
+   than asserted. A "big enough" number written once is this document's recurring failure,
+   and deriving it is the fix.
+
+Two details that make it a real test rather than a plausible one:
+
+- **The device figure is stubbed down, in its own context, via `addInitScript`** — because
+  this block tests the guard's *wiring* (refuse, offer an override, honour it, let it be
+  dismissed) and its constants are already pinned directly by `test/importguard.spec.ts`.
+  Testing wiring needs a low-end device, and a 2 GB phone is exactly that. `addInitScript`
+  runs before the app's modules, so the stub is in place when `rawHeapBytes` first reads
+  it; applied later it would pass for the wrong reason.
+- **The override asserts the *absence of the memory message*, not that an import
+  succeeded.** §14.17 records why: `importRegionFile` returns `null` for a refusal *and*
+  for a failure, so "the return value was non-null" cannot tell them apart, and the first
+  version of this assertion would have passed while proving nothing. A separate check
+  waits for the parser's own verdict, so "honoured" is distinguished from "silently never
+  ran".
+
+One probe failed first for the best possible reason: *"refusing does not also start the
+parse"* matched `/Parsing/` against `body.innerText`, and the guard's own refusal copy
+contains the word — the message was explaining that parsing was refused. It now asserts on
+`.progress-card` not existing, which is what the progress indicator actually is.
 
 ### Closed in the §3.17–3.19 pass
 
@@ -2004,7 +2064,7 @@ three cold-start console warnings (§3.15).
 npm install
 npm run dev          # vite dev server
 npm test             # 1171 unit tests
-npm run e2e          # 55 browser checks against the built bundle
+npm run e2e          # 66 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
 npm run sync         # build, clear android assets, cap sync
