@@ -73,6 +73,7 @@ evaluated, which a pass or fail result does not tell you.
    — including row 10, corrected from "Done" to **Not done** (§3.5.2)
 2. [Verification state](#2-verification-state)
    — [the gate itself had stopped looking](#21-the-gate-itself-had-stopped-looking--which-is-the-eighth)
+   — [a gate recorded as 14/14 that failed one run in four](#22-a-gate-recorded-as-1414-that-failed-one-run-in-four)
 3. [Features: what, how, why](#3-features-what-how-why)
 4. [Bugs found and fixed](#4-bugs-found-and-fixed)
 5. [Architecture decisions](#5-architecture-decisions)
@@ -159,7 +160,7 @@ stands. **Bold** = fully working and verified.
 | Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
 | Offline shell | `npm run swshell` | a captive portal answered 2 navigations, then the network went off: the app still boots, 5 launcher tiles |
 | Reflow at large text | `npm run reflow` | **12 checks, all passing** — was 3 failing at the start of §14 |
-| Text-scale detection | `npm run textscale` | **14 checks** — the large-text layout switches on for every way a platform can scale text (§14.8) |
+| Text-scale detection | `npm run textscale` | **13 checks** — the large-text layout switches on for every way a platform can scale text (§14.8). Was recorded as 14 and as passing; it failed **3 of 12 runs** (§2.2) |
 | Bundle budget | `npm run bundle` | entry 112.0 kB / 130, initial 117.5 / 150, largest 282.0 / 300, total JS 417.8 / 460 (gzip) |
 | Offline cold start | verified in-browser | reload with the network off renders the app: 5 tiles, map sized, 0 console errors |
 | Release | v0.11.3 tag | **CI green, Release green**, APK attached |
@@ -448,6 +449,62 @@ of the truth still passes, and the test says so in its own body rather than impl
 strength it does not have. A check that cannot read prose for truth is worth having and is
 not sufficient, and this section's whole history is the argument for that sentence.
 
+### 2.2 A gate recorded as 14/14 that failed one run in four
+
+Running the gates rather than reading them turned up something the tables above had
+recorded as clean. `npm run textscale` is a **gate** — it is in `npm run status`'s own
+reasoning, it is a required row in the table above, and it was written to prove §14.8's
+central claim, that the app notices a text scale delivered *either* way. Measured across
+twelve consecutive runs: **three failed.** The §2 row said "**14 checks**", green, and
+that row had been carried without a re-run.
+
+**What it was reporting.** Not a product failure. Three checks failed with
+`eta-value is (none)` and `eta-bar flex-wrap: (no navigation screen)` — that is, *the
+navigation screen was not there*. `openNavigating()` drove the app there through a chain
+of fixed sleeps:
+
+```
+click .search-field  →  wait 400ms  →  fill search
+   →  wait 1000ms  →  click .result-row  →  wait 2000ms
+   →  click button.primary-btn  →  wait 1200ms
+```
+
+On a loaded machine the search screen had not opened at 400 ms, `.fill` threw, and — this
+is the part that mattered — the throw was swallowed by a `.catch(() => {})` on the line
+above. The run continued down a path that silently did nothing and reported the *absence
+of the element it had never reached* as though the app had failed to apply its
+large-text layout.
+
+**So the gate was reporting a harness failure in the vocabulary of a product failure**,
+which is worse than being broken, because it names the wrong thing to fix. §13.7 is about
+exactly this — a harness failure and a product failure must be distinguishable from
+outside — and this file cites §13.7 in a comment thirty lines above the code doing it.
+
+Four changes, in the order the reasoning required:
+
+1. **Every sleep became a wait.** `waitForSelector` for the search input, the result row
+   and the Start button, each with its own timeout. The sleeps were standing in for waits
+   that were never written.
+2. **Each step reports which one ran out.** "never reached the navigation screen" is a
+   symptom; `no result row appeared for "Elbow"` is a diagnosis, and a harness failure you
+   cannot localise gets re-run rather than read.
+3. **The precondition is asserted**, not assumed: `waitForNavigationScreen` requires both
+   an ETA bar *and* a laid-out ETA value, because `attached` alone would let a zero-size
+   box satisfy it.
+4. **Harness failures are counted separately** and printed under their own heading. When
+   the harness misses, the dependent checks are `SKIP`ped rather than `FAIL`ed — a green
+   gate that measured nothing is the worst outcome available, so that state is now
+   unreachable.
+
+Measured after: **12 of 12 runs green**, against 9 of 12 before. And the fix is not merely
+"less flaky" — verified against a deliberately broken `src/textscale.ts` (the detector
+pinned to `normal`), where the gate reports **6 product failures naming the real cause**
+and zero harness failures. A gate that stops firing when the thing it watches is broken is
+worse than the flaky version, so that reversal is the check that matters.
+
+The count also changed, and the document was carrying the wrong one: it is **13 checks**,
+not 14. Same class as everything else in this section, which is why it is recorded here
+rather than quietly edited.
 
 ---
 
@@ -1630,8 +1687,9 @@ tools/reflow.mjs        368 chrome overlap at 100/175/200% text (§13.8) — a
                              diagnostic, still not a gate: it needs a
                              browser and takes minutes, and one that
                              reports nothing stops being read (§12.7)
-tools/textscale-check.mjs 269 does the app notice a text scale that leaves
-                             the root font size alone (§14.8) — a gate
+tools/textscale-check.mjs 376 does the app notice a text scale that leaves
+                             the root font size alone (§14.8) — a gate;
+                             was 3-in-12 flaky (§2.2)
 tools/focus.mjs         297 15 keyboard/focus checks in a real browser (§11)
 tools/shots.mjs         195 screenshot every screen + computed styles (§11)
 tools/sw-shellcheck.mjs  99 offline boot after a captive portal (§13.3) — a gate
