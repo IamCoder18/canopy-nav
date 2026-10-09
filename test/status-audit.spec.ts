@@ -59,11 +59,35 @@ function audit(mutate?: (doc: string) => string): { out: string; code: number } 
   }
 }
 
-/** Replace exactly one occurrence, and fail loudly if the anchor has moved. */
+/**
+ * The current unit-test total, read from the document rather than written down here.
+ *
+ * This file's own anchors carry the total — `npm test # 1171 unit tests` and friends — and
+ * so they change every time the suite does. They were left stale when the total moved
+ * 1169 -> 1171 and six of these tests failed with `anchor appears 0 times`, which is the
+ * document audit failing in the way it is built to catch and me having hardcoded a figure
+ * in the very file that exists because hardcoded figures rot. §2.1's whole subject, one
+ * level down.
+ */
+const TOTAL = /^test\/ +(\d+) unit tests, \d+ files$/m.exec(REAL)?.[1];
+if (!TOTAL) throw new Error('could not read the current unit-test total out of STATUS.md');
+
+/**
+ * Replace exactly one occurrence, and fail loudly if the anchor has moved.
+ *
+ * The error is deliberately specific about the count, because "anchor appears 0 times" on
+ * a figure that moved is a different problem from "this line was reworded" and the two
+ * need different fixes.
+ */
 function substitute(from: string, to: string): (doc: string) => string {
   return (doc) => {
     const hits = doc.split(from).length - 1;
-    if (hits !== 1) throw new Error(`anchor appears ${hits} times, expected exactly 1: ${JSON.stringify(from)}`);
+    if (hits !== 1) {
+      throw new Error(
+        `anchor appears ${hits} times, expected exactly 1: ${JSON.stringify(from)}`
+        + ` — if a figure in STATUS.md moved, read it from \`TOTAL\` rather than writing it here`,
+      );
+    }
     return doc.replace(from, to);
   };
 }
@@ -77,9 +101,9 @@ describe('the audit reads the real document', () => {
 });
 
 describe('the unit-test total is checked', () => {
-  // The defect this exists for. §8's command block carried a figure 142 tests behind the
-  // suite for as long as it took the count to cross 1000, and nothing said so.
-  const staleTotal = substitute('npm test             # 1169 unit tests', 'npm test             # 1026 unit tests');
+  // The defect this exists for. §8's command block carried a figure behind the suite for
+  // as long as it took the count to cross 1000, and nothing said so.
+  const staleTotal = substitute(`npm test             # ${TOTAL} unit tests`, 'npm test             # 1026 unit tests');
 
   it('rejects a stale figure in §8 — the defect that shipped', () => {
     const { out, code } = audit(staleTotal);
@@ -88,17 +112,17 @@ describe('the unit-test total is checked', () => {
   });
 
   it('rejects a stale figure in the §2 verification table', () => {
-    const { code } = audit(substitute('**1169 passing**, 58 files', '**9999 passing**, 58 files'));
+    const { code } = audit(substitute(`**${TOTAL} passing**, 58 files`, '**9999 passing**, 58 files'));
     expect(code).toBe(1);
   });
 
   it('rejects a stale figure in the §6 layout block', () => {
-    const { code } = audit(substitute('test/            1169 unit tests, 58 files', 'test/            1000 unit tests, 58 files'));
+    const { code } = audit(substitute(`test/            ${TOTAL} unit tests, 58 files`, 'test/            1000 unit tests, 58 files'));
     expect(code).toBe(1);
   });
 
   it('rejects a spec-file count that disagrees with the test total', () => {
-    const { out, code } = audit(substitute('**1169 passing**, 58 files', '**1168 passing**, 55 files'));
+    const { out, code } = audit(substitute(`**${TOTAL} passing**, 58 files`, `**${TOTAL} passing**, 55 files`));
     expect(out).toMatch(/current spec-file totals disagree/);
     expect(code).toBe(1);
   });
@@ -111,7 +135,11 @@ describe('the unit-test total is checked', () => {
    * silently stop reading that section.
    */
   it('complains when an anchor stops matching, instead of finding nothing', () => {
-    const { out, code } = audit(substitute('npm test             # 1169 unit tests', 'npm test    #1168 unit tests'));
+    // Re-worded so the anchor genuinely stops matching. An earlier version only re-spaced
+    // the comment, which the anchor's ` +` still accepted — the test passed for the wrong
+    // reason once more, which is why the substitution now removes the shape the anchor
+    // depends on rather than merely reflowing it.
+    const { out, code } = audit(substitute(`npm test             # ${TOTAL} unit tests`, `npm test  ->  ${TOTAL} passing`));
     expect(out).toMatch(/cannot find the §8 command block unit-test total/);
     expect(code).toBe(1);
   });
@@ -235,7 +263,7 @@ describe('what this file is not', () => {
     const { out, code } = audit(
       (doc) =>
         substitute('# 55 browser checks against the built bundle', '# 46 browser checks against the built bundle')(
-          substitute('npm test             # 1169 unit tests', 'npm test             # 1026 unit tests')(doc),
+          substitute(`npm test             # ${TOTAL} unit tests`, 'npm test             # 1026 unit tests')(doc),
         ),
     );
     expect(code).toBe(1);

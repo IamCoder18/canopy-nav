@@ -433,9 +433,25 @@ that: break one thing, require a complaint, and assert the exit code as well as 
 All four of its central assertions were each **verified to fail** with the corresponding
 fix reverted: the three-digit width, the code-block patterns, the complaint that an anchor
 matching nothing is itself a problem, and the leading-indent requirement that had been
-excluding every `tools/` row.
+excluding every `tools/` row. That last one is the same defect a third time, and it was
+visible in the source on sight — `^\s{2,4}` against a table whose `tools/` rows are not
+indented. Nobody looked, because the output said "all checks passed".
+
+**And writing it reproduced the fault it exists to catch, which is why its own anchors are
+derived rather than written.** The suite hardcoded the total in the strings it substitutes
+into this file — and six of its eighteen tests failed with `anchor appears 0 times` the
+moment the total moved. A figure written once into a test, never re-derived, failing in
+exactly the way the document is written about. So the total is now read out of this file at
+run time, every anchor interpolates it, and the mismatch error says outright that a moved
+figure is the likely cause.
+
+That is the ninth wrong count in this document's history and the first to arrive *inside the
+machinery built to prevent them*, which is a fair summary of the difficulty. It is also why
+this subsection is longer than the fix it describes: the fix is three regexes and an anchor
+list, and the reasoning is the part that will still be needed.
 
 **It paid for itself at once, by finding an eighth wrong figure that predates this pass.**
+(That is the eighth; the one above it is the ninth.)
 §11.7 says **17** focus checks where §2, §6 and §8 all say 15, and 15 is right — counted
 off an actual run. The seventh failure above *is* a stray 17 for this same gate, and §2
 records that the original one lived in §6 and was fixed there, so this is a **third**
