@@ -43,15 +43,44 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const doc = readFileSync(join(ROOT, 'STATUS.md'), 'utf8');
+/**
+ * `STATUS_DOC` exists so `test/status-audit.spec.ts` can run this against a mutated copy
+ * of the document and assert the audit objects.
+ *
+ * That is the only reason it is here, and the reason it is worth the parameter: the two
+ * defects this pass fixed — a digit-width that stopped matching at 1000 tests, and a set
+ * of patterns written only for bold table cells — were both *silent*. Nothing failed, no
+ * output changed, and the only way to learn a check had stopped looking is to change the
+ * thing it looks at and see whether it notices. An audit that cannot be pointed at
+ * evidence cannot be seen to fail, and §3.19's rule is that a suite never seen to fail has
+ * not been tested.
+ */
+const doc = readFileSync(process.env.STATUS_DOC ?? join(ROOT, 'STATUS.md'), 'utf8');
 const problems = [];
 
 /* -------------------------- §6 line counts -------------------------- */
 
 const layout = doc.slice(doc.indexOf('## 6. Project layout'), doc.indexOf('## 7. Known gaps'));
 const srcDirs = ['', 'src/', 'src/osm/', 'src/nav/', 'src/map/', 'src/regions/', 'tools/'];
-for (const m of layout.matchAll(/^\s{2,4}([\w./-]+\.(?:ts|tsx|css|mjs))\s+(\d+)\s{2}/gm)) {
+
+/**
+ * §6's layout block states two different kinds of number in one column: a `wc -l` for
+ * every source and `tools/` file, and a *check count* for the two `test/*.mjs` browser
+ * suites (`test/e2e.mjs 55 browser checks`, `test/screens.mjs 53 checks x 3 viewports`).
+ * Only the first is a line count, so `test/*.mjs` is excluded by name rather than by
+ * guessing — a check that guessed would report a 55-line file as being 847 lines.
+ *
+ * Leading indentation is optional (`\s{0,4}`, not `\s{2,4}`) because the `tools/` rows are
+ * not indented and `\s{2,4}` silently excluded **every one of them**: twelve line counts
+ * that looked checked and were not. Same shape as the `\d{3}` width above, and found the
+ * same way — by asking what the pattern actually matched rather than what it looked like.
+ */
+const LINE_COUNT_ROW = /^\s{0,4}([\w./-]+\.(?:ts|tsx|css|mjs))\s+(\d+)(?=\s|$)/gm;
+let lineCountRows = 0;
+for (const m of layout.matchAll(LINE_COUNT_ROW)) {
   const [, name, claimed] = m;
+  if (name.startsWith('test/')) continue;   // a check count, not a line count
+  lineCountRows++;
   const hit = srcDirs.map((d) => d + name).find((p) => existsSync(join(ROOT, p)));
   if (!hit) {
     problems.push(`§6 lists a file that does not exist: ${name}`);
@@ -59,6 +88,14 @@ for (const m of layout.matchAll(/^\s{2,4}([\w./-]+\.(?:ts|tsx|css|mjs))\s+(\d+)\
   }
   const actual = execFileSync('wc', ['-l', join(ROOT, hit)]).toString().trim().split(/\s+/)[0];
   if (actual !== claimed) problems.push(`§6 line count wrong: ${name} says ${claimed}, is ${actual}`);
+}
+// A pattern that matches nothing is the failure this file has now produced twice, so it
+// is asserted rather than trusted: this layout block *has* `tools/` rows, and if the
+// indentation ever changes again this stops quietly verifying half of §6.
+if (lineCountRows < 45) {
+  problems.push(
+    `§6 line-count check matched only ${lineCountRows} rows; expected the src/ and tools/ tables, so this check is looking at nothing`,
+  );
 }
 
 /* --------------------------- cross-references --------------------------- */
@@ -73,25 +110,57 @@ for (const m of doc.matchAll(/§(\d+(?:\.[\d]+)*)/g)) {
 
 /* ------------------------------ the totals ------------------------------ */
 
-/** Only figures claiming to be *current*; historical ones in prose are legitimate. */
-const stated = (re) => [...doc.matchAll(re)].map((m) => m[1]);
+/** One value the file states more than once must be the same everywhere it is stated. */
 const one = (values, what) => {
   if (new Set(values).size > 1) problems.push(`${what} disagree in this file: ${[...new Set(values)].join(', ')}`);
+  return values;
 };
 
-const unitTotals = [
-  ...stated(/\*\*(\d{3}) passing\*\*/g),
-  ...stated(/\*\*Done\.\*\* (\d{3}) unit tests/g),
-  ...stated(/\*\*(\d{3}) unit tests, \d+ files\*\*/g),
-  ...stated(/# (\d{3}) unit tests/g),
+/**
+ * Every place this file states the *current* unit-test total, as anchors rather than
+ * one blended regex.
+ *
+ * ## Why anchors, and why this note is longer than the code
+ *
+ * The first version used `(\d{3})` -- exactly three digits -- and the total was 828 when
+ * it was written, so every pattern worked. The suite then passed 1000 tests and **all of
+ * them stopped matching**: `(\d{3})` matched the first three digits of `1153`, the
+ * pattern then demanded a space where the fourth digit was, and the match failed. No
+ * error, no warning -- the patterns simply returned nothing, forever.
+ *
+ * So the gate that exists because this document has carried wrong numbers spent a long
+ * stretch reporting agreement on an *empty list*, which is vacuously consistent. That is
+ * the failure §2 is written about, reproduced inside the gate written about it: §8's
+ * `npm test` line sat 127 tests behind the suite and nothing said so.
+ *
+ * Hence `\d+` and never a fixed width, and hence an explicit complaint when an anchor
+ * finds nothing. `test/status-audit.spec.ts` runs every anchor against a fixture holding
+ * a four-digit total, because "it agrees" and "it matched nothing" are indistinguishable
+ * from the outside.
+ */
+const TOTAL_ANCHORS = [
+  { what: '§1 requirement row', re: /\*\*Done\.\*\* (\d+) unit tests across (\d+) files/, files: 2 },
+  { what: '§2 verification table', re: /\*\*(\d+) passing\*\*, (\d+) files/, files: 2 },
+  { what: '§2 breakdown preamble', re: /\*\*(\d+) files, (\d+) tests\*\*/, testsAt: 2, filesAt: 1 },
+  { what: '§6 layout block', re: /^test\/ +(\d+) unit tests, (\d+) files$/m, files: 2 },
+  { what: '§8 command block', re: /^npm test +# (\d+) unit tests$/m },
 ];
-one(unitTotals, 'current unit-test totals');
 
-const fileTotals = [
-  ...stated(/\*\*\d{3} passing\*\*, (\d+) files/g),
-  ...stated(/\*\*Done\.\*\* \d{3} unit tests across (\d+) files/g),
-  ...stated(/\*\*\d{3} unit tests, (\d+) files/g),
-];
+const unitTotals = [];
+const fileTotals = [];
+for (const a of TOTAL_ANCHORS) {
+  const m = a.re.exec(doc);
+  if (!m) {
+    problems.push(
+      `cannot find the ${a.what} unit-test total -- the anchor no longer matches, so this check is looking at nothing`,
+    );
+    continue;
+  }
+  unitTotals.push(m[a.testsAt ?? 1]);
+  const at = a.filesAt ?? a.files;
+  if (at) fileTotals.push(m[at]);
+}
+one(unitTotals, 'current unit-test totals');
 one(fileTotals, 'current spec-file totals');
 
 /* ------------------------------ §7 gap refs ------------------------------ */
@@ -173,15 +242,12 @@ if (existsSync(reportPath)) {
     }
   }
   const sum = Object.values(actual).reduce((a, b) => a + b, 0);
-  // Every phrasing this file uses for the current total, so a re-derivation in one
-  // place cannot leave another claiming a different number.
-  const statedTotals = [
-    ...stated(/\*\*(\d{3}) unit tests across \d+ files\*\*/g),
-    ...stated(/\*\*\d+ files, (\d{3}) tests\*\*/g),
-    ...stated(/\*\*(\d{3}) passing\*\*/g),
-  ];
-  for (const t of statedTotals) {
-    if (Number(t) !== sum) problems.push(`§2 states ${t} unit tests in total, the run has ${sum}`);
+  // `unitTotals` is reused rather than re-anchored here. The first version kept a second
+  // copy of the patterns in this block, which is how two readers of the same number
+  // came to disagree about how many digits it has -- and the copy that was wrong here is
+  // the one that decided whether a wrong total was caught.
+  for (const t of [...new Set(unitTotals)]) {
+    if (Number(t) !== sum) problems.push(`STATUS.md states ${t} unit tests in total, the run has ${sum}`);
   }
 }
 
@@ -198,6 +264,18 @@ if (existsSync(reportPath)) {
  * So this checks that the numbers the document claims for one gate are the same
  * number everywhere it claims them. When a count is re-derived, the others
  * become visible as stale here rather than at some later reading.
+ *
+ * ## The limitation that mattered, and cost a stale pair
+ *
+ * "Everywhere" has to mean the *code blocks* too, and the first version did not: every
+ * pattern it used was written against a bold table cell or one prose phrasing. §6's layout
+ * block and §8's command block both state the same figures in monospace, and both were
+ * invisible to it -- so §6 and §8 sat at 46 e2e checks while §2 said 55, and the gate
+ * saw one number and agreed with itself.
+ *
+ * That is the same shape as the `\d{3}` failure above, and worth stating plainly: both
+ * were a check that could only see the *form* it was written against, treating "nothing
+ * found" and "nothing wrong" as the same result.
  */
 // Each gate's figure, read only from lines that actually name that gate. Cross-
 // matching is how the first version of this check reported "e2e gate is counted 46
@@ -212,7 +290,17 @@ if (existsSync(reportPath)) {
  * what it belongs to.
  */
 const GATE_FIGURES = [
-  { name: 'e2e', token: /\be2e\b/, res: [/\*\*(\d+) checks/g, /\be2e (\d+)\b/g, /\| `test\/e2e\.mjs` \| (\d+) \|/g] },
+  {
+    name: 'e2e',
+    token: /\be2e\b/,
+    res: [
+      /\*\*(\d+) checks/g,
+      /\be2e (\d+)\b/g,
+      /\| `test\/e2e\.mjs` \| (\d+) \|/g,
+      /# (\d+) browser checks/g, // §8's command block
+      /test\/e2e\.mjs\s+(\d+) browser checks/g, // §6's layout block
+    ],
+  },
   {
     name: 'screens',
     token: /\bscreens\b/,
@@ -227,7 +315,13 @@ const GATE_FIGURES = [
   {
     name: 'focus',
     token: /\bfocus\b/,
-    res: [/\*\*(\d+) checks\*\* in a real browser/g, /(\d+) keyboard\/focus checks/g, /\| `tools\/focus\.mjs` \| (\d+) \|/g],
+    res: [
+      /\*\*(\d+) checks\*\* in a real browser/g,
+      /(\d+) keyboard\/focus checks/g,
+      /(\d+) keyboard and focus checks/g, // §8 says "keyboard and focus"
+      /\| `tools\/focus\.mjs` \| (\d+) \|/g,
+      /tools\/focus\.mjs\s+\d+\s+(\d+) keyboard/g, // §6's layout block
+    ],
   },
 ];
 
@@ -300,7 +394,9 @@ for (const m of doc.matchAll(/(\d+) checks × (\d+) viewports = (\d+)/g)) {
 console.log(`STATUS.md audit: ${listed.length} spec files listed, §7 gap list ends at ${maxGap}`);
 if (!ranSuite) {
   console.log('per-file test counts NOT checked — no vitest JSON report found.');
-  console.log('  to include them: VITEST_JSON=/tmp/r.json npx vitest run --reporter=json');
+  // Both flags, not one. `--outputFile` only applies once a reporter is selected, so it
+  // alone writes the default reporter's output and no JSON — verified by running it.
+  console.log('  to include them: npx vitest run --reporter=json --outputFile=/tmp/r.json && VITEST_JSON=/tmp/r.json npm run status');
 }
 if (problems.length === 0) {
   console.log('all checks passed');

@@ -72,6 +72,7 @@ evaluated, which a pass or fail result does not tell you.
 1. [Everything that was asked for](#1-everything-that-was-asked-for)
    — including row 10, corrected from "Done" to **Not done** (§3.5.2)
 2. [Verification state](#2-verification-state)
+   — [the gate itself had stopped looking](#21-the-gate-itself-had-stopped-looking--which-is-the-eighth)
 3. [Features: what, how, why](#3-features-what-how-why)
 4. [Bugs found and fixed](#4-bugs-found-and-fixed)
 5. [Architecture decisions](#5-architecture-decisions)
@@ -137,7 +138,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1153 unit tests across 58 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1171 unit tests across 58 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -151,7 +152,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1153 passing**, 58 files |
+| Unit tests | `npm test` | **1171 passing**, 58 files |
 | End-to-end | `npm run e2e` | **55 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -229,7 +230,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **58 files, 1153 tests**. The previous
+retyped by hand. The table is the complete set: **58 files, 1171 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -240,8 +241,8 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1153 total double-counts contrast's 34 tests**: 1134 distinct test cases are
-declared across 57 files. Both figures are recorded rather than reconciled by lowering the
+that **the 1171 total double-counts contrast's 34 tests**: 1137 distinct test cases are
+declared across 58 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
 
@@ -252,9 +253,23 @@ That FAIL is not a bug in the gate and the "fix" is not to make the file's own c
 appear; it is a real disagreement between two defensible numbers, and the one that belongs
 in a column labelled "tests in this file's run" is the run's.
 
-The audit's own hint, `VITEST_JSON=/tmp/r.json npx vitest run --reporter=json`, does not
-work with vitest 3.2 — that version wants `--outputFile=/tmp/r.json`. Recorded because the
-wrong incantation is currently printed by `npm run status`.
+**The audit's own hint was wrong twice, and the correction was also wrong.** It printed
+`VITEST_JSON=/tmp/r.json npx vitest run --reporter=json`, which writes JSON to *stdout* and
+therefore does not work under vitest 3.2. This note then "corrected" it to
+`--outputFile=/tmp/r.json` alone — **also wrong**, and it was wrong in the same direction:
+`--outputFile` only takes effect once a reporter is selected, so the command writes the
+*default* reporter's output to that path and produces no JSON at all. Both flags are
+required:
+
+```bash
+npx vitest run --reporter=json --outputFile=/tmp/r.json && VITEST_JSON=/tmp/r.json npm run status
+```
+
+Measured rather than inferred: `--outputFile` alone leaves no file behind, and the audit
+prints the same "no vitest JSON report found" it printed for the first wrong form — so the
+second "fix" would have been as invisible as the first. That is a correction of a
+correction, and the only reason it was caught is that this pass ran the hint rather than
+reading it.
 
 | File | Tests | Covers |
 |---|---|---|
@@ -315,6 +330,7 @@ wrong incantation is currently printed by `npm run status`.
 | `tdz.spec.ts` | 5 | no `useMemo` in `App` closes over a binding declared later |
 | `app-render.spec.ts` | 4 | `App` renders; the root landmark is labelled and names the current screen |
 | `icons.spec.ts` | 4 | every maneuver kind renders distinct geometry |
+| `status-audit.spec.ts` | 18 | STATUS.md checked by mutating it: a stale figure in every place one is stated, a dead anchor, a wrong `×`, and the limit — it cannot read a claim for truth |
 
 Browser gates, measured the same way:
 
@@ -384,6 +400,53 @@ number written once.
 Which is why this paragraph, and §13.16, both describe the failures without quoting
 the stale figures verbatim: reproducing the pattern in order to explain it puts the
 pattern back into the document, and the check is right to object.
+
+### 2.1 The gate itself had stopped looking — which is the eighth
+
+The failure above is why `npm run status` grew a *disagreement* check: two figures in this
+file can both be wrong the same way and agree with each other, which no value check can
+see. This pass found that the disagreement check, and the totals check beside it, had
+**both been reading nothing at all** — and had been reporting green while they did.
+
+**The totals check matched exactly three digits.** Every pattern reading this file's
+unit-test total was written `(\d{3})`, and the total was 828 when they were written. When
+the suite passed 1000 tests they all stopped matching at once: `(\d{3})` consumed the
+first three digits of a four-digit total and the pattern then demanded a space where the
+fourth digit was, so the match failed. No error, no changed output, no warning. The
+functions returned empty arrays, and **a check over an empty list agrees with itself** —
+so `one(unitTotals, …)` was comparing `[]` against `[]`, finding no disagreement, and
+succeeding at the one thing it exists to detect.
+
+**The browser-gate check could only see a bold table cell.** Every pattern was written
+against the §2 table's `**55 checks**` form or one prose phrasing. §6's layout block and
+§8's command block state the same figures in monospace, and neither was readable. So two
+sections carried a stale e2e figure while §2 carried the right one — a wrong count, twice,
+in the part of the document that exists to check counts.
+
+Both are one defect, and it is the defect this section is written about: **a check that
+cannot see the thing it names.** "No matches" and "no problems" are indistinguishable in
+the output and in review, which is why neither could be found by reading the audit's
+source. What found them was substituting one figure in a copy of this file and asking
+whether the audit objected — so `test/status-audit.spec.ts` (18 tests) now does exactly
+that: break one thing, require a complaint, and assert the exit code as well as the text.
+All four of its central assertions were each **verified to fail** with the corresponding
+fix reverted: the three-digit width, the code-block patterns, the complaint that an anchor
+matching nothing is itself a problem, and the leading-indent requirement that had been
+excluding every `tools/` row.
+
+**It paid for itself at once, by finding an eighth wrong figure that predates this pass.**
+§11.7 says **17** focus checks where §2, §6 and §8 all say 15, and 15 is right — counted
+off an actual run. The seventh failure above *is* a stray 17 for this same gate, and §2
+records that the original one lived in §6 and was fixed there, so this is a **third**
+copy, surviving for the same reason the others did: two readers of it agreed, and one said
+"keyboard and focus checks" where the others said "keyboard/focus" — a phrasing no pattern
+matched. The gate built to catch that class had never been able to read any of the three.
+
+The honest limit, now asserted rather than assumed: this catches *forms*. The new suite
+includes a case proving it cannot catch a claim — rewriting a sentence to say the opposite
+of the truth still passes, and the test says so in its own body rather than implying a
+strength it does not have. A check that cannot read prose for truth is worth having and is
+not sufficient, and this section's whole history is the argument for that sentence.
 
 
 ---
@@ -1556,7 +1619,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              332  RegionLibrary singleton, per-region workers, memory gate
 
-test/            1153 unit tests, 57 files
+test/            1171 unit tests, 58 files
 test/e2e.mjs           55 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1572,7 +1635,7 @@ tools/textscale-check.mjs 269 does the app notice a text scale that leaves
 tools/focus.mjs         297 15 keyboard/focus checks in a real browser (§11)
 tools/shots.mjs         195 screenshot every screen + computed styles (§11)
 tools/sw-shellcheck.mjs  99 offline boot after a captive portal (§13.3) — a gate
-tools/status-audit.mjs   310 STATUS.md checked against the files it describes
+tools/status-audit.mjs   406 STATUS.md checked against the files it describes
 tools/diag-route.mjs     55 throwaway used to read a failing e2e check (§3.19)
 ```
 
@@ -1866,7 +1929,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1026 unit tests
+npm test             # 1171 unit tests
 npm run e2e          # 55 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -3770,8 +3833,19 @@ problem in something that already existed — the first was the catalogue row in
 What §14.8 establishes is weaker and more useful: the app responds correctly to *each*
 mechanism, so whichever one the device uses, the layout turns on.
 
-The remaining half of
-gap 11 — making the setting reach the type at all — is still the `rem` conversion.
+**The last sentence of this subsection was itself a stale claim**, and it stood for a pass
+after §14.9 struck the thing it names. It read *"The remaining half of gap 11 — making the
+setting reach the type at all — is still the `rem` conversion."* The platform applies its
+font setting as a multiplier **on text**, and text is what `px` sizes, so the setting
+already reached this app's type and a `rem` conversion would have changed nothing. There
+is no remaining half. Corrected here rather than left, because it is the same shape as the
+rest of §2's list — a claim about code that nobody re-read — and because it was the only
+one in this document that survived *being named as false in an adjacent section*.
+
+Two of §14.8's own figures were also worth keeping: it claims the app responds to `setTextZoom`
+and to a changed root font size, which are the two mechanisms Chromium documents. Neither
+can be exercised from a browser, which is why the gate asserts the *responses* rather than
+the setting arriving.
 
 ### 14.9 The largest gap in this document rested on a false premise
 
