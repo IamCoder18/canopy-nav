@@ -1,4 +1,5 @@
 import React from 'react';
+import { installPositionSource } from './nav/simulate';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { ErrorBoundary, installGlobalErrorReporting } from './ErrorBoundary';
@@ -31,6 +32,20 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
     });
   });
 }
+
+/*
+ * The position source multiplexer goes in before React mounts.
+ *
+ * `useLocation` subscribes in an effect at mount, so an override installed later sits in
+ * front of a subscription that already went past it and delivers nothing. The first version
+ * installed on the Settings toggle and every symptom was consistent with a simulator that
+ * simply did not reach the app: the panel counted fixes, the distance readout sat frozen, and
+ * nothing threw. See `src/nav/simulate.ts`.
+ *
+ * Installing it unconditionally is cheap — it is a passthrough to the real receiver until a
+ * simulator is started — and it means no toggle has to re-subscribe anything.
+ */
+installPositionSource();
 
 createRoot(el).render(
   <React.StrictMode>

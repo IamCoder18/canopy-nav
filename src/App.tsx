@@ -25,6 +25,11 @@ import {
 } from './nav/reroute';
 import { RequestGate, isSuperseded } from './nav/requests';
 import { stepsEmptyReason } from './nav/steps';
+import {
+  startSimulator, stopSimulator, simulatorInstalled, currentSimulator,
+  onSimulatorChange, simulatorState, progressFraction,
+} from './nav/simulate';
+import type { SimulatorState } from './nav/simulator';
 import { observeChromeHeights } from './nav/chrome';
 import {
   formatDistance, formatDuration, formatClock, lineLength,
@@ -32,7 +37,7 @@ import {
 } from './geo';
 import { placeOnRoute, startPosition, type RoutePosition } from './nav/progress';
 import { ink, accentNight, applyThemeTokens, type as T, DP, ICON, SEP } from './theme';
-import { useLocation, type LocationMode } from './nav/location';
+import { useLocation, type LocationMode, type Fix } from './nav/location';
 import {
   readSelection, writeSelection, readUnits, writeUnits,
   readApiKey, writeApiKey, readEndpoint, writeEndpoint, validateEndpoint,
@@ -1713,6 +1718,8 @@ const banner = rerouteNotice ?? routeError ?? null;
           provenance={provenance}
           storageNotice={settingsNotice}
           headingRef={headingRef}
+          simAppFix={fix}
+          simRoute={route?.geometry ?? null}
           onBack={() => go('home')}
           onImport={() => go('import')}
           onRegions={() => go('regions')}
@@ -3923,7 +3930,42 @@ function SettingsScreen(props: {
   onEngines: () => void;
   /** This screen's heading, focused on arrival. */
   headingRef?: React.Ref<HTMLHeadingElement>;
+  /**
+   * The position the **app** last received, so the panel can show it.
+   *
+   * Not a convenience. The first two versions of the simulator's browser check tried to prove
+   * delivery by watching the navigation screen's distance readout move, and had to navigate
+   * back and forth through three screens to do it -- brittle, and twice wrong for reasons
+   * that had nothing to do with the simulator (`progressAlong` is monotonic, and
+   * `placeOnRoute` ignores a position further off route than the threshold, both by design).
+   *
+   * A driver whose simulator "is not working" needs to know whether the simulator is producing
+   * positions or the app is discarding them, and this is the line that tells them which.
+   */
+  simAppFix?: Fix | null;
+  /**
+   * The route the simulator should drive, or `null` when there is none.
+   *
+   * `null` rather than an empty array: a simulator pointed at nothing would emit a position
+   * the app tries to route to, and the resulting failure would look like a product bug.
+   */
+  simRoute?: LatLng[] | null;
 }) {
+  /**
+   * Simulator state, held here rather than in the simulator module.
+   *
+   * A debug control that owns its own state would not re-render when the car moves, so the
+   * number on screen would be the one it started at. This is the whole of the reason the
+   * panel needs a subscription.
+   */
+  const [, setSimTick] = useState(0);
+  const [simState, setSimState] = useState<SimulatorState | null>(simulatorState());
+  useEffect(() => onSimulatorChange((s) => { setSimState(s); setSimTick((n) => n + 1); }), []);
+  const simRunning = simulatorInstalled();
+  const simRoute = props.simRoute ?? null;
+  const simFrac = simRoute && simState ? progressFraction(simState, simRoute) : 0;
+  const simEmitted = simState?.emitted ?? 0;
+  const simActive = simState?.active ?? [];
   const serving = props.provenance
     ? describeProvenance(props.provenance.used, props.provenance.fellBack)
     : null;
@@ -3978,6 +4020,88 @@ function SettingsScreen(props: {
             <IconChevronRight size={ICON.secondary} color={ink.tertiary} />
           </span>
         </button>
+
+        {/* ---------------------------- drive simulator ---------------------------- */}
+        {/*
+          A debug control, and the reason it is here rather than buried is that it has to be
+          findable by whoever is trying to reproduce a turn bug — §7 gap 6, where the
+          inference is measurably wrong. It replaces the position source and is off by
+          default; nothing about it is safe on a real road, so it is labelled as much.
+
+          `installSimulator` feeds `navigator.geolocation.watchPosition`, the same seam
+          Playwright's `setGeolocation` uses, so the positions travel the real
+          watchPosition -> offroute -> progress -> guidance chain. Nothing in the app is
+          stubbed, which is the only reason this can find reroute bugs at all.
+        */}
+        <div className="section-head" style={T.body3m}>Drive simulator (debug)</div>
+        <div className="hint-card">
+          <div style={T.body3m}>
+            Replaces the GPS with a car driving a chosen route, so a turn instruction can be
+            checked without going there. Off by default.
+          </div>
+          {simRoute === null ? (
+            <div style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P2 }}>
+              No route to drive yet — plan one, or preview a route, then come back.
+            </div>
+          ) : (
+            <>
+              <div className="seg" style={{ marginTop: DP.P2 }}>
+                <button
+                  className={simRunning ? 'on' : ''}
+                  data-testid="sim-toggle"
+                  onClick={() => (simRunning ? stopSimulator() : startSimulator({ route: simRoute, speed: 13, jitter: 2, seed: 1 }, () => simRoute))}
+                >
+                  {simRunning ? 'Driving' : 'Start'}
+                </button>
+              </div>
+              {simRunning && (
+                <div data-testid="sim-panel" style={{ marginTop: DP.P2 }}>
+                  <label style={{ ...T.sub3, display: 'block' }}>
+                    {`Position along the route: ${Math.round(simFrac * 100)}%`}
+                    <input
+                      type="range" min={0} max={1000} value={Math.round(simFrac * 1000)}
+                      data-testid="sim-scrub"
+                      onChange={(e) => currentSimulator()?.scrubTo(Number(e.target.value) / 1000)}
+                      style={{ width: '100%' }}
+                    />
+                  </label>
+                  <div style={{ display: 'flex', gap: DP.P1, flexWrap: 'wrap', marginTop: DP.P2 }}>
+                    <button className="pill-btn" data-testid="sim-offroute"
+                      onClick={() => currentSimulator()?.fault({ kind: 'off-route', metres: 120 })}>
+                      Wrong exit
+                    </button>
+                    <button className="pill-btn" data-testid="sim-freeze"
+                      onClick={() => currentSimulator()?.fault({ kind: 'freeze', ms: 15_000 })}>
+                      Lose the fix
+                    </button>
+                    <button className="pill-btn" data-testid="sim-stop"
+                      onClick={() => currentSimulator()?.fault({ kind: 'stop', ms: 10_000 })}>
+                      Stop at a light
+                    </button>
+                    <button className="pill-btn" data-testid="sim-teleport"
+                      onClick={() => currentSimulator()?.fault({
+                        kind: 'teleport',
+                        to: [simRoute[0]![0] + 0.5, simRoute[0]![1] + 0.5],
+                      })}>
+                      Wrong side of town
+                    </button>
+                  </div>
+                </div>
+              )}
+                  <div data-testid="sim-app-fix" style={{ ...T.sub3, color: ink.secondary }}>
+            {props.simAppFix
+              ? `App last received ${props.simAppFix.pos[1].toFixed(4)}, `
+                + `${props.simAppFix.pos[0].toFixed(4)} at `
+                + `${Math.round(props.simAppFix.speed * 3.6)} km/h`
+              : 'App has received no position'}
+          </div>
+          <div data-testid="sim-state" style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P2 }}>
+            {`${simEmitted} fixes · ${Math.round(simFrac * 100)}% along · `}
+            {`${simActive.length} active fault${simActive.length === 1 ? '' : 's'}`}
+          </div>
+            </>
+          )}
+        </div>
 
         <div className="section-head" style={T.body3m}>Units</div>
         <div className="seg">

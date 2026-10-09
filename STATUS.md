@@ -111,6 +111,7 @@ evaluated, which a pass or fail result does not tell you.
    — [driving the guard through the UI](#1419-153-item-9--driving-the-guard-through-the-ui-and-what-it-cost)
    — [what an adversarial review found](#1421-what-an-adversarial-review-of-1418-1420-found-in-them)
    — [the number that refused the import](#14201-the-number-that-refused-the-import-arriving-too-late-to-refuse-it)
+   — [the drive simulator, and four unprovable checks](#1422-the-drive-simulator-and-four-checks-that-could-not-tell-it-from-a-working-one)
    — [the crop, and a guard that refused it anyway](#1420-the-crop-and-a-guard-that-refused-it-anyway)
 15. [The roadmap](#15-the-roadmap)
     — [Make the biggest extract that fits actually fit](#151-make-the-biggest-extract-that-fits-actually-fit)
@@ -145,7 +146,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1203 unit tests across 61 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1235 unit tests across 62 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -159,8 +160,8 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1203 passing**, 61 files |
-| End-to-end | `npm run e2e` | **68 checks** against the built bundle — +11 for the memory guard, +2 for the crop (§14.19, §14.20) |
+| Unit tests | `npm test` | **1235 passing**, 62 files |
+| End-to-end | `npm run e2e` | **79 checks** against the built bundle — +11 for the memory guard, +2 for the crop, +9 for the drive simulator |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
 | Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
@@ -238,7 +239,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **61 files, 1203 tests**. The previous
+retyped by hand. The table is the complete set: **62 files, 1235 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -249,8 +250,8 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1203 total double-counts contrast's 34 tests**: 1169 distinct test cases are
-declared across 61 files. Both figures are recorded rather than reconciled by lowering the
+that **the 1235 total double-counts contrast's 34 tests**: 1201 distinct test cases are
+declared across 62 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
 
@@ -321,6 +322,7 @@ reading it.
 | `probebound.spec.ts` | 6 | the catalogue probe is bounded, and every entry reaches a verdict |
 | `steps.spec.ts` | 8 | why the turn list is empty — three causes, three honest explanations |
 | `pbfcrop.spec.ts` | 12 | the crop: a cropped parse equals the unfiltered one restricted to the same box, on both readers and against the XML parser; a road leaving the box splits into runs rather than joining across the gap |
+| `simulator.spec.ts` | 32 | the drive simulator's pure core: a seeded generator, metre-accurate interpolation, seven fault kinds, and the catch-up bound that stops a `Date.now()` clock replaying the time since 1970 |
 | `memory.spec.ts` | 8 | the memory gate: the boxed node map measured against the same 229 B/node the guard uses, plus the structural properties that keep the file out of memory |
 | `worker-crop.spec.ts` | 6 | the crop across all three seams: `engine.ts`'s postMessage, both of the worker's PBF paths, and the reader's filter — driven through the worker's real `onmessage` handler, with a `Worker` stub for the message |
 | `pbf.spec.ts` | 28 | PBF vs XML parser equivalence on a hand-built file and the whole fixture; **the streaming reader** against the whole-file one at every chunk size, starvation, bounded read-ahead, and the same corrupt inputs |
@@ -347,7 +349,7 @@ Browser gates, measured the same way:
 
 | Suite | Checks | Command |
 |---|---|---|
-| `test/e2e.mjs` | 68 | `npm run e2e` |
+| `test/e2e.mjs` | 79 | `npm run e2e` |
 | `test/screens.mjs` | 159 (53 × 3 viewports) | `npm run screens` |
 | `tools/focus.mjs` | 15 | `npm run focus` |
 | `tools/sw-shellcheck.mjs` | 1 (offline boot after a captive portal) | `npm run swshell` |
@@ -1721,7 +1723,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx                4092  screens, navigation state, focus + announcements,
+  App.tsx                4216  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            222  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
@@ -1771,8 +1773,8 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              436  RegionLibrary singleton, per-region workers, memory gate
 
-test/            1203 unit tests, 61 files
-test/e2e.mjs           68 browser checks, built bundle
+test/            1235 unit tests, 62 files
+test/e2e.mjs           79 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
                              extract slicing is done by osmium on a desktop)
@@ -2294,8 +2296,8 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1203 unit tests
-npm run e2e          # 68 browser checks against the built bundle
+npm test             # 1235 unit tests
+npm run e2e          # 79 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
 npm run sync         # build, clear android assets, cap sync
@@ -4959,6 +4961,79 @@ now produced a fifth instance in one afternoon.
 
 ---
 
+### 14.22 The drive simulator, and four checks that could not tell it from a working one
+
+§15.5's item 35. Offline turn-by-turn is *inferred* from bearing changes, and §7 gap 6
+measured that inference missing three of seven real maneuvers on a 4 km stretch. It has been
+wrong for four passes, and there was no way to check it quickly: every maneuver bug had been
+found by reading the built app in Chromium and reasoning about what a driver would see. That
+is a slow way to learn whether a turn instruction is right, and it is why the inference
+survived four audits.
+
+**The one rule that shapes the design: no production code path is stubbed.** Positions are
+delivered through `navigator.geolocation.watchPosition`'s own callbacks — the same seam
+Playwright's `setGeolocation` uses. A simulator that bypassed the reroute policy would not
+find reroute bugs, which is most of what is worth finding. `simulator.ts` is pure and knows
+nothing about the DOM; `simulate.ts` is the only file that touches it.
+
+**Two of the four browser checks could not fail, and both were about delivery.**
+
+A rising fix count is `tick`'s `emitted`, which increments whether or not a single position
+is delivered. Reversing `deliver` to deliver nothing left that check **green**, with the app
+receiving nothing at all. Replacing it with the navigation screen's distance readout failed
+twice for reasons that had nothing to do with the simulator: `progressAlong` is monotonic,
+and `placeOnRoute` ignores a position further off route than the off-route threshold, both by
+design — so a car parked 30 km away correctly does not move the number. And asserting the app
+*reroutes* was worse than useless: `observeFix` is gated on `navActive` **and** on
+`fixStale`, so the banner depends on two pieces of app state the check cannot see, and when
+it did not appear the check blamed the app for something about the harness.
+
+What remains is the narrowest thing that is still the seam: the app's own `useLocation` fix
+must change when the car does. The panel renders it — which is also the one thing a driver
+whose simulator "is not working" needs, since it distinguishes *the simulator is not
+producing positions* from *the app is discarding them*. Reversing `deliver` fails it.
+
+**Three defects the simulator itself had, none of which any unit test could have found.**
+
+The first version replaced `watchPosition` when the toggle was pressed. `useLocation`
+subscribes in an effect at mount, so the app's callback had already gone to the real
+implementation: the override sat in front of a subscription that had passed it, and the
+simulator drove a car nobody heard about. Every symptom was consistent with that and none
+named it. It is now a **multiplexer installed at startup** from `main.tsx`, before React
+mounts, keeping the real receiver subscribed throughout.
+
+And when that multiplexer delivered synthetic fixes only to watchers registered *while it was
+running*, the app's sole subscription — registered at mount, before the toggle — stayed on
+the real receiver. The symptom was a panel reporting seven fixes emitted beside a frozen
+position and a speed of **0 km/h**, with nothing thrown anywhere.
+
+**A crash, found by the browser and not by a test.** `initialState` puts `nextFixAt` at 0,
+which is right for a simulator whose clock starts at 0 and catastrophic for one handed
+`Date.now()`: the catch-up loop tried to emit ~1.7 × 10¹² fixes and **crashed the renderer**
+in about four seconds, with no error to report. It was found because the e2e page *died*,
+not because a check failed. The same gap appears on a real machine whenever the tab is
+backgrounded or the process is suspended, so it is not only a debug-tool concern; catch-up is
+now bounded at four fixes per tick and the rest is skipped, because a fix for a moment forty
+minutes ago is not a position anyone was at.
+
+**A leak, and one check that could not see it.** Reversing `clearInterval` left "the panel
+goes down" **green** — `stopSimulator` nulls its state, the panel stops rendering, and every
+visible symptom is correct, while a timer keeps firing four times a second pushing synthetic
+positions at an app that believes it is on a real GPS. The fix count is frozen on stop and
+only a live clock advances it, so that is the signal; verified to fail (17 fixes at stop, 21
+four seconds later).
+
+**Four reversals verified**, each of which was first green or refused to build: delivering
+nothing, `scrubTo` doing nothing, faults being dropped, and `clearInterval` being skipped. A
+fifth — the fourth no-op reversal of this kind in the project — was written as
+`void fraction; void total;` and refused to compile, which is the reminder: *the reversal did
+not take* and *the check passed* have to be told apart by reading the build, not the check.
+
+**One honest limit.** Stopping the simulator mid-session does not re-subscribe the app's
+existing watch to the real receiver, so a driver who toggles it off needs a reload to get the
+real GPS back. Nothing is leaked — the receiver stays subscribed throughout and its fixes
+resume at once — but it is what the code says rather than what would be nicer to say.
+
 ## 15. The roadmap
 
 Everything not yet done, ordered so that each step is worth doing before the next. This
@@ -5270,6 +5345,12 @@ route geometry at a chosen speed, feed the result through the *real* `watchPosit
 `offroute` → `progress` → guidance path, and let the app's own logic produce every
 number on screen. No production code path is stubbed, which is the point — a simulator
 that bypasses the reroute policy would not find reroute bugs.
+
+**Done** — `src/nav/simulator.ts` (pure, 32 tests) and `src/nav/simulate.ts` (the only file
+that touches the DOM), reachable from Settings and off by default. Seven fault kinds, a
+scrub bar, seeded jitter, and a panel that shows **the position the app last received** —
+which is both what a driver whose simulator "is not working" needs, and the only browser
+check able to tell the seam apart from the simulator itself (§14.22).
 
 **36. Speed and pause controls**, plus a scrub bar, so a manoeuvre can be replayed at
 0.25× without waiting.

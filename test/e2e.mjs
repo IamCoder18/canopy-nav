@@ -213,6 +213,184 @@ try {
       await page.screenshot({ path: join(SHOTS, '5-steps.png') });
     }
 
+/**
+ * The drive simulator — §15.5.
+ *
+ * The claim worth proving in a browser is not "there is a button"; it is that turning it on
+ * delivers positions **through the real path**. The simulator replaces
+ * `navigator.geolocation.watchPosition`, the same seam Playwright's `setGeolocation` uses,
+ * so a climb in the fix count is evidence the app's own `useLocation` → `offroute` →
+ * progress chain is consuming them. A simulator wired anywhere else would look identical
+ * from this screen and find nothing.
+ *
+ * **No `page.goto`.** The route lives in React state, and a reload discards it — so the
+ * first version of this block reloaded, found no route, and asserted against the
+ * "nothing to drive" branch while claiming to test the other one.
+ */
+console.log('\ndrive simulator');
+{
+  /**
+   * Walk back to Home, which is the first screen with a Settings button.
+   *
+   * Mirrors the suite's own provenance loop rather than inventing a second one: both Back
+   * and "Exit navigation" appear on different screens in this chain, and a loop that only
+   * knows about Back stalls on the navigating screen. Eight iterations, not five -- steps ->
+   * navigating -> preview -> search -> home is more clicks than that, and being one short
+   * presented as a 20 s timeout naming a selector that was never going to appear.
+   */
+  for (let i = 0; i < 8; i++) {
+    if (await page.$('button[aria-label="Settings"]')) break;
+    const back = await page.$('button[aria-label="Back"]');
+    const exit = await page.$('button[aria-label="Exit navigation"]');
+    if (back) await back.click().catch(() => {});
+    else if (exit) await exit.click().catch(() => {});
+    else break;
+    await page.waitForTimeout(800);
+  }
+  await page.waitForSelector('button[aria-label="Settings"]', { timeout: 20000 });
+  await page.click('button[aria-label="Settings"]');
+  await page.waitForSelector('text=Drive simulator', { timeout: 20000 });
+
+  const card = await page.evaluate(() => document.body.innerText);
+  check('the simulator says it replaces the GPS, before anyone turns it on',
+    /Replaces the GPS/.test(card));
+
+  const toggle = await page.$('[data-testid=sim-toggle]');
+  if (!toggle) {
+    // The honest reading: with no route there is nothing to drive, so the control is not
+    // offered at all. That is a *stronger* form of off-by-default than a control that sits
+    // there reading "Start" — so it is asserted as its own case rather than folded in.
+    check('with no route the simulator offers no control at all, rather than driving nowhere',
+      /No route to drive yet/.test(card));
+  } else {
+    check('with a route the control is present and reads Start, not Driving',
+      /Start/.test(await toggle.textContent()),
+      (await toggle.textContent())?.trim());
+    check('a route is available to drive', true);
+
+    await toggle.click();
+    await page.waitForSelector('[data-testid=sim-panel]', { timeout: 20000 });
+
+    /**
+     * A rising fix count proves the *simulator* ran, not that anything reached the app:
+     * `emitted` increments inside `tick` whether or not a single position is delivered.
+     * Reversing `deliver` so it delivers nothing left a check written that way **green**,
+     * with the app receiving no position at all.
+     *
+     * So the claim is asserted on something only the app can produce, further down: the car
+     * is teleported half a degree away and the app must notice and reroute.
+     */
+    const readFixes = () => page.evaluate(() => {
+      const m = document.querySelector('[data-testid=sim-state]')?.textContent ?? '';
+      return Number(/(\d+) fixes/.exec(m)?.[1] ?? -1);
+    });
+    const first = await readFixes();
+    await page.waitForTimeout(6000);
+    const second = await readFixes();
+    check('the simulator is running while it says it is',
+      first >= 0 && second > first, `${first} fixes then ${second} after 6 s`);
+
+    // The fault control is wired to the same handle.
+    await page.click('[data-testid=sim-offroute]');
+    await page.waitForTimeout(1200);
+    const faulted = await page.evaluate(() =>
+      /1 active fault/.test(document.querySelector('[data-testid=sim-state]')?.textContent ?? ''));
+    check('an injected fault is registered and reported', faulted);
+
+    // `fill`, not `$eval` plus a synthetic event. React tracks the DOM value itself, so
+    // assigning `input.value` and dispatching `input` leaves the component state untouched
+    // and the handler never fires -- the slider moved and the car did not, which reads as a
+    // broken `scrubTo` rather than a broken way of setting an input's value.
+    await page.locator('[data-testid=sim-scrub]').fill('800');
+    await page.waitForTimeout(1500);
+    const pct = await page.evaluate(() =>
+      Number(/(\d+)% along/.exec(
+        document.querySelector('[data-testid=sim-state]')?.textContent ?? '')?.[1] ?? -1));
+    check('scrubbing moves the car along the route', pct > 60,
+      `${second} fixes so far, now ${pct}% along`);
+
+    /*
+     * The load-bearing check: a position from the simulator must arrive *at the app*.
+     *
+     * Four earlier versions of this did not, and each failed in a way that pointed away from
+     * the real cause:
+     *
+     *  - A rising fix count. That is `tick`'s `emitted`, which increments whether or not a
+     *    single position is delivered; reversing `deliver` to deliver nothing left it green
+     *    while the app received nothing at all.
+     *  - The reroute banner. `observeFix` is gated on `navActive` and on `fixStale`, so the
+     *    banner depends on two pieces of app state this block cannot see -- and when it did
+     *    not appear, the check blamed the app for something about the harness.
+     *  - The navigation screen's distance readout. Twice wrong for reasons that had nothing
+     *    to do with the simulator: `progressAlong` is monotonic, and `placeOnRoute` ignores a
+     *    position further off route than the off-route threshold, both by design. A car
+     *    parked 30 km away correctly does not move the number.
+     *  - Navigating back and forth through three screens to sample that readout. Brittle,
+     *    and it timed out on screens with nothing to do with this check.
+     *
+     * What remains is the narrowest thing that is still the seam: the app's own
+     * `useLocation` fix must change when the car does. The panel renders it, which is also
+     * what a driver whose simulator "is not working" needs -- whether the simulator is
+     * producing positions or the app is discarding them.
+     */
+    const appFix = () => page.evaluate(() =>
+      document.querySelector('[data-testid=sim-app-fix]')?.textContent ?? '');
+    await page.locator('[data-testid=sim-scrub]').fill('100');
+    await page.waitForTimeout(3000);
+    const fixEarly = await appFix();
+    await page.locator('[data-testid=sim-scrub]').fill('700');
+    await page.waitForTimeout(3000);
+    const fixLate = await appFix();
+
+    check("a position from the simulator arrives at the app's own useLocation",
+      fixEarly.length > 0 && fixLate.length > 0 && fixEarly !== fixLate,
+      `"${fixEarly}" then "${fixLate}"`);
+
+    check('the panel says so plainly when the app has received nothing',
+      !/App has received no position/.test(fixLate), fixLate.slice(0, 90));
+
+    // Stopped *after* that check, not before. The first version switched the simulator off
+    // and then waited for the app to react to a position it was no longer sending -- and
+    // reported "the app noticed nothing" as though the app were at fault. The order is the
+    // whole mechanism: a fix has to arrive before anything can react to it.
+    //
+    // And it must be stopped, because every later check in this suite runs against whatever
+    // the position source is currently delivering.
+    await page.click('button[aria-label="Back"]').catch(() => {});
+    await page.waitForSelector('button[aria-label="Settings"]', { timeout: 20000 });
+    await page.click('button[aria-label="Settings"]');
+    await page.waitForSelector('[data-testid=sim-toggle]', { timeout: 20000 });
+    await page.click('[data-testid=sim-toggle]');
+    await page.waitForTimeout(1000);
+    check('stopping it takes the panel down',
+      (await page.$('[data-testid=sim-panel]')) === null);
+    const restored = await page.evaluate(() =>
+      typeof navigator.geolocation.watchPosition === 'function');
+    check('it hands the real watchPosition back', restored);
+
+    /*
+     * The interval is actually cleared.
+     *
+     * Reversing `clearInterval` left the "panel goes down" check **green**: `stopSimulator`
+     * nulls `running`, the panel stops rendering and `deliverReal` starts delivering again,
+     * so every visible symptom is correct — while a timer keeps firing four times a second
+     * and pushing synthetic positions at an app that believes it is on a real GPS. A leaked
+     * interval is invisible from the panel, which is precisely why it needed its own check.
+     *
+     * The fix count is the signal: it is frozen on stop and only a live clock advances it.
+     */
+    const atStop = await page.evaluate(() =>
+      Number(/(\d+) fixes/.exec(
+        document.querySelector('[data-testid=sim-state]')?.textContent ?? '')?.[1] ?? -1));
+    await page.waitForTimeout(4000);
+    const afterStop = await page.evaluate(() =>
+      Number(/(\d+) fixes/.exec(
+        document.querySelector('[data-testid=sim-state]')?.textContent ?? '')?.[1] ?? -1));
+    check('stopping it stops the clock, not just the panel',
+      atStop >= 0 && afterStop === atStop, `${atStop} fixes at stop, ${afterStop} four seconds later`);
+  }
+}
+
     /* ---- provenance: who actually answered ---- */
     // The claim under test is that the app attributes the route to the engine
     // that served it and admits the offline engine has no turn-by-turn. A route
