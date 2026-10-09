@@ -77,6 +77,21 @@ export interface OsmDataset {
   green: RenderPoly[];
   bbox: [number, number, number, number];
   counts: { nodes: number; ways: number; routable: number };
+  /**
+   * §15.1's crop, and the measurement that replaces the guard's estimate.
+   *
+   * `cropStats` is what the parse actually kept — the number of nodes inside the box, which
+   * is not knowable from the file size and is the figure `importguard` would need to judge a
+   * cropped import. `cropIgnored` says a crop was asked for on a format that cannot honour
+   * one; `cropApplied` says one ran.
+   *
+   * Optional rather than required because `buildDataset` is called directly by tests and by
+   * the XML path's own tests, and making three fields mandatory would mean every one of them
+   * invents values. Absent means "no crop machinery was involved", which is the truth.
+   */
+  cropApplied?: boolean;
+  cropStats?: { seenNodes: number; keptNodes: number; ways: number; cropped: boolean } | null;
+  cropIgnored?: boolean;
 }
 
 /* --------------------------- speed table -------------------------- */

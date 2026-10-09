@@ -217,6 +217,33 @@ describe('the worker build handler', () => {
     }
   });
 
+  /**
+   * §15.1 item 4, closed: the number the guard could not know arrives with the dataset.
+   *
+   * A cropped import is warned rather than refused, because a whole-file estimate cannot
+   * judge it. The figure that would have refused it is the count of nodes inside the box,
+   * which only exists after the node phase has been read -- so this asserts that it arrives,
+   * and that it is the size of the *kept* set rather than the seen one, which is the entire
+   * value of reporting it.
+   *
+   * `buildDataset` *consumes* its inputs -- it clears the node map before returning -- so
+   * `counts.nodes` and `cropStats.keptNodes` agreeing is a claim about two independently
+   * produced numbers rather than the same number twice.
+   */
+  it('reports the kept count as a measurement the guard can be checked against', async () => {
+    const bytes = new Uint8Array(readFileSync(REAL_PBF));
+    const crop: PbfCrop = { west: -1.45, south: 51.45, east: -1.3, north: 51.65 };
+    const r = await runWorkerBuild({ bytes: bytes.buffer.slice(0), format: 'pbf', crop });
+    expect(r.ok, r.message).toBe(true);
+    const stats = r.dataset!.cropStats as { seenNodes: number; keptNodes: number };
+    const counts = r.dataset!.counts as { nodes: number };
+    expect(counts.nodes).toBe(stats.keptNodes);
+    // And it is smaller than the file, or reporting it would be pointless.
+    expect(stats.keptNodes).toBeLessThan(stats.seenNodes);
+    expect(stats.keptNodes / stats.seenNodes).toBeGreaterThan(0);
+    expect(stats.keptNodes / stats.seenNodes).toBeLessThan(1);
+  });
+
   it('says so when a crop is asked for on a format that cannot honour one', async () => {
     const xml = readFileSync(join(__dirname, 'fixture.osm'), 'utf8');
     const r = await runWorkerBuild({

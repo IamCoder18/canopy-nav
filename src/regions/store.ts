@@ -25,7 +25,7 @@
 
 import { useSyncExternalStore } from 'react';
 import { OsmEngine, importPreflight, type BuildProgress } from '../osm/engine';
-import { canImport, importWarning } from '../osm/importguard';
+import { canImport, importWarning, importBudgetBytes, BYTES_PER_NODE } from '../osm/importguard';
 import type { PbfCrop } from '../osm/pbf';
 
 import type { OsmDataset } from '../osm/engine.worker';
@@ -188,6 +188,47 @@ export async function importRegionFile(req: ImportRequest): Promise<OsmDataset |
      * regions" — the previous map gone with nothing said and nothing to undo it.
      */
     const { nodes, ways, routable } = dataset.counts;
+
+    /**
+     * Compare what the parse *actually* cost against what the guard estimated.
+     *
+     * §15.1 item 4, and the reason the reader reports `cropStats`. A cropped import is
+     * warned rather than refused above, because a whole-file estimate cannot judge it — so
+     * the number that would have refused it arrives only after the node phase has been read.
+     * This is that number being used, rather than left to sit on the dataset.
+     *
+     * Two things it does:
+     *
+     * - Says when the real cost exceeded the budget, which is the failure the whole file
+     *   exists to prevent and the one a warning would otherwise have papered over.
+     * - Records `cropApplied` in the message either way when a crop was asked for and did
+     *   *not* happen, because a silent no-op is worse than a slow import.
+     *
+     * It is a warning and not a post-hoc refusal: the memory has already been spent, and
+     * throwing here would discard a map that parsed. Saying so is the honest move; a
+     * "successful" import on a device that was about to be killed teaches nothing.
+     */
+    if (dataset.cropIgnored) {
+      onWarn?.(
+        'Only the area inside the chosen box was read from this file — the format it is in '
+        + 'does not support cropping, so the whole of it was parsed. If the app closes while '
+        + 'importing, convert it to .osm.pbf first.',
+      );
+    }
+    const cropStats = dataset.cropStats;
+    if (cropStats?.cropped) {
+      const actual = cropStats.keptNodes * BYTES_PER_NODE;
+      const budget = importBudgetBytes();
+      if (actual > budget) {
+        onWarn?.(
+          `That area held about ${Math.round(cropStats.keptNodes).toLocaleString()} nodes, `
+          + `which needs roughly ${Math.round(actual / 1048576)} MB of memory against this `
+          + `device's ${Math.round(budget / 1048576)} MB. It parsed, but there was little room, `
+          + 'so remove another region or choose a smaller area.',
+        );
+      }
+    }
+
     if (nodes === 0 && ways === 0) {
       throw new Error(
         `${req.file.name} contains no OpenStreetMap data. ` +
