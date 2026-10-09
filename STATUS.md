@@ -109,6 +109,7 @@ evaluated, which a pass or fail result does not tell you.
    — [two more code defects](#1416-two-more-code-defects-one-of-which-is-the-largest-thing-found-in-this-pass)
    — [the guard's refusal said nothing](#1418-the-guards-refusal-said-nothing-and-153s-coverage-found-it)
    — [driving the guard through the UI](#1419-153-item-9--driving-the-guard-through-the-ui-and-what-it-cost)
+   — [what an adversarial review found](#1421-what-an-adversarial-review-of-1418-1420-found-in-them)
    — [the crop, and a guard that refused it anyway](#1420-the-crop-and-a-guard-that-refused-it-anyway)
 15. [The roadmap](#15-the-roadmap)
     — [Make the biggest extract that fits actually fit](#151-make-the-biggest-extract-that-fits-actually-fit)
@@ -158,7 +159,7 @@ stands. **Bold** = fully working and verified.
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
 | Unit tests | `npm test` | **1194 passing**, 60 files |
-| End-to-end | `npm run e2e` | **69 checks** against the built bundle — +11 for the memory guard, +2 for the crop (§14.19, §14.20) |
+| End-to-end | `npm run e2e` | **68 checks** against the built bundle — +11 for the memory guard, +2 for the crop (§14.19, §14.20) |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
 | Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
@@ -343,7 +344,7 @@ Browser gates, measured the same way:
 
 | Suite | Checks | Command |
 |---|---|---|
-| `test/e2e.mjs` | 69 | `npm run e2e` |
+| `test/e2e.mjs` | 68 | `npm run e2e` |
 | `test/screens.mjs` | 159 (53 × 3 viewports) | `npm run screens` |
 | `tools/focus.mjs` | 15 | `npm run focus` |
 | `tools/sw-shellcheck.mjs` | 1 (offline boot after a captive portal) | `npm run swshell` |
@@ -1753,7 +1754,7 @@ src/
     store.ts              395  RegionLibrary singleton, per-region workers, memory gate
 
 test/            1194 unit tests, 60 files
-test/e2e.mjs           69 browser checks, built bundle
+test/e2e.mjs           68 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
                              extract slicing is done by osmium on a desktop)
@@ -2037,6 +2038,53 @@ contains the word — the message was explaining that parsing was refused. It no
 `.progress-card` not existing, which is what the progress indicator actually is.
 
 
+### 14.21 What an adversarial review of §14.18–14.20 found in them
+
+A subagent was given the last five commits, this document's own definitions of what counts
+as a defect here, and permission to answer negatively. It ran the gates against a pristine
+export and did roughly twenty mutation experiments. **Its counts were all correct** — it
+re-ran `test/e2e.mjs` and confirmed 66 `PASS`, and re-derived 1189 tests, 159 screens, 15
+focus — which is the useful part: it agreed with the document where the document was right.
+
+It also found seven things wrong, six of them in the checks written by §14.19 and §14.20. The
+two that mattered most were both checks that could not fail:
+
+**`the override gets past the memory guard` measured the wrong thing, twice.** `onForce` calls
+`setPendingForce(null)` unconditionally, so "the card left the screen" is true the moment the
+click is handled — *before* the import has been refused again. The check waited for the
+refusal text to disappear and resolved transiently-true. Reversing `onPicked(file, true)` to
+`onPicked(file)` left it **green**, printing "memory guard no longer applies" while the guard
+was refusing again and the driver was told the opposite of what happened. Reversing `onForce`
+to import nothing at all also left it green.
+
+It is now one check for one claim — wait for the *parser's* verdict, and only then require the
+guard's sentence to be absent, which a re-refusal can never satisfy because a refusal never
+reaches the parser. Three reversals verified: `forceMemory` dropped, the import dropped, and
+the guard made to ignore `forceMemory` entirely.
+
+**Three markers chosen for that check were wrong, each found by a reversal rather than by
+reading.** "nothing was changed" is in the guard's sentence *and* in several parser outcomes.
+`osmium extract -b` is in the Regions screen's own static help copy, so it is present whether
+or not the guard ever spoke — permanently false, and un-failable. The sentence
+`refusal()` alone writes is the third attempt and the first that is actually unique.
+
+Also: the budget check asserted the word "available" rather than the figure, which the browser
+already knows; two fixed sleeps sat where a harness miss would have been reported as an app
+fault — §2.3's own fix list says "every sleep became a wait"; and the cancel block could be
+skipped with **no `check()` emitted at all**, so the run printed "all checks passed" with 68
+checks instead of 69, which the audit cannot see because it compares figures only across the
+document, never against a run.
+
+Two limits it identified are recorded rather than fixed, because fixing them would mean
+shipping an untested path: `cropIgnored` on the XML branch is defensive (no app flow imports
+XML with a crop), and `test/threshold-prose.spec.ts` structurally cannot catch a stale
+comment in `test/` or `tools/` — it reads four named comments in `src/`.
+
+**Its negative results are the reason to trust the rest.** `forceReason` cannot go stale,
+render empty or leak across imports — one setter opens the card, both exits clear both, and
+every `canImport` refusal carries a `reason`. `guardCtx` is closed on every path. The
+`openSync`/`writeSync` loop is correct and its file size equals the derivation exactly.
+
 ### 14.20 The crop, and a guard that refused it anyway
 
 §15.1 item 2, built on §15.1.1's measurement. The reader takes a box, drops every node
@@ -2193,7 +2241,7 @@ three cold-start console warnings (§3.15).
 npm install
 npm run dev          # vite dev server
 npm test             # 1194 unit tests
-npm run e2e          # 69 browser checks against the built bundle
+npm run e2e          # 68 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
 npm run sync         # build, clear android assets, cap sync

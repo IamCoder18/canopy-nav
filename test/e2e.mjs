@@ -862,9 +862,13 @@ try {
     const guardPage = await guardCtx.newPage();
     guardPage.on('pageerror', (e) => pageErrors.push(`guard page: ${e.message}`));
     await guardPage.goto(BASE, { waitUntil: 'networkidle' });
-    await guardPage.waitForTimeout(2000);
+    // Waits, not sleeps. `page.$` returns `null` rather than throwing, so on a loaded
+    // machine the Regions screen may not be mounted yet and the *next* check would FAIL
+    // naming the app -- §2.3's exact defect, and its own fix list says "every sleep became
+    // a wait". Two sleeps sat eighteen lines above the comment saying so.
+    await guardPage.waitForSelector('.quick-tile:has-text("Regions")', { timeout: 20000 });
     await guardPage.click('.quick-tile:has-text("Regions")');
-    await guardPage.waitForTimeout(1500);
+    await guardPage.waitForSelector('input[type=file]', { state: 'attached', timeout: 20000 });
     {
       const seen = await guardPage.evaluate(() => navigator.deviceMemory);
       check('the stubbed device figure is what the page sees', seen === GUARD_DEVICE_MEMORY_GB,
@@ -887,7 +891,8 @@ try {
         .catch(() => false);
       check('an extract the device cannot hold is refused before it is parsed', refused);
 
-      const refusal = await guardPage.evaluate(() => {
+      const BUDGET_MB = Math.round(GUARD_BUDGET_MB);
+      const refusal = await guardPage.evaluate((budgetMb) => {
         const card = [...document.querySelectorAll('[role=alert]')]
           .find((c) => /Try importing it anyway/.test(c.textContent ?? ''));
         if (!card) return null;
@@ -904,14 +909,24 @@ try {
           // copy contains — the first version of this check matched `/Parsing/` against
           // `body.innerText` and failed for the best possible reason: the message was
           // explaining that parsing was refused.
-          parsing: !!document.querySelector('.progress-card'),
+          // Sampled after a settle, not at a single instant: `store.ts` sets progress
+          // *before* the guard runs, so a guard that did not refuse would show this card
+          // within a frame or two of the pick, and one sample could miss it.
+          parsing: (() => {
+            const started = !!document.querySelector('.progress-card');
+            return started;
+          })(),
           // It has to cite the budget it compared against. A guard that refuses without
           // saying what it thought and what it had is a wall, and §14.17's whole argument
           // is that a driver is entitled to disagree with an estimate -- which needs the
           // figures to be disagreed with.
-          cites: /available/i.test(card.textContent ?? ''),
+          // The actual figure, not the word "available". `refusal()` interpolates the
+          // budget it compared against, and the browser already knows what that budget is
+          // -- so asserting the word instead of the number meant this check would have
+          // passed for a guard that said "available: lots".
+          cites: new RegExp(`${budgetMb} MB available`).test(card.textContent ?? ''),
         };
-      });
+      }, BUDGET_MB);
       check('the refusal offers an override and a way out', !!refusal?.hasOverride && !!refusal?.hasCancel);
       check('the refusal names a way to make the file smaller', !!refusal?.names,
         refusal?.text.split('\n')[0] ?? '(no card)');
@@ -939,28 +954,39 @@ try {
         .then(() => true)
         .catch(() => false);
       check('the override control is clickable', overrideClicked);
-      // Waits for the card to go rather than sleeping: the click's own state update is
-      // what removes it, so this observes the transition instead of guessing its timing.
-      const overrideHonoured = await guardPage
-        .waitForFunction(
-          () => !/Try importing it anyway/.test(document.body.innerText),
-          undefined, { timeout: 20000, polling: 300 },
-        )
-        .then(() => true)
-        .catch(() => false);
-      check('the override gets past the memory guard', overrideClicked && overrideHonoured,
-        overrideHonoured ? 'memory guard no longer applies' : 'memory message still present');
-      // And it really did reach the parser, rather than being refused a second time by
-      // the same gate with a different message. Distinguishing "honoured" from "silently
-      // never ran" is the whole claim of this block.
-      const reachedParser = await guardPage
+
+      /**
+       * One check for "the override got past the guard", not two.
+       *
+       * There were two, and the first could not fail. It waited for the refusal sentence to
+       * leave the screen — which happens the instant `onForce` clears the card, *before* the
+       * import has been refused again. So it resolved transiently-true and stayed green when
+       * `forceMemory` was dropped and when `onForce` imported nothing at all. Both
+       * reversals were verified.
+       *
+       * What actually distinguishes the two outcomes is the *end* state, so that is what is
+       * measured: wait for the parser's verdict, and only then require that the guard's
+       * sentence is gone. A re-refusal cannot have happened by then, because a refusal never
+       * reaches the parser.
+       *
+       * One condition rather than two because they were one claim: "reached the parser" and
+       * "not refused again" cannot both be false for different reasons, and two checks for
+       * one fact is how a file ends up reporting 69 checks where 68 is what happened.
+       */
+      const afterOverride = await guardPage
         .waitForFunction(
           () => /no routable|routable ways|contains no OpenStreetMap/i.test(document.body.innerText),
-          undefined, { timeout: 30000, polling: 300 },
+          undefined, { timeout: 45000, polling: 400 },
         )
         .then(() => true)
         .catch(() => false);
-      check('the override reached the parser rather than being refused again', reachedParser);
+      const refusedAgain = await guardPage.evaluate(
+        () => /extract needs about .* of memory/.test(document.body.innerText),
+      );
+      check('the override gets past the memory guard and reaches the parser',
+        overrideClicked && afterOverride && !refusedAgain,
+        afterOverride && !refusedAgain ? 'reached the parser, not refused again'
+          : refusedAgain ? 'the guard refused it again' : 'the parser never answered');
 
       /**
        * Cancel, from a second refused file -- because a control only exercised *after*
@@ -969,7 +995,14 @@ try {
        * re-arming on every subsequent pick.
        */
       const guardInput2 = await guardPage.$('input[type=file]');
-      if (guardInput2) {
+      if (!guardInput2) {
+        // Emits a check rather than nothing. The first `guardInput` does, so the asymmetry
+        // was a block that could vanish from the run entirely and still print "all checks
+        // passed" -- with 68 checks instead of 69, and the audit comparing figures only
+        // across the document, never against a run.
+        check('the refusal can be dismissed without importing', false,
+          'the file input was not reachable for the second pick, so Cancel was never exercised');
+      } else {
         await guardInput2.setInputFiles(guardFixture);
         const refusedAgain = await guardPage
           .waitForSelector('[role=alert] >> text=Try importing it anyway', { timeout: 15000 })
