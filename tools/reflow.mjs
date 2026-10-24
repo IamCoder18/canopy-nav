@@ -75,6 +75,15 @@ const PIECES = [
   ['.offroute-banner', 'off-route notice'],
   ['.nav-controls', 'control column'],
   ['.nav-bottom', 'bottom bar'],
+  // The credit too. It floats above the map like the rest of the chrome, and at
+  // large text it grew over the maneuver card while every check below stayed
+  // green — the credit was the one piece of chrome not in this list. It is
+  // checked like the rest now; overlap with the *map* is fine (it lives there),
+  // overlap with the instruction is not.
+  ['.maplibregl-ctrl-attrib', 'attribution credit'],
+  // And the layer chip, for the same reason: at 200% it ran into the zoom
+  // buttons while the checks all passed, because it was not among them.
+  ['.nav-status', 'layer chip'],
 ];
 
 /** Runs in the page: find chrome that intersects other chrome, or leaves the viewport. */
@@ -273,7 +282,16 @@ for (const zoom of [1, 1.75, 2]) {
     if (factor > 1) {
       document.documentElement.style.setProperty('font-size', `${16 * factor}px`, 'important');
     }
-    let n = 0;
+    // Two passes — measure every original first, *then* write the scaled values.
+    //
+    // One pass compounds on nested text: the attribution bar owns text and its
+    // `<a>` children own text, so the parent was written 26px inline, the child's
+    // computed size was then 26px, and the child was written 52px — measured as
+    // the "wall of text" swallowing the map at 200%. A platform text scale
+    // multiplies each element's own size exactly once; an inheriting child is
+    // scaled along with its parent, never twice. Measuring first is what makes
+    // "from its own original" true rather than aspirational.
+    const owners = [];
     for (const el of document.querySelectorAll('body *')) {
       const cs = getComputedStyle(el);
       if (cs.display === 'none' || cs.visibility === 'hidden') continue;
@@ -281,10 +299,12 @@ for (const zoom of [1, 1.75, 2]) {
       if (!ownsText) continue;
       const px = parseFloat(cs.fontSize);
       if (!Number.isFinite(px) || px === 0) continue;
-      el.style.setProperty('font-size', `${(px * factor).toFixed(2)}px`, 'important');
-      n++;
+      owners.push([el, px]);
     }
-    return { n, threshold };
+    for (const [el, px] of owners) {
+      el.style.setProperty('font-size', `${(px * factor).toFixed(2)}px`, 'important');
+    }
+    return { n: owners.length, threshold };
   }, { factor: zoom, threshold: 20 });
   // Wait for the app's own detector to see the new root size.
   //

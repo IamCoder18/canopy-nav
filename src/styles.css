@@ -284,6 +284,32 @@ code {
   */
   font: 400 13px/1.4 var(--roboto);
   /*
+   * Held at its designed size whatever the driver's font setting.
+   *
+   * This is Google Maps' own treatment of the "Map data ©…" credit: the
+   * guidance text scales in full — the reason the driver raised the setting —
+   * and the legal text stays one small size, out of the map. A WebView cannot
+   * opt a subtree out of the platform's text zoom (it arrives as an inline
+   * `font-size: … !important` that no stylesheet can beat), so the credit is
+   * not *re-sized* here, it is *re-rendered* at `1 / --text-scale`. The factor
+   * is measured by `src/textscale.ts` — the larger of the root and probe
+   * ratios, so whichever mechanism the platform uses — and published on the
+   * root. `zoom` is what makes it exact: it divides the rendered result
+   * whatever font-size produced it, and unlike `transform: scale()` it scales
+   * *layout*, so the text re-wraps as its designed 13px self instead of
+   * wrapping as 26px text and being painted small afterwards (measured: the
+   * transform variant still laid out two lines and poked 12px into the banner
+   * stack's lane).
+   *
+   * zoom divides every length inside the box, so each of them is declared
+   * x `--text-scale` to hold its designed pixel value. Uncompensated, `margin:
+   * 8px` renders 4px at 200% and the credit sinks into the bottom rail it
+   * lifts above — measured, 606x21px of overlap with the bar. The reserve
+   * (`--attrib-h`) and every offset that clears the credit assume its designed
+   * size; holding the size is what makes those assumptions true at every scale.
+   */
+  zoom: calc(1 / var(--text-scale, 1));
+  /*
     Inset from the corner rather than flush to two screen edges. Flush to the
     bottom and the right, it read as a slab of chrome stuck to the frame, and it
     is also the reason several screens had their bottom content clipped: the
@@ -296,8 +322,11 @@ code {
     the flag is the honest tool here.
   */
   border-radius: var(--r-sm, 8px) 0 0 0;
-  margin: 0 8px 8px 0 !important;
-  padding: 4px 6px;
+  /* x `--text-scale` because the `zoom` above divides every length in and
+     around this box — see the note there. Uncompensated, these 8px render as
+     4px at 200% and the corner inset plus the rail lift shrink away. */
+  margin: 0 calc(8px * var(--text-scale, 1)) calc(8px * var(--text-scale, 1)) 0 !important;
+  padding: calc(4px * var(--text-scale, 1)) calc(6px * var(--text-scale, 1));
   /* Above the pinned cards, which must clear it via `--attrib-h` — and see the
      container rule below: 46 against the map controls' own stacking context is
      what actually raises this. */
@@ -336,7 +365,10 @@ code {
  * navigation ends: the property survives the rail it measured.
  */
 .app[data-nav] .maplibregl-ctrl-attrib {
-  margin-bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + 6px) !important;
+  /* x `--text-scale`: the `zoom` on the credit divides this margin like every
+     other length in the box, and this margin is the one that keeps the credit
+     off the bottom rail — exactly where halving it hurts. */
+  margin-bottom: calc((var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + 6px) * var(--text-scale, 1)) !important;
 }
 /*
  * The links are tappable, but they are legal text: a 3px lift and the project's
@@ -348,8 +380,10 @@ code {
   display: inline-block;
   /* 3px, not 6px: this padding is also the credit's *height*, which every
      screen's bottom clearance is computed from — and the file's own note above
-     says the type is legal text, not a control to be read at arm's length. */
-  padding: 3px 2px;
+     says the type is legal text, not a control to be read at arm's length.
+     x `--text-scale` like every length in the zoomed box, so the credit's
+     height holds at its designed value at every text scale. */
+  padding: calc(3px * var(--text-scale, 1)) calc(2px * var(--text-scale, 1));
 }
 .maplibregl-ctrl-attrib a:hover { color: #FFFFFF !important; text-decoration: underline; }
 /*
@@ -362,7 +396,7 @@ code {
   color: var(--ink-secondary, #DED2BE) !important;
   border-radius: var(--r-sm, 8px) 0 0 0;
 }
-.maplibregl-ctrl-attrib-button span { width: 44px; height: 44px; line-height: 44px; font-size: 14px; }
+.maplibregl-ctrl-attrib-button span { width: 44px; height: 44px; line-height: 3.143; font-size: 14px; }
 .maplibregl-ctrl-attrib.maplibregl-compact-show { border-radius: var(--r-sm, 8px); }
 
 .maplibregl-canvas { outline: none; }
@@ -825,7 +859,7 @@ code {
    * its label, differentiated by colour alone.
    */
   font-size: 20px;
-  line-height: 26px;
+  line-height: 1.3;
   color: var(--ink-secondary, #DED2BE);
   /* Never truncates: it is two words, and a clipped "Not se…" is worse than
      nothing because it stops reading as a word at all. */
@@ -884,7 +918,7 @@ code {
      and AAOS body copy starts at 24. Errors are exactly the text a user has to
      read carefully, so they use body3 rather than inheriting a browser default. */
   font-size: 24px;
-  line-height: 32px;
+  line-height: 1.333;
   /* A left rule in the message's own colour. The fill alone carries the meaning
      at a glance, but on a map — which is a busy, mid-value canvas — a 4px edge
      reads at a glance where a large translucent block competes with the roads
@@ -980,7 +1014,7 @@ code {
   line-height: 28px;
 }
 .remove-question svg { flex: 0 0 auto; }
-.remove-detail { color: var(--ink-secondary, #DED2BE); font-size: 18px; line-height: 24px; }
+.remove-detail { color: var(--ink-secondary, #DED2BE); font-size: 18px; line-height: 1.333; }
 
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
@@ -1033,7 +1067,7 @@ code {
 .progress-stage { line-height: 32px; }
 .progress-pct {
   font-size: 18px;
-  line-height: 24px;
+  line-height: 1.333;
   letter-spacing: 1.2px;
   color: var(--ink-secondary, #DED2BE);
 }
@@ -1317,10 +1351,10 @@ code {
   border-left: 4px solid #E8A33D;
   color: var(--ink-primary, #F7F0E1);
   font-size: 24px;
-  line-height: 32px;
+  line-height: 1.333;
 }
 @media (max-width: 500px) {
-  .offroute-banner { font-size: 20px; line-height: 28px; padding: 10px 16px; }
+  .offroute-banner { font-size: 20px; line-height: 1.4; padding: 10px 16px; }
 }
 
 .maneuver-icon {
@@ -1500,8 +1534,8 @@ code {
     flex: 0 0 64px;
   }
   .maneuver-icon svg { width: 48px; height: 48px; }
-  .maneuver-banner .maneuver-dist { font-size: 28px !important; line-height: 34px !important; }
-  .maneuver-banner .maneuver-instr { font-size: 24px !important; line-height: 30px !important; }
+  .maneuver-banner .maneuver-dist { font-size: 28px !important; line-height: 1.214 !important; }
+  .maneuver-banner .maneuver-instr { font-size: 24px !important; line-height: 1.25 !important; }
   /* Trim the row to two lines rather than growing without bound. */
   .maneuver-instr {
     display: -webkit-box;
@@ -1706,6 +1740,20 @@ code {
   text-align: right;
 }
 .nav-status > * { max-width: 100%; overflow-wrap: anywhere; }
+/*
+ * The chip holds its designed size, like the credit below it.
+ *
+ * This is map *metadata* — which layer is showing — not guidance: the reason
+ * the driver raised the font size. It is also stated in full in the layers
+ * sheet, where it scales with everything else. Held at its designed size it
+ * stays a chip; left to scale it became a 66px banner that ran into the zoom
+ * buttons at 200% (measured in reflow-200pct.png: "De… No traff…" cut by the
+ * control column it sits under). `zoom` on the *text children* rather than the
+ * box: the box's own padding, gap and 320px cap are real pixels and need no
+ * compensation that way, and the ellipsis still works because the spans keep
+ * their layout role.
+ */
+.nav-status > * { zoom: calc(1 / var(--text-scale, 1)); }
 
 /* --------------------------- layers panel --------------------------- */
 
@@ -2184,7 +2232,7 @@ code {
   text-align: left;
   font: inherit;
   font-size: 20px;
-  line-height: 28px;
+  line-height: 1.4;
   color: #F2B8B5;
   cursor: pointer;
   /*
@@ -2223,7 +2271,7 @@ code {
   color: var(--ink-secondary, #DED2BE);
   font: inherit;
   font-size: 16px;
-  line-height: 24px;
+  line-height: 1.5;
   text-decoration: underline;
   cursor: pointer;
   min-height: 24px;
@@ -2535,7 +2583,7 @@ ol.search-results { list-style: none; margin: 0; padding-left: 12%; padding-righ
   50% { box-shadow: 0 0 0 6px rgba(255, 180, 84, 0); }
 }
 .import-label {
-  font-size: 13px; line-height: 17px;
+  font-size: 13px; line-height: 1.308;
   color: var(--ink-secondary, #DED2BE);
 }
 .import-step.active .import-label,
@@ -2561,12 +2609,12 @@ ol.search-results { list-style: none; margin: 0; padding-left: 12%; padding-righ
 }
 .import-run-stage {
   flex: 1 1 auto; min-width: 0;
-  font-size: 16px; line-height: 24px;
+  font-size: 16px; line-height: 1.5;
   color: var(--ink-primary, #F7F0E1);
 }
 .import-run-pct {
   flex: 0 0 auto;
-  font-size: 18px; line-height: 24px; letter-spacing: 1.2px;
+  font-size: 18px; line-height: 1.333; letter-spacing: 1.2px;
   color: var(--ink-secondary, #DED2BE);
   font-variant-numeric: tabular-nums;
 }
@@ -2574,7 +2622,7 @@ ol.search-results { list-style: none; margin: 0; padding-left: 12%; padding-righ
   display: flex; align-items: center; gap: 8px;
   min-width: 0;
   color: var(--ink-secondary, #DED2BE);
-  font-size: 13px; line-height: 18px;
+  font-size: 13px; line-height: 1.385;
 }
 .import-run-file > span {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -3034,7 +3082,7 @@ button.chip.ok { background: rgba(255, 180, 84, 0.18); color: var(--accent, #FFB
     same token.
    */
   .eta-bar { gap: 8px; }
-  .eta-value { font-size: 28px !important; line-height: 36px !important; }
+  .eta-value { font-size: 28px !important; line-height: 1.286 !important; }
 }
 
 /*
@@ -3074,12 +3122,24 @@ button.chip.ok { background: rgba(255, 180, 84, 0.18); color: var(--accent, #FFB
 }
 @media (max-height: 599px) and (min-width: 600px) {
   .nav-status {
-    right: auto;
-    left: 24px;
-    /* One line. Two lines of metadata is what made it 92px tall and what put it
-       into the control column's space in the first place. The clearance figure
-       is the control stack's own measured width at this shape — a three-column
-       grid of 76dp targets is 260px — plus its right margin. */
+    right: 24px;
+    /* One line, not two.
+     *
+     * The base rule is a column, so "Default" and "No traffic data" stack into
+     * two lines — 92px tall at 100%, ~104px at 200% — and a box that tall,
+     * anchored bottom-left, lands inside the banner stack's own lane and ghosts
+     * through the off-route notice (measured in reflow-200pct.png: "Default"
+     * legible *through* "You have left the route"). A row makes it one line;
+     * the 320px cap and per-child ellipsis then do the truncation. With one
+     * line the chip also clears the control stack's max-height on the right,
+     * which is what the left-anchor move was working around — so it stays on
+     * the right, out of the instruction's lane entirely.
+     */
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: var(--r-pill, 9999px);
     max-width: min(320px, calc(100% - 24px - 260px - 40px));
   }
   .nav-status > * {
@@ -3115,11 +3175,11 @@ button.chip.ok { background: rgba(255, 180, 84, 0.18); color: var(--accent, #FFB
     gap: 6px;
   }
   .quick-tile .quick-icon { width: 40px; height: 40px; }
-  .quick-label { line-height: 28px; font-size: 22px; }
+  .quick-label { line-height: 1.273; font-size: 22px; }
   /* 18px is this design system's smallest step (`sub3`), and the width here
      genuinely cannot carry 24dp — 20px at two-up. The desktop/tablet hint is
      20px; see the note on `.quick-hint` for why the floor is not lower. */
-  .quick-hint { font-size: 18px; line-height: 22px; }
+  .quick-hint { font-size: 18px; line-height: 1.222; }
 }
 
 @media (max-width: 600px) {
@@ -3222,7 +3282,7 @@ button.chip.ok { background: rgba(255, 180, 84, 0.18); color: var(--accent, #FFB
   /* 6.4:1 for the text; the tick inherits it. */
   color: var(--ink-secondary, #DED2BE);
   font-size: 18px;
-  line-height: 24px;
+  line-height: 1.333;
   letter-spacing: 1.2px;
 }
 .map-status svg { flex: 0 0 auto; color: #7FD3A0; }
@@ -3416,12 +3476,12 @@ ul.result-list > li { margin: 0; }
 
 /* ---- type (inline token styles lose to `!important`) ---- */
 .primary-btn, .secondary-btn, .text-btn, .pill-btn, .seg button, .choice, button.chip {
-  font-size: 18px !important; line-height: 24px !important;
+  font-size: 18px !important; line-height: 1.333 !important;
 }
-.maneuver-banner .maneuver-dist { font-size: 21px !important; line-height: 26px !important; }
-.maneuver-banner .maneuver-instr { font-size: 17px !important; line-height: 22px !important; }
-.eta-value { font-size: 21px !important; line-height: 26px !important; }
-.offroute-banner { font-size: 16px !important; line-height: 21px !important; }
+.maneuver-banner .maneuver-dist { font-size: 21px !important; line-height: 1.238 !important; }
+.maneuver-banner .maneuver-instr { font-size: 17px !important; line-height: 1.294 !important; }
+.eta-value { font-size: 21px !important; line-height: 1.238 !important; }
+.offroute-banner { font-size: 16px !important; line-height: 1.312 !important; }
 .chip { font-size: 14px !important; }
 .offline-chip, .remove-detail, .progress-pct, .map-status, .shield, .source-tag { font-size: 13px !important; }
 .quick-hint, .unavailable-reason, .error-card { font-size: 15px !important; }
@@ -3533,22 +3593,50 @@ ul.result-list > li { margin: 0; }
   }
   /* `min-height` restated because the compact scale above sets a literal 112px
      here, which beats the base rule's `var(--grid-cell)` on source order. */
-  .quick-tile { min-height: var(--grid-cell, 88px); padding: 10px 6px; gap: 4px; border-radius: var(--r-lg, 16px); }
-  .quick-icon { width: 34px; height: 34px; }
-  .quick-icon svg { width: 22px; height: 22px; }
-  .quick-label { font-size: 16px !important; line-height: 20px !important; gap: 0; }
-  .quick-hint { font-size: 13px !important; line-height: 17px !important; }
+  /*
+   * Tiles like Google Maps' home shortcuts: icon over one short word, the hint
+   * beside the label rather than under it. The two-line label ("Home" /
+   * "Not set") was what made each tile 101px tall and the grid a third of the
+   * screen; the hint is a state, not a second heading.
+   */
+  .quick-tile {
+    min-height: var(--grid-cell, 88px); padding: 8px 4px; gap: 3px;
+    border-radius: var(--r-lg, 16px);
+  }
+  .quick-icon { width: 28px; height: 28px; }
+  .quick-icon svg { width: 18px; height: 18px; }
+  .quick-label { font-size: 14px !important; line-height: 1.2 !important; gap: 0; flex-direction: row; align-items: baseline; justify-content: center; }
+  .quick-label .quick-hint { font-size: 11px !important; line-height: 1.2 !important; }
+  .quick-label .quick-hint::before { content: "\00a0·\00a0"; }
+  .quick-hint { font-size: 11px !important; line-height: 1.2 !important; }
   /* 12% of the working space is a head-unit keyline; on a phone it is two
      49px strips of map that carry nothing but margin. */
-  .home-search { left: 16px; right: 16px; gap: 10px; }
-  .search-field { gap: 10px; }
-  .search-field svg { width: 24px; height: 24px; }
-  .search-field span { font-size: 18px !important; }
-  .continue-card, .hint-card, .error-card, .progress-card { padding: 14px; }
-  .continue-card { gap: 10px; }
-  .map-status { padding: 10px 14px; gap: 8px; font-size: 15px; line-height: 20px; }
+  .home-search { left: 12px; right: 12px; gap: 8px; }
+  .search-field { gap: 8px; height: 42px; padding: 0 12px; }
+  .search-field svg { width: 20px; height: 20px; }
+  .search-field span { font-size: 15px !important; }
+  .continue-card, .hint-card, .error-card, .progress-card { padding: 10px 12px; }
+  .continue-card { gap: 8px; }
+  /* The command line is a copy-paste reference, not a paragraph to read while
+     driving: two lines and a scroll, so the card stays one screenful. */
+  .hint-card code { font-size: 11px; overflow-wrap: anywhere; }
+  .import-invite-head > div { font-size: 14px !important; }
+  .hint-card > div > div { font-size: 12px !important; line-height: 1.35 !important; }
+  .map-status { padding: 6px 10px; gap: 6px; font-size: 12px !important; line-height: 1.3 !important; }
 
   /* ---- navigation ---------------------------------------------------- */
+
+  /*
+   * The maneuver banner the way Google Maps draws it: a small rounded arrow
+   * tile, the distance in one bold number, the instruction beside it — a
+   * single glance-height card, not a panel. The 70px tile and 32px padding
+   * made the card 124px tall on a 823px screen; 56/8 gets it to ~76px.
+   */
+  .maneuver-banner { padding: 10px 12px; gap: 10px; border-radius: var(--r-lg, 16px); }
+  .maneuver-icon { width: 56px; height: 56px; flex: 0 0 56px; }
+  .maneuver-icon svg { width: 40px; height: 40px; }
+  .maneuver-banner .maneuver-dist { font-size: 19px !important; line-height: 1.2 !important; }
+  .maneuver-banner .maneuver-instr { font-size: 15px !important; line-height: 1.25 !important; }
 
   /*
    * The control band: one row of six discs along the bottom of the map.
@@ -3569,11 +3657,12 @@ ul.result-list > li { margin: 0; }
      card for two lines of it is the wrong trade on this screen. One line, one
      36px pill, still named and still readable. */
   .nav-status {
-    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 12px + var(--controls-h, 56px) + 8px);
+    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 12px + var(--controls-h, 56px) + 6px);
     flex-direction: row;
     align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
+    gap: 8px;
+    padding: 5px 10px;
+    border-radius: var(--r-pill, 9999px);
   }
   .nav-status > * {
     white-space: nowrap;
@@ -3582,13 +3671,13 @@ ul.result-list > li { margin: 0; }
   }
   /* The spans carry inline `T.*` token styles, which beat any stylesheet rule
      without the flag — the same reason the compact scale above uses it. */
-  .nav-status > span { font-size: 15px !important; line-height: 19px !important; }
+  .nav-status > span { font-size: 15px !important; line-height: 1.267 !important; }
   .nav-panel {
     bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 12px + var(--controls-h, 56px) + 8px);
     max-height: calc(100% - var(--eta-h, var(--app-bar, 72px)) - var(--nav-h, var(--navbot, 100px)) - var(--attrib-h, 30px) - var(--controls-h, 56px) - 32px);
   }
   .nav-bottom-btn { min-height: 48px; padding: 4px 2px; gap: 2px; }
-  .nav-bottom-btn span:last-child { font-size: 15px !important; line-height: 19px !important; }
+  .nav-bottom-btn span:last-child { font-size: 15px !important; line-height: 1.267 !important; }
   .eta-bar { gap: 8px; padding: var(--inset-top) 10px 0 12px; }
   .eta-sep { height: 28px; }
 
@@ -3626,6 +3715,6 @@ ul.result-list > li { margin: 0; }
   }
   .nav-controls { left: 8px; right: 8px; gap: 5px; }
   .quick-tile { padding: 8px 4px; }
-  .quick-label { font-size: 15px !important; line-height: 19px !important; }
-  .nav-bottom-btn span:last-child { font-size: 14px !important; line-height: 18px !important; }
+  .quick-label { font-size: 15px !important; line-height: 1.267 !important; }
+  .nav-bottom-btn span:last-child { font-size: 14px !important; line-height: 1.286 !important; }
 }

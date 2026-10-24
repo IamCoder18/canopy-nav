@@ -110,6 +110,18 @@ export const PROBE_THRESHOLD_PX = 24;
 /** The probe's own nominal size, in px. Absolute, so root scaling cannot move it. */
 const PROBE_FONT_PX = 16;
 
+/**
+ * The probe's rendered height at 100% text — the denominator of the scale factor.
+ *
+ * `19px`, the same measurement `PROBE_THRESHOLD_PX` derives from: an unscaled
+ * 16px line box renders 19px tall in Chromium at this viewport, so
+ * `probePx / 19` is the platform's text multiplier seen through the probe.
+ */
+const PROBE_BASE_PX = 19;
+
+/** The root size at 100% text. `rootPx / 16` is the multiplier seen through the root. */
+const ROOT_BASE_PX = 16;
+
 /** What the two measurements say about the current scale. */
 export interface TextScaleReading {
   /** Resolved root font size, in px. */
@@ -198,7 +210,25 @@ export function useTextScale(): void {
     });
 
     const apply = () => {
-      const next = textScaleVerdict(measure());
+      const reading = measure();
+      const next = textScaleVerdict(reading);
+      // The scale *factor* — the two signals' ratios, whichever fired. Published
+      // as `--text-scale` because one piece of chrome must not grow with it: the
+      // map's attribution credit. Google Maps keeps its "Map data ©…" credit at
+      // one small size whatever the driver's font setting is, and a WebView
+      // cannot opt a subtree out of the platform's text zoom — so the app
+      // counter-scales the credit by this factor instead (see
+      // `.maplibregl-ctrl-attrib` in styles.css). Legal text stays present,
+      // legible at its designed size, and out of the map; the guidance text —
+      // the reason the driver raised the setting — still scales in full.
+      const factor = Math.max(
+        reading.rootPx / ROOT_BASE_PX,
+        (reading.probePx ?? 0) / PROBE_BASE_PX,
+      );
+      const scale = factor.toFixed(3);
+      if (root.style.getPropertyValue('--text-scale') !== scale) {
+        root.style.setProperty('--text-scale', scale);
+      }
       // Compare before writing: setting an attribute on the root invalidates
       // style for the whole document, and this runs on every resize.
       if (root.dataset.textsize === next) return;

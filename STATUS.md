@@ -5,7 +5,7 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v0.11.3 (APK attached). Main is ahead by seven passes, each recorded below:
+**Latest release:** v0.11.3 (APK attached). Main is ahead by eight passes, each recorded below:
 
 - **§3.17–3.18** — §3.17 closes the ETA gap this document once called the most dangerous
   readout in the app. **Requirement #10 is implemented**: cross-region routing merges the
@@ -38,6 +38,12 @@ with **fully offline OpenStreetMap routing**.
   attribution credit turned out to be **invisible behind the navigation rail at every
   width**, which the pass measured rather than assumed, and the map's unobstructed height
   went from 34% of the screen to 54%.
+- **§14.26** — reflow that passes at **every** text scale: the 175%/200% failures this
+  document carried as an open gap are closed. Fixed px line-heights (the type-scale
+  doctrine, reintroduced in CSS), a probe that compounded its scale on nested text, and a
+  legal credit that ballooned over the instruction — the credit and the layer chip now
+  hold their designed size the way Google Maps holds its own, and both are in reflow's
+  overlap set.
 - **§14.16–14.17 + §15** — the memory pass, and the roadmap it opened. PBF now
   streams (it never did, and §14.16 called that the largest piece of engineering left in
   the app — it was much smaller than that); a heap gate refuses imports that would kill
@@ -1759,7 +1765,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 src/
   App.tsx 5004  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
-  textscale.ts            222  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
+  textscale.ts            252  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
   sw.ts                   264  offline shell service worker
   errors.ts                54  describeError: a message for any thrown value
@@ -1769,7 +1775,7 @@ src/
   geo.ts                  489  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt,
                                 + headingAlong and lookAheadMetres (camera geometry)
-  styles.css 3631  layout, insets, responsive rules
+  styles.css 3720  layout, insets, responsive rules
 
   osm/
     engine.worker.ts     1307  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
@@ -1819,11 +1825,11 @@ tools/serve.mjs         306 LAN static server for on-device manual testing
 tools/offline-smoke.mjs 253 device smoke: install the APK, go offline, import a fixture through the WebView DevTools socket, and scan logcat
 tools/bundle-budget.mjs 173 gzip size budget per role (entry, map vendor, totals); fails on regression
 tools/verify.mjs 133 every gate in one command: local and CI run this same list
-tools/reflow.mjs        368 chrome overlap at 100/175/200% text (§13.8) — a
+tools/reflow.mjs        388 chrome overlap at 100/175/200% text (§13.8) — a
                              diagnostic, still not a gate: it needs a
                              browser and takes minutes, and one that
                              reports nothing stops being read (§12.7)
-tools/textscale-check.mjs 412 does the app notice a text scale that leaves
+tools/textscale-check.mjs 423 does the app notice a text scale that leaves
                              the root font size alone (§14.8) — a gate;
                              was 3-in-12 flaky (§2.3)
 tools/focus.mjs         297 15 keyboard/focus checks in a real browser (§11)
@@ -5302,6 +5308,76 @@ large-text checks fail as before this pass, which is the gap §14 recorded as ou
 re-tuned. And the frosted chrome of the scale above is this pass's one unmeasured claim:
 the audit found no contrast findings on the shipped night basemap, but no light basemap
 exists in the app to measure against yet.
+
+### 14.26 Reflow that passes at every scale, and chrome the size Google Maps draws it
+
+Two complaints drove this pass, and they turned out to share a root: *"the images are
+pretty bad — make it more compact and mimic how Google Maps handles it"*, and *"I don't
+know what reflow 100/175/200 is, but at every scale it should be perfect."* (The three
+numbers are Android's text-scale settings — 100% is normal, 175% and 200% are the
+accessibility large-text modes. `tools/reflow.mjs` drives the navigation screen at each
+and asserts the chrome neither overlaps itself, leaves the screen, clips its text, nor
+scrolls anything out of reach. It was failing two checks at 175% and 200% and had been
+shipped as a known gap.)
+
+**Why "14 min" and "5.2 km" were clipped, and what that class of bug is.** The compact
+scale of §14.25 paired every `font-size: Npx !important` with `line-height: Mpx !important`
+— a **fixed px leading**, which does not follow a scaled font. At 200% the probe scales
+the font to 42px while the line box stays 26px, so the glyphs overflow their own box
+(`scrollHeight 37 > clientHeight 26`, measured on `.eta-value`) and reflow correctly
+called it clipped. It is the exact defect the type scale fixed in `theme.ts` — "leading is
+a multiplier, not a px length" — reintroduced in the stylesheet by a later pass that did
+not know the doctrine. Every fixed px `line-height` in `styles.css` is now a unitless
+ratio (37 of them; the six left are line-centering devices in fixed-height boxes, e.g.
+`line-height: 30px` inside a 30px icon chip, not text leading). This is also what removed
+the ETA/clock collision at 200%: the bar's own text now grows its line boxes instead of
+overflowing into its neighbours.
+
+**The probe compounded; the platform does not.** The 200% screenshots showed the
+attribution as a *wall of text* over the map. Not a CSS bug: `tools/reflow.mjs`'s scaling
+walk measured each element's computed font-size and wrote the scaled value back **in one
+pass**, so a parent written 26px inline made its inheriting child's computed size 26px,
+which the same loop then wrote as 52px — and MapLibre's credit nests text inside text. No
+platform's text zoom compounds like that; each element's own size is multiplied once.
+Both walks (`reflow.mjs`, `textscale-check.mjs`) measure every original first and write
+afterwards now.
+
+**The credit, and the chip: what Google Maps does with legal text.** With the compounding
+gone the credit was still 2× its designed size at 200% — two lines of 26px over "310 m /
+Turn left." — because a WebView cannot opt a subtree out of text zoom (it lands as an
+inline `font-size: … !important` that no stylesheet can beat). Google Maps holds its
+"Map data ©…" credit at one small size whatever the driver's font setting; so does this
+app now. `src/textscale.ts` publishes the measured multiplier as `--text-scale` (the
+larger of the root and probe ratios, so whichever mechanism the platform uses), and the
+credit is re-rendered at `1 / var(--text-scale)` with `zoom` — not `transform: scale()`,
+which shrinks the paint but not the *wrap* (the text still laid out as 26px text and
+poked 12px into the banner stack), and not the earlier `zoom` attempt without
+compensation, which halved the margins too and sank the credit into the bottom rail
+(measured 606x21px of overlap). `zoom` divides every length in the box, so margins and
+padding are declared x `--text-scale` and hold their designed pixels. The layer chip
+("Default · No traffic data") gets the same treatment on its text children — it is map
+metadata duplicated in full in the layers sheet, and at 200% it ran into the zoom buttons
+while every check stayed green, because it was not in reflow's `PIECES` list. The credit
+and the chip are in that list now; 7 pieces are checked, not 5.
+
+**Compact, in the way Google Maps is compact.** Tiles became shortcut-sized — one short
+word with its state beside it ("Home · Not set") instead of two stacked lines, 28px icon
+discs, a 72px grid cell; the search pill dropped to 42px; the hint card's command line is
+a two-line reference rather than a paragraph. The maneuver banner is the Google shape:
+a 56px rounded arrow tile, one bold distance number, one instruction line — ~76px instead
+of 94. The status chip is a pill, not a card. The landscape layout's chip is one line in
+its lane, not a two-line card that ghosted through the off-route notice.
+
+**Verification.** `tools/reflow.mjs`: **12/12 checks green at 100/175/200%** — the two
+large-text failures this document carried as an open gap are closed, and the screenshots
+in `canopy-shots/reflow-*.png` are the evidence, not the assertion. 1292/1292 vitest,
+lint 0 errors, `tools/status-audit.mjs` green, `tools/eta-check.mjs` green at all four
+viewports including 320x568, `tools/textscale-check.mjs` 13/13, `test/screens.mjs` and
+`test/e2e.mjs` green against the built bundle. `tools/ui-audit.mjs` clean on both phone
+viewports; the run dies with a closed-page error on the third (head-unit) viewport —
+**reproduced on the parent commit with `git stash`**, so it is this machine's browser
+dying after ~22 live map screens and not a finding. Whatever fixes that harness deserves
+a pass of its own.
 
 ## 15. The roadmap
 

@@ -104,6 +104,14 @@ const waitForVerdict = (want) => async (page) => {
  */
 const SCALE_TEXT_ONLY = (factor) => `(() => {
   window.__originals = [];
+  // Two passes — measure every original first, *then* write. One pass compounds
+  // on nested text: a parent written 26px inline makes its inheriting child's
+  // computed size 26px, which the same loop would then write as 52px. The
+  // platform multiplies each element's own size once; the measurement has to
+  // read the originals before any of them move. (This is the same fix as in
+  // tools/reflow.mjs, whose one-pass walk measured a wall of 52px attribution
+  // text at 200% that no platform produces.)
+  const owners = [];
   for (const el of document.querySelectorAll('body *')) {
     const cs = getComputedStyle(el);
     // Deliberately NOT skipping invisible or undisplayed elements: a platform text
@@ -113,8 +121,11 @@ const SCALE_TEXT_ONLY = (factor) => `(() => {
     if (![...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) continue;
     const px = parseFloat(cs.fontSize);
     if (!Number.isFinite(px) || px <= 0) continue;
-    window.__originals.push([el, px]);
+    owners.push([el, px]);
+  }
+  for (const [el, px] of owners) {
     el.style.setProperty('font-size', (px * ${factor}).toFixed(2) + 'px', 'important');
+    window.__originals.push([el, px]);
   }
   return window.__originals.length;
 })()`;
