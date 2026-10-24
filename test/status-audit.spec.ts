@@ -48,7 +48,18 @@ function audit(mutate?: (doc: string) => string): { out: string; code: number } 
   writeFileSync(path, mutate ? mutate(REAL) : REAL);
   try {
     const out = execFileSync('node', [join(ROOT, 'tools/status-audit.mjs')], {
-      env: { ...process.env, STATUS_DOC: path },
+      env: {
+        ...process.env,
+        STATUS_DOC: path,
+        // Hermetic: fixtures mutate one figure and expect exactly that one
+        // problem. The audit's per-file test-count check reads a vitest JSON
+        // report *if one exists*, so a report left in the environment by an
+        // earlier run would add a second, unrelated problem to every fixture —
+        // which is what made "does not read a spec-file row as a gate figure"
+        // fail on a machine that had run `vitest --reporter=json` and pass
+        // everywhere else. Pointed at a path that cannot exist.
+        VITEST_JSON: join(dir, 'no-such-vitest-report.json'),
+      },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });

@@ -586,12 +586,12 @@ describe('valhallaStatus', () => {
 
   it('reports ok: false for a non-2xx response', async () => {
     respond({ error: 'nope' }, 404);
-    expect(await valhallaStatus()).toEqual({ ok: false });
+    expect(await valhallaStatus()).toEqual({ ok: false, reason: 'The server answered HTTP 404' });
   });
 
   it('reports ok: false when the request throws', async () => {
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
-    expect(await valhallaStatus()).toEqual({ ok: false });
+    expect(await valhallaStatus()).toEqual({ ok: false, reason: 'The address could not be reached' });
   });
 
   it('reports ok: false when the body is not JSON', async () => {
@@ -602,7 +602,9 @@ describe('valhallaStatus', () => {
         throw new Error('not json');
       },
     });
-    expect(await valhallaStatus()).toEqual({ ok: false });
+    expect(await valhallaStatus()).toEqual({
+      ok: false, reason: 'The server sent an answer this app cannot read',
+    });
   });
 
   it('defaults to the FOSSGIS endpoint and strips a trailing slash', async () => {

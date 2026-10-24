@@ -100,6 +100,19 @@ export interface EngineStatus {
    * collapsing them into one word is what makes a settings screen useless.
    */
   reason: string | null;
+  /**
+   * Whether picking this engine is useful even though it is not ready.
+   *
+   * The screen's rule is "an engine that cannot route must not be selected" —
+   * with one exception, and it is the important one: an engine that is missing
+   * *configuration* (an API key, an endpoint) can only be configured once it is
+   * selected, because that is what reveals its fields. Refusing the selection
+   * outright made the Simplerouting key unreachable by construction — the row
+   * was disabled until the key existed, and the key field existed only once the
+   * row was chosen. So a fixable engine may be chosen, and the summary card
+   * above the list says in the same breath that it cannot route yet.
+   */
+  fixable: boolean;
   /** The concrete engine that would serve `any-online`, when one can be named. */
   resolved: ProviderId | null;
 }
@@ -116,7 +129,7 @@ function statusFor(
       ? 'Try every hosted engine in turn, then the offline map.'
       : provider?.subtitle ?? '';
   const online = id === ANY_ONLINE ? true : provider?.online ?? false;
-  const base = { id, label, subtitle, online, resolved: provider?.id ?? null };
+  const base = { id, label, subtitle, online, resolved: provider?.id ?? null, fixable: false };
 
   if (id === ANY_ONLINE) {
     if (!isOnline()) return { ...base, ready: false, reason: 'No network connection' };
@@ -127,7 +140,8 @@ function statusFor(
     );
     return usable.length
       ? { ...base, ready: true, reason: null, resolved: usable[0].id }
-      : { ...base, ready: false, reason: 'No hosted engine is configured' };
+      // "Nothing is configured" is fixed by the fields on the same screen.
+      : { ...base, ready: false, reason: 'No hosted engine is configured', fixable: true };
   }
 
   if (!provider) return { ...base, ready: false, reason: 'Unknown engine' };
@@ -139,14 +153,14 @@ function statusFor(
     // configured, and `!endpoint` does not see that, so it fell through to
     // validation (which trims) and was reported ready.
     const trimmedEndpoint = (endpoint ?? '').trim();
-    if (!trimmedEndpoint) return { ...base, ready: false, reason: 'No endpoint configured' };
+    if (!trimmedEndpoint) return { ...base, ready: false, reason: 'No endpoint configured', fixable: true };
     // A present-but-unusable address is not a configured endpoint. `not a url`
     // and `htp:/broken` used to report "Ready" because readiness only asked
     // whether a string existed, so the failure surfaced at the first route
     // request instead of where it could still be fixed.
     const endpointProblem = validateEndpoint(trimmedEndpoint);
-    if (endpointProblem) return { ...base, ready: false, reason: 'Endpoint address is not valid' };
-    if (provider.requiresKey && !state.apiKey) return { ...base, ready: false, reason: 'API key required' };
+    if (endpointProblem) return { ...base, ready: false, reason: 'Endpoint address is not valid', fixable: true };
+    if (provider.requiresKey && !state.apiKey) return { ...base, ready: false, reason: 'API key required', fixable: true };
     return { ...base, ready: true, reason: null };
   }
 

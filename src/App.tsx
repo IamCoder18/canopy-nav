@@ -37,7 +37,7 @@ import {
   snapToPolyline, vertexAt, type LatLng,
 } from './geo';
 import { placeOnRoute, startPosition, type RoutePosition } from './nav/progress';
-import { ink, accentNight, applyThemeTokens, type as T, DP, ICON, SEP } from './theme';
+import { ink, accentNight, semantic, applyThemeTokens, type as T, DP, ICON, SEP } from './theme';
 import { useLocation, type LocationMode, type Fix } from './nav/location';
 import {
   readSelection, writeSelection, readUnits, writeUnits,
@@ -1739,6 +1739,7 @@ const banner = rerouteNotice ?? routeError ?? null;
           endpoint={endpoint}
           setEndpoint={setEndpoint}
           provenance={provenance}
+          storageNotice={settingsNotice}
           headingRef={headingRef}
           onBack={() => go('settings')}
         />
@@ -3680,6 +3681,15 @@ function EnginesScreen(props: {
   apiKey: string; setApiKey: (v: string) => void;
   endpoint: string; setEndpoint: (v: string) => void;
   provenance: RouteProvenance | null;
+  /**
+   * A storage refusal for the settings written *here*.
+   *
+   * The API key and endpoint are saved on every change, and a refusal used to
+   * surface only on the Settings screen — where the driver is not, having just
+   * typed the key on this one. It is the same message in both places, because
+   * it is the same failure.
+   */
+  storageNotice?: string | null;
   /** This screen's heading, focused on arrival. */
   headingRef?: React.Ref<HTMLHeadingElement>;
   onBack: () => void;
@@ -3690,18 +3700,56 @@ function EnginesScreen(props: {
   );
   const [probes, setProbes] = useState<Record<string, EngineProbe>>({});
   const [probing, setProbing] = useState<string | null>(null);
+  /** The key is masked until asked for, and cleared in one deliberate tap. */
+  const [showKey, setShowKey] = useState(false);
+  /**
+   * Endpoint validation runs *after* the field is left, not on every keystroke.
+   *
+   * Live validation on a URL field reports "not a valid URL" for every
+   * intermediate state of typing one — `h`, `ht`, `http`, `http:/` — so the
+   * field scolds the driver from the first character. The address is checked
+   * when it is finished with, which is also when it is read.
+   */
+  const [endpointTouched, setEndpointTouched] = useState(false);
 
+  /**
+   * Run one probe and record its verdict.
+   *
+   * `finally` clears the spinner: the probe path is written never to throw, but
+   * a spinner that depends on that promise settling is one unforeseen error
+   * away from a row stuck on "Testing…" forever.
+   */
   const test = async (id: EngineId) => {
     setProbing(id);
-    // Probes are deliberately not cached: a stale "reachable" is worse than no
-    // answer at all when the question is "is it up right now".
-    const r = await probeEngine(id, { endpoint: props.endpoint, apiKey: props.apiKey }, props.hasMap);
-    setProbes((p) => ({ ...p, [id]: r }));
-    setProbing(null);
+    try {
+      // Probes are deliberately not cached: a stale "reachable" is worse than no
+      // answer at all when the question is "is it up right now".
+      const r = await probeEngine(id, { endpoint: props.endpoint, apiKey: props.apiKey }, props.hasMap);
+      setProbes((p) => ({ ...p, [id]: r }));
+    } finally {
+      setProbing(null);
+    }
   };
 
   const chosen = props.selection.preferred;
   const servedNow = props.provenance?.used;
+  /** The chosen engine's own readiness, for the summary line above the list. */
+  const chosenStatus = statuses.find((s) => s.id === chosen) ?? statuses[0];
+  const readyNow = chosenStatus.ready;
+  /**
+   * The sentence the summary card leads with: not "which button is pressed" but
+   * "what happens when you ask for a route", which is the question the selection
+   * is the answer to.
+   */
+  const summaryLine = !readyNow
+    ? `${chosenStatus.reason} — ${
+        props.selection.allowFallback
+          ? 'another engine will answer instead.'
+          : 'routing will fail until that is fixed.'
+      }`
+    : props.selection.allowFallback
+      ? 'If it cannot answer, another engine is tried in order, and the route is labelled with whichever one actually served it.'
+      : 'If it cannot answer, the request fails — no other engine will be substituted.';
   /** `null` when the address is fine, or empty, or not the one being edited. */
   const endpointProblem =
     chosen === 'valhalla-custom' || chosen === ANY_ONLINE ? validateEndpoint(props.endpoint) : null;
@@ -3714,6 +3762,38 @@ function EnginesScreen(props: {
       </div>
 
       <div className="settings-body">
+        {/*
+          What will actually happen, in one sentence, at the top.
+
+          The screen below is a set of controls; this is their consequence. It
+          was derivable only by reading the selection and the readiness list and
+          holding both in your head — and the two disagree whenever the chosen
+          engine is not ready, which is exactly when the answer matters.
+        */}
+        <div className="engine-summary" role="status">
+          <span className="engine-summary-dot" aria-hidden="true"
+            style={{ background: readyNow ? semantic.ok : semantic.danger }} />
+          <div>
+            <div style={T.body3m}>
+              {readyNow ? 'Routing with ' : 'Preferred: '}
+              {chosenStatus.label}
+              {!readyNow ? '' : props.selection.allowFallback ? '' : ' only'}
+            </div>
+            <div style={{ ...T.sub3, color: ink.secondary }}>
+              {summaryLine}
+            </div>
+          </div>
+        </div>
+
+        {/*
+          A storage refusal belongs where the write happened — see the prop.
+        */}
+        {props.storageNotice && (
+          <div className="hint-card warn" role="status" style={{ marginTop: DP.P2 }}>
+            {props.storageNotice}
+          </div>
+        )}
+
         <div className="section-head" style={T.body3m}>Route with</div>
         {/* A single-select list, exposed as such. It rendered buttons with a radio
             circle drawn in CSS and state carried in `aria-pressed`, so a screen
@@ -3730,6 +3810,14 @@ function EnginesScreen(props: {
             // reading "Unavailable — no offline map loaded" could still be chosen
             // and then fail every request. The activation is refused.
             //
+            // With one exception, `s.fixable`: a row that is unready only
+            // because it is missing *this screen's* configuration — an API key,
+            // an endpoint — must be choosable, because choosing it is what
+            // reveals the fields that fix it. Without that exception the
+            // Simplerouting key was unreachable: the row was disabled until the
+            // key existed, and the key field existed only once the row was
+            // chosen.
+            //
             // `aria-disabled`, not `disabled`. `disabled` would also solve that,
             // and then throw away the row's whole purpose: it removes the control
             // from the tab order, so the sentence explaining *why* the engine is
@@ -3737,14 +3825,14 @@ function EnginesScreen(props: {
             // unreachable by keyboard and inaudible to assistive technology. The
             // screen read as "here are some engines, pick one", with the chosen
             // one impossible to explore.
-            aria-disabled={!s.ready}
+            aria-disabled={!s.ready && !s.fixable}
             aria-checked={chosen === s.id}
             onClick={() => {
-              if (!s.ready) return;
+              if (!s.ready && !s.fixable) return;
               props.setSelection({ ...props.selection, preferred: s.id });
             }}
           >
-            <span className="result-icon">
+            <span className={`result-icon ${s.ready ? 'ok' : ''}`}>
               {s.online ? <IconTraffic size={ICON.secondary} /> : <IconFile size={ICON.secondary} />}
             </span>
             <span className="result-text">
@@ -3752,8 +3840,9 @@ function EnginesScreen(props: {
               {/* State the verdict explicitly rather than leaving it to be
                   inferred from the subtitle. "Ready" and the reason it is not are
                   the two things a driver needs before choosing, and a subtitle
-                  that merely describes the engine answers neither. */}
-              <span style={{ ...T.sub3, color: s.ready ? accentNight : '#E8A0A0' }}>
+                  that merely describes the engine answers neither. The verdict
+                  carries the colour and the reason carries the sentence. */}
+              <span style={{ ...T.sub3, color: s.ready ? semantic.ok : semantic.danger }}>
                 {s.ready ? `Ready — ${s.subtitle}` : `Unavailable — ${s.reason}`}
               </span>
               {servedNow === s.id && props.provenance && (
@@ -3793,50 +3882,101 @@ function EnginesScreen(props: {
         </div>
 
         {(chosen === 'valhalla-simplerouting' || chosen === ANY_ONLINE) && (
-          <label className="field">
-            <span style={{ ...T.sub2, color: ink.secondary }}>API key (Simplerouting.io)</span>
+          <div className="field">
+            <label htmlFor="api-key-input" style={{ ...T.sub2, color: ink.secondary }}>API key (Simplerouting.io)</label>
             {/*
-              Masked. It was `type="text"`, so the secret sat in the DOM in plain
-              sight — readable in a screenshot, in a screen share, and by anything
-              inspecting the page. `autocomplete="off"` keeps it out of the
-              browser's saved-password list, which is not what this is.
+              Masked by default. It was `type="text"`, so the secret sat in the
+              DOM in plain sight — readable in a screenshot, in a screen share,
+              and by anything inspecting the page — and a `password` field with
+              no way to look at it is how a key gets saved with a typo in it and
+              then fails at the first route. So: masked, but visible on request,
+              and removable in one tap rather than by selecting and deleting.
+              `autocomplete="off"` keeps it out of the browser's saved-password
+              list, which is not what this is.
             */}
-            <input
-              type="password"
-              value={props.apiKey}
-              onChange={(e) => props.setApiKey(e.target.value)}
-              placeholder="sk-…"
-              autoComplete="off"
-              autoCorrect="off"
-              spellCheck={false}
-              aria-label="API key for Simplerouting.io"
-            />
-            <span style={{ ...T.sub3, color: ink.tertiary }}>
-              Stored on this device only. It is sent to Simplerouting.io and nowhere else.
+            <div className="field-row">
+              <input
+                id="api-key-input"
+                type={showKey ? 'text' : 'password'}
+                value={props.apiKey}
+                onChange={(e) => props.setApiKey(e.target.value)}
+                placeholder="sk-…"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+                aria-label="API key for Simplerouting.io"
+              />
+              <button
+                type="button"
+                className="pill-btn ghost"
+                onClick={() => setShowKey((s) => !s)}
+                aria-pressed={showKey}
+                aria-label={showKey ? 'Hide the API key' : 'Show the API key'}
+              >
+                {showKey ? 'Hide' : 'Show'}
+              </button>
+              <button
+                type="button"
+                className="pill-btn ghost"
+                onClick={() => props.setApiKey('')}
+                disabled={!props.apiKey}
+                aria-label="Remove the saved API key"
+              >
+                Remove
+              </button>
+            </div>
+            {/*
+              Whether the key is *saved*, not merely typed. The distinction is
+              real: a storage refusal happens silently to the value in the
+              field, and the only place that ever said so was a different
+              screen.
+            */}
+            <span style={{ ...T.sub3, color: props.apiKey ? semantic.ok : ink.tertiary }}>
+              {props.apiKey
+                ? 'Saved on this device. It is sent to Simplerouting.io and nowhere else.'
+                : 'Stored on this device only. It is sent to Simplerouting.io and nowhere else.'}
             </span>
-          </label>
+          </div>
         )}
         {(chosen === 'valhalla-custom' || chosen === ANY_ONLINE) && (
-          <label className="field">
-            <span style={{ ...T.sub2, color: ink.secondary }}>Custom endpoint</span>
-            <input
-              value={props.endpoint}
-              onChange={(e) => props.setEndpoint(e.target.value)}
-              placeholder="http://192.168.1.10:8002"
-              autoComplete="off"
-              autoCorrect="off"
-              spellCheck={false}
-              inputMode="url"
-              aria-label="Custom Valhalla endpoint URL"
-              aria-invalid={endpointProblem ? true : undefined}
-              aria-describedby={endpointProblem ? 'endpoint-error' : undefined}
-            />
-            {endpointProblem && (
-              <span id="endpoint-error" role="alert" style={{ ...T.sub3, color: '#F28B82' }}>
+          <div className="field">
+            <label htmlFor="endpoint-input" style={{ ...T.sub2, color: ink.secondary }}>Custom endpoint</label>
+            <div className="field-row">
+              <input
+                id="endpoint-input"
+                value={props.endpoint}
+                onChange={(e) => props.setEndpoint(e.target.value)}
+                onBlur={() => setEndpointTouched(true)}
+                placeholder="http://192.168.1.10:8002"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+                inputMode="url"
+                aria-label="Custom Valhalla endpoint URL"
+                aria-invalid={endpointTouched && endpointProblem ? true : undefined}
+                aria-describedby={endpointTouched && endpointProblem ? 'endpoint-error' : undefined}
+              />
+              <button
+                type="button"
+                className="pill-btn ghost"
+                onClick={() => props.setEndpoint('')}
+                disabled={!props.endpoint}
+                aria-label="Remove the custom endpoint"
+              >
+                Remove
+              </button>
+            </div>
+            {endpointTouched && endpointProblem && (
+              <span id="endpoint-error" role="alert" style={{ ...T.sub3, color: semantic.danger }}>
                 {endpointProblem}
               </span>
             )}
-          </label>
+            {endpointTouched && !endpointProblem && props.endpoint && (
+              <span style={{ ...T.sub3, color: semantic.ok }}>
+                Saved on this device.
+              </span>
+            )}
+          </div>
         )}
 
         <div className="section-head" style={T.body3m}>Last route request</div>
@@ -3856,10 +3996,12 @@ function EnginesScreen(props: {
                 <span
                   style={{
                     color: a.outcome === 'served'
-                      ? accentNight
+                      ? semantic.ok
                       : a.outcome === 'not-tried'
                         ? ink.secondary
-                        : '#E8A0A0',
+                        : a.outcome === 'skipped'
+                          ? ink.secondary
+                          : semantic.danger,
                   }}
                 >
                   {describeAttempt(a)}
@@ -3876,21 +4018,43 @@ function EnginesScreen(props: {
         )}
 
         <div className="section-head" style={T.body3m}>Test engines</div>
-        {statuses.map((s) => (
-          <div key={s.id} className="region-actions" style={{ marginBottom: DP.P2 }}>
-            <span style={{ ...T.sub3, color: ink.secondary, flex: 1 }}>
-              {s.label}
-              {probes[s.id] ? ` — ${probes[s.id].detail}` : ''}
-            </span>
-            <button
-              className="text-btn"
-              onClick={() => test(s.id)}
-              disabled={probing === s.id}
-            >
-              {probing === s.id ? 'Testing…' : 'Test'}
-            </button>
-          </div>
-        ))}
+        {/*
+          Each engine gets a *named* test control and its own live result.
+
+          It was one bare "Test" button per row — six buttons with the same
+          accessible name, differing only in position, which is unusable with a
+          screen reader and indistinguishable in a voice-control list. And the
+          result was a plain span, so the answer arrived silently.
+        */}
+        {statuses.map((s) => {
+          const probe = probes[s.id];
+          return (
+            <div key={s.id} className="test-row">
+              <span className="test-name" style={T.body3}>{s.label}</span>
+              <span
+                className="test-result"
+                role="status"
+                style={{
+                  ...T.sub3,
+                  color: !probe ? ink.tertiary : probe.ok ? semantic.ok : semantic.danger,
+                }}
+              >
+                {!probe
+                  ? 'Not tested yet'
+                  : `${probe.detail}${probe.ms != null ? ` — ${probe.ms} ms` : ''}`}
+              </span>
+              <button
+                className="pill-btn"
+                onClick={() => test(s.id)}
+                disabled={probing === s.id}
+                aria-label={`Test ${s.label}`}
+                aria-busy={probing === s.id}
+              >
+                {probing === s.id ? 'Testing…' : 'Test'}
+              </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

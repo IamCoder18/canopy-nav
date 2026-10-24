@@ -1745,14 +1745,14 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx                4308  screens, navigation state, focus + announcements,
+  App.tsx 4472  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            222  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
   sw.ts                   264  offline shell service worker
   errors.ts                54  describeError: a message for any thrown value
   settings.ts             347  typed, validated, quota-safe persistence
-  theme.ts                367  AAOS design tokens (colour, type, layout, shape)
+  theme.ts 405  AAOS design tokens (colour, type, layout, shape)
   icons.tsx               421  29 maneuver kinds + system icons, hand-drawn SVG
   geo.ts                  364  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt
@@ -1769,14 +1769,14 @@ src/
     tags.ts                36  shared node-tag filter
 
   nav/
-    valhalla.ts           502  Valhalla /route client, response validation
+    valhalla.ts 535  Valhalla /route client, response validation
     reroute.ts            415  reroute policy: when to act, backoff, banner,
                                         and why a refusal keeps saying why (§14.10)
-    providers.ts          416  provider chain, attempt trace, connectivity
+    providers.ts 441  provider chain, attempt trace, connectivity
     requests.ts           107  RequestGate: one live route request at a time
     chrome.ts             117  the two bars' measured heights, as --eta-h and --nav-h
     steps.ts               66  why the turn list is empty: three causes, three answers
-    engines.ts            239  engine selection, readiness, provenance
+    engines.ts 253  engine selection, readiness, provenance
     geocode.ts            235  Nominatim client, 1 req/s throttle
     location.ts           256  device/browser/simulated location
     offroute.ts           120  deviation detection primitives, reroute origin

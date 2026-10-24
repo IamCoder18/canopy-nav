@@ -513,12 +513,16 @@ describe('probeProvider', () => {
 
   it('reports a non-OK status as Unreachable', async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 502, json: async () => ({}) });
-    expect(await probeProvider(byId('valhalla-fossgis'), {})).toEqual({ ok: false, detail: 'Unreachable' });
+    expect(await probeProvider(byId('valhalla-fossgis'), {})).toEqual({
+      ok: false, detail: 'Unreachable — the server answered HTTP 502',
+    });
   });
 
   it('reports a thrown request as Unreachable', async () => {
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
-    expect(await probeProvider(byId('valhalla-fossgis'), {})).toEqual({ ok: false, detail: 'Unreachable' });
+    expect(await probeProvider(byId('valhalla-fossgis'), {})).toEqual({
+      ok: false, detail: 'Unreachable — the address could not be reached',
+    });
   });
 
   it('probes the configured custom endpoint with a key-gated provider too', async () => {

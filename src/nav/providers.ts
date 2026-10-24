@@ -313,9 +313,7 @@ export async function resolveRoute(
           const route = await routeOnValhalla(
             { from: req.from, to: req.to, costing: req.costing, units, avoid: req.avoid },
             endpoint,
-            id === 'valhalla-simplerouting' && providerState.apiKey
-              ? { Authorization: `Bearer ${providerState.apiKey}` }
-              : undefined,
+            authHeaders(provider, providerState),
             signal,
           );
           // A cancelled request must not fall through to the next engine. The
@@ -393,6 +391,21 @@ export async function resolveRoute(
 
 /** Check whether a provider is currently usable, for the settings screen. */
 /**
+ * Headers that authenticate a request to a provider, when it needs any.
+ *
+ * One definition for the route path and the probe path. The probe used to send
+ * nothing and so could never confirm a key-gated engine — "Test" on
+ * Simplerouting.io reported "Unreachable" for a perfectly good key.
+ */
+function authHeaders(
+  p: Provider,
+  state: { endpoint?: string; apiKey?: string },
+): Record<string, string> | undefined {
+  return p.id === 'valhalla-simplerouting' && state.apiKey
+    ? { Authorization: `Bearer ${state.apiKey}` }
+    : undefined;
+}
+/**
  * One terminal full stop, whatever the reason already ends with.
  *
  * Reasons are complete sentences assembled from several sources — this app's
@@ -409,8 +422,20 @@ export async function probeProvider(p: Provider, state: { endpoint?: string; api
   const endpoint = p.id === 'valhalla-custom' ? (state.endpoint ?? '') : p.endpoint;
   if (!endpoint) return { ok: false, detail: 'No endpoint configured' };
   if (p.requiresKey && !state.apiKey) return { ok: false, detail: 'API key required' };
-  const s = await valhallaStatus(endpoint);
-  return s.ok
-    ? { ok: true, detail: s.version ? `Valhalla ${s.version}` : 'Reachable' }
-    : { ok: false, detail: 'Unreachable' };
+  try {
+    // Authenticated exactly like a route request — see `authHeaders`.
+    const s = await valhallaStatus(endpoint, { headers: authHeaders(p, state) });
+    return s.ok
+      ? { ok: true, detail: s.version ? `Valhalla ${s.version}` : 'Reachable' }
+      : { ok: false, detail: unreachable(s.reason ?? 'it did not answer') };
+  } catch (e) {
+    // A probe answers with a verdict; it never throws one. The Test button is
+    // the only caller, and a rejected promise there left its row reading
+    // "Testing…" for the rest of the session.
+    return { ok: false, detail: unreachable(e instanceof Error ? e.message : 'the request failed') };
+  }
 }
+
+/** "Unreachable — the server answered HTTP 502", with the reason as a clause. */
+const unreachable = (reason: string) =>
+  `Unreachable — ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`;

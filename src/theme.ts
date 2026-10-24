@@ -353,15 +353,53 @@ export const sideMargin = (widthDp: number) => Math.round(widthDp * 0.12);
 /** List item height by height category. */
 export const listItemHeight = (h: number) => (h >= 1200 ? 128 : h >= 610 ? 116 : 96);
 
-/** Google Maps navigation palette. */
+/**
+ * Semantic ink, for state rather than hierarchy.
+ *
+ * The three colours a status line can be. They live here rather than as hex
+ * literals in `App.tsx` — the screen was hand-writing `#E8A0A0`, `#F28B82` and
+ * `#7FD3A0` inline for the same three meanings — but they are *not* published
+ * as CSS custom properties: `styles.css` already carries the filled-card
+ * variants (`#7A2626`/`#F5C4C0` and friends) which are paired fills, not ink,
+ * and an ink token a stylesheet never reads is a token that looks like it
+ * works.
+ *
+ * Each is measured against the surfaces it is used on: `danger` is 6.6:1 on
+ * `page`, `warn` 10.6:1, `ok` 9.4:1.
+ */
+export const semantic = {
+  danger: '#F2B8B5',
+  warn: '#F5D67E',
+  ok: '#7FD3A0',
+} as const;
+
+/**
+ * The navigation overlay palette — what the map draws on top of the basemap.
+ *
+ * This is the single source of truth for the route, its casing, the traffic
+ * tint and the markers. `map/style.ts` and `map/MapView.tsx` both consumed
+ * hard-coded hex copies of these values before, which had already drifted apart
+ * (two different route-casing ramps, two different destination-shadow layer
+ * ids) — and `test/contrast.spec.ts` measured *this* table, so it was certifying
+ * colours the map never drew. Both now import from here.
+ *
+ * The route is emerald rather than the Google blue because the rest of the app
+ * is: amber is the chrome accent, and a blue route under amber chrome reads as
+ * a second accent competing for the eye. Emerald is the "go" hue, and it is
+ * held to roughly the luminance of the red traffic tint
+ * (`contrast(route, routeTrafficSlow) < 1.3`, asserted) so a congested stretch
+ * changes *hue* rather than brightness — which is what keeps the two separable
+ * for a driver with red/green colour deficiency.
+ */
 export const gmaps = {
-  route: '#1A73E8',
-  routeCasing: '#0B4FB0',
+  route: '#2FA65E',
+  routeCasing: '#12452A',
+  routeTravelled: '#6B5B48',
   routeTraffic: '#E8A33D',
   routeTrafficSlow: '#E5484D',
-  maneuverGreen: '#188038',
-  maneuverBlue: '#1A73E8',
-  destinationPin: '#EA4335',
-  originDot: '#1A73E8',
-  accuracyCircle: '#1A73E8',
+  maneuverGreen: '#1E8E45',
+  maneuverRing: '#2FA65E',
+  destinationPin: '#FF6B5E',
+  originDot: '#FFB454',
+  accuracyCircle: '#FFB454',
 } as const;

@@ -487,16 +487,49 @@ function encodeSigned(n: number): string {
 }
 
 /** Probe a Valhalla endpoint for availability + version. */
+/**
+ * Ask a Valhalla instance what it is.
+ *
+ * The request authenticates exactly like a route request does — the caller
+ * passes the same headers — because a key-gated server answers `/status` with a
+ * 401 like everything else, and a probe that forgot the key reported a working
+ * engine as "Unreachable". That was the whole reason testing Simplerouting.io
+ * from this app could not work: the key was configured, saved and sent with
+ * routes, and never with the one request the Test button makes.
+ *
+ * Failures carry a *reason* rather than a bare negative: "answered HTTP 401",
+ * "did not answer within 10 seconds" and "the address could not be reached" are
+ * three different problems with three different fixes, which is the same rule
+ * `EngineStatus.reason` follows on the screen this feeds.
+ */
 export async function valhallaStatus(
   endpoint = VALHALLA_ENDPOINT,
-  signal?: AbortSignal,
-): Promise<{ ok: boolean; version?: string }> {
+  opts: { signal?: AbortSignal; headers?: Record<string, string> } = {},
+): Promise<{ ok: boolean; version?: string; reason?: string }> {
   try {
-    const res = await fetchWithTimeout(`${endpoint.replace(/\/$/, '')}/status`, { headers: { 'X-Client-Id': CLIENT_ID }, signal });
-    if (!res.ok) return { ok: false };
-    const j = (await res.json()) as { version?: string };
+    const res = await fetchWithTimeout(`${endpoint.replace(/\/$/, '')}/status`, {
+      headers: { 'X-Client-Id': CLIENT_ID, ...(opts.headers ?? {}) },
+      signal: opts.signal,
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        reason: res.status === 401 || res.status === 403
+          ? `The server answered HTTP ${res.status} — the API key may be wrong`
+          : `The server answered HTTP ${res.status}`,
+      };
+    }
+    const j = await res.json().catch(() => null) as { version?: string } | null;
+    if (!j || typeof j !== 'object') {
+      return { ok: false, reason: 'The server sent an answer this app cannot read' };
+    }
     return { ok: true, version: j.version };
-  } catch {
-    return { ok: false };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: e instanceof RoutingError
+        ? e.message
+        : 'The address could not be reached',
+    };
   }
 }
