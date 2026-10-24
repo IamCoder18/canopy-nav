@@ -264,17 +264,18 @@ describe('the contrast helper itself', () => {
     // translucent colour as an opaque *background*, which is not a thing.
     //
     // The example is written out as a literal rather than against `ink.primary`,
-    // because `ink.primary` is now solid hex (14.25:1 forward, 14.75:1 backward —
-    // genuinely asymmetric, but for the boring reason that the two arguments are
-    // different colours rather than because of any alpha). The helper's alpha
-    // behaviour still has to be pinned, and a literal is what pins it.
+    // because `ink.primary` is solid hex (15.67:1 forward, 15.67:1 backward —
+    // genuinely the same number, because the two arguments are opaque and the
+    // composite is the colour itself). The helper's alpha behaviour still has to
+    // be pinned, and a literal is what pins it — 88% white composited over the
+    // warm page surface `#1C1712`.
     const forward = contrast('rgba(255,255,255,0.88)', elevation.e1);
     const backward = contrast(elevation.e1, 'rgba(255,255,255,0.88)');
-    expect(forward).toBeCloseTo(12.857, 2);
-    expect(backward).toBeCloseTo(16.313, 2);
+    expect(forward).toBeCloseTo(13.891, 2);
+    expect(backward).toBeCloseTo(17.787, 2);
     expect(forward).not.toBeCloseTo(backward, 1);
 
     // And the solid-ink case, which is the one the app actually uses.
-    expect(contrast(ink.primary, elevation.e1)).toBeCloseTo(14.253, 2);
+    expect(contrast(ink.primary, elevation.e1)).toBeCloseTo(15.674, 2);
   });
 });

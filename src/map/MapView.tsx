@@ -19,7 +19,7 @@ import type { TrafficLevel } from '../nav/traffic';
 // map showed one place, the position model used another, and routing asked for a
 // trip between them. See `NO_FIX_POSITION`.
 import { NO_FIX_POSITION } from '../nav/location';
-import { buildStyle, trafficLayers, offlineStyleSpec, ROUTE_LINE_WIDTH } from './style';
+import { buildStyle, navOverlays, offlineStyleSpec, NIGHT } from './style';
 import {
   greenToGeoJSON,
   lineToGeoJSON,
@@ -52,12 +52,32 @@ export interface MapViewProps {
   location: LatLng | null;
   /** Turn-by-turn points to dot along the route. */
   maneuverPoints: LatLng[];
+  /** The driver's own reports, marked where they were made. */
+  reportPoints?: LatLng[];
   onMapClick?: (p: LatLng) => void;
   onMapLongPress?: (p: LatLng) => void;
   /** Programmatic camera target; changes re-fit the map. */
   focus?: { center: LatLng; zoom: number } | null;
   /** Bumping this re-fits to the route. */
   fitNonce?: number;
+  /**
+   * A one-shot camera command from the navigation controls.
+   *
+   * `nonce` is what makes it one-shot: the same command twice in a row is two
+   * zooms, and a plain "current value" prop could not say so. The alternative —
+   * exporting the MapLibre instance — would make every control a part-owner of
+   * the map's internals, which is the coupling the `focus`/`fitNonce` pair
+   * already avoids.
+   */
+  viewCmd?: { kind: 'zoom-in' | 'zoom-out' | 'north'; nonce: number } | null;
+  /**
+   * The map's current rotation, in degrees clockwise from north.
+   *
+   * Reported so the compass control can show what north is pointing at rather
+   * than assuming: the map is rotatable (drag-rotate and two-finger twist), and
+   * a compass that always draws north-up lies the moment the driver rotates.
+   */
+  onBearing?: (deg: number) => void;
   className?: string;
   /**
    * Called when the basemap's actual source changes.
@@ -111,6 +131,9 @@ export function MapView(props: MapViewProps) {
   const longPressRef = useRef(props.onMapLongPress);
   clickRef.current = props.onMapClick;
   longPressRef.current = props.onMapLongPress;
+  /** Live bearing reporter, same ref treatment as the tap handlers. */
+  const bearingRef = useRef(props.onBearing);
+  bearingRef.current = props.onBearing;
 
   /**
    * Current overlay props, for the same reason — and for one more.
@@ -136,8 +159,11 @@ export function MapView(props: MapViewProps) {
 
     const m = new maplibregl.Map({
       container: container.current,
-      // Google Maps' default pitch-free, top-down presentation.
-      style: { version: 8, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#F8F7F5' } }] } as StyleSpecification,
+      // Top-down presentation: no pitch, but *rotation* stays on so the compass
+      // has something to say. Drag-rotate (right button / two fingers) is how a
+      // user explores a map, and disabling it made the compass control a button
+      // that reset a value which could never change.
+      style: { version: 8, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': NIGHT.land } }] } as StyleSpecification,
       center: NO_FIX_POSITION,
       zoom: 12,
       // Attribution is not optional: the ODbL requires OSM credit to be
@@ -145,12 +171,10 @@ export function MapView(props: MapViewProps) {
       // case. The control collects the credit declared on every source, so the
       // tile provider's and ours end up in one legible place.
       attributionControl: { compact: false },
-      dragRotate: false,
+      dragRotate: true,
       pitchWithRotate: false,
-      touchZoomRotate: false,
       maxPitch: 0,
     });
-    m.touchZoomRotate.disableRotation();
     map.current = m;
     mapRef.current = m;
 
@@ -160,6 +184,13 @@ export function MapView(props: MapViewProps) {
       pressTimer = setTimeout(() => longPressRef.current?.([e.lngLat.lng, e.lngLat.lat]), 550);
     });
     m.on('mouseup', () => { if (pressTimer) clearTimeout(pressTimer); });
+
+    // The compass control is driven by the map's real bearing, so it reports it.
+    // `rotate` fires on every frame of a gesture; the consumer stores a number
+    // and re-renders a small SVG, which is cheap enough not to warrant a rAF
+    // throttle on top of MapLibre's own coalescing.
+    const onRotate = () => bearingRef.current?.(m.getBearing());
+    m.on('rotate', onRotate);
 
     // The offline basemap's detail level is a function of zoom (`roadsToGeoJSON`
     // is called with the zoom to decide which roads are worth sending), but
@@ -183,6 +214,7 @@ export function MapView(props: MapViewProps) {
       // press timer armed, which would then call into refs of a component that
       // is already gone.
       if (pressTimer) clearTimeout(pressTimer);
+      m.off('rotate', onRotate);
       m.off('zoomend', onZoomEnd);
       m.remove();
       map.current = null;
@@ -275,7 +307,7 @@ export function MapView(props: MapViewProps) {
     // on every one of App's 1 Hz re-renders, so depending on it would
     // re-serialise the province every second whether or not anything visible
     // had changed. These are the values `applyOverlays` actually reads.
-  }, [props.route, props.travelled, props.traffic, props.origin, props.destination, props.location, props.maneuverPoints, props.dataset]);
+  }, [props.route, props.travelled, props.traffic, props.origin, props.destination, props.location, props.maneuverPoints, props.reportPoints, props.dataset]);
 
   /* ---------------------------- camera ------------------------------- */
   useEffect(() => {
@@ -284,6 +316,23 @@ export function MapView(props: MapViewProps) {
     m.easeTo({ center: props.focus.center, zoom: props.focus.zoom, duration: cameraDuration(400) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.focus?.center?.[0], props.focus?.center?.[1], props.focus?.zoom]);
+
+  /**
+   * One-shot camera commands from the navigation controls.
+   *
+   * Keyed on the nonce so the same command can fire twice; keyed on nothing
+   * else so a re-render does not re-zoom. `zoomIn`/`zoomOut` are MapLibre's own
+   * animated steps (1 zoom level), and `north` animates the bearing home.
+   */
+  useEffect(() => {
+    const m = map.current;
+    const cmd = props.viewCmd;
+    if (!m || !cmd) return;
+    if (cmd.kind === 'zoom-in') m.zoomIn({ duration: cameraDuration(220) });
+    else if (cmd.kind === 'zoom-out') m.zoomOut({ duration: cameraDuration(220) });
+    else m.easeTo({ bearing: 0, duration: cameraDuration(350) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.viewCmd?.nonce]);
 
   useEffect(() => {
     const m = map.current;
@@ -334,6 +383,7 @@ export function MapView(props: MapViewProps) {
     props.destination ? `Route to ${props.destination.join(', ')}` : null,
     props.useTiles ? 'Online basemap' : 'Offline basemap, drawn from your imported extract',
     props.traffic && props.traffic.length ? 'Traffic overlay shown' : null,
+    props.reportPoints?.length ? `${props.reportPoints.length} reported hazard${props.reportPoints.length === 1 ? '' : 's'} on the map` : null,
   ].filter(Boolean).join('. ');
 
   return (
@@ -506,6 +556,7 @@ function applyOverlays(m: MLMap, p: MapViewProps) {
   set('canopy-route-travelled', lineToGeoJSON(p.travelled ?? []));
   set('canopy-route-traffic', trafficToGeoJSON(p.traffic ?? []));
   set('canopy-maneuvers', pointsToGeoJSON(p.maneuverPoints));
+  set('canopy-reports', pointsToGeoJSON(p.reportPoints ?? []));
   set('canopy-origin', pointsToGeoJSON(p.origin ? [p.origin] : []));
   set('canopy-destination', pointsToGeoJSON(p.destination ? [p.destination] : []));
   set('canopy-location', pointsToGeoJSON(p.location ? [p.location] : []));
@@ -544,35 +595,16 @@ export function fitPoints(m: MLMap, pts: LatLng[], padding = 72) {
   m.fitBounds([[w, s], [e, n]], { padding, duration: cameraDuration(450), maxZoom: 17 });
 }
 
-/** Style used with no network: Google palette, our own .osm geometry. */
+/** Style used with no network: the night palette over our own .osm geometry. */
 function offlineStyle(): StyleSpecification {
-  return offlineStyleSpec(overlaysLayerDefs());
-}
-
-/** Overlay layers for the offline style (no tile glyphs needed). */
-function overlaysLayerDefs(): any[] {
-  const W = ['interpolate', ['linear'], ['zoom'], 4, 4, 10, 8, 14, 16, 18, 26];
-  return [
-    // The offline road layers are NOT here. `offlineStyle` owns
-    // `canopy-osm-casing` / `-minor` / `-roads` because they need a zoom ramp
-    // that starts well below 10; a second definition of `canopy-osm-roads` in
-    // this list would be a duplicate layer id, which MapLibre rejects outright.
-    { id: 'canopy-route-casing', type: 'line', source: 'canopy-route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#0B4FB0', 'line-width': W, 'line-opacity': 0.55 } },
-    { id: 'canopy-route', type: 'line', source: 'canopy-route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#1A73E8', 'line-width': ROUTE_LINE_WIDTH } },
-    // Traffic tint above the route for the same reason as in the online style: it
-    // recolours the route stripe rather than hiding underneath it.
-    ...trafficLayers(),
-    // ...and the dimmed portion on top of both, which is the only way it is visible.
-    { id: 'canopy-route-travelled', type: 'line', source: 'canopy-route-travelled', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#9AA0A6', 'line-width': ROUTE_LINE_WIDTH, 'line-opacity': 0.75 } },
-    { id: 'canopy-maneuver-markers', type: 'circle', source: 'canopy-maneuvers', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 4, 14, 7, 18, 10], 'circle-color': '#FFFFFF', 'circle-stroke-color': '#1A73E8', 'circle-stroke-width': 2.5 } },
-    { id: 'canopy-origin-halo', type: 'circle', source: 'canopy-origin', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 9, 14, 16, 18, 24], 'circle-color': '#1A73E8', 'circle-opacity': 0.18 } },
-    { id: 'canopy-origin', type: 'circle', source: 'canopy-origin', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 4.5, 14, 7.5, 18, 11], 'circle-color': '#FFFFFF', 'circle-stroke-color': '#1A73E8', 'circle-stroke-width': 3 } },
-    { id: 'canopy-destination-shadow', type: 'circle', source: 'canopy-destination', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 6, 14, 10, 18, 14], 'circle-color': '#000000', 'circle-opacity': 0.2, 'circle-translate': [0, 2] } },
-    { id: 'canopy-destination', type: 'circle', source: 'canopy-destination', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 5, 14, 8.5, 18, 12], 'circle-color': '#EA4335', 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 2.5 } },
-    { id: 'canopy-destination-inner', type: 'circle', source: 'canopy-destination', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 1.8, 14, 3.2, 18, 4.6], 'circle-color': '#FFFFFF' } },
-    { id: 'canopy-location-accuracy', type: 'circle', source: 'canopy-location', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 12, 14, 40, 18, 90], 'circle-color': '#1A73E8', 'circle-opacity': 0.12 } },
-    { id: 'canopy-location', type: 'circle', source: 'canopy-location', paint: { 'circle-radius': 7, 'circle-color': '#1A73E8', 'circle-stroke-width': 3, 'circle-stroke-color': '#FFFFFF' } },
-  ];
+  // The shared navigation set, not a copy of it: the offline road layers
+  // (`canopy-osm-casing` / `-minor` / `-roads`) are owned by `offlineStyleSpec`
+  // because they need a zoom ramp that starts well below 10, and a second
+  // definition of `canopy-osm-roads` in the overlay list would be a duplicate
+  // layer id, which MapLibre rejects outright. `navOverlays()` is exactly the
+  // overlay set without those layers — which is what the hand-written copy
+  // here was trying, and starting, to be.
+  return offlineStyleSpec(navOverlays());
 }
 
 export default MapView;

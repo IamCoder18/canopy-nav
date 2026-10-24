@@ -147,7 +147,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1261 unit tests across 64 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1264 unit tests across 64 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -161,7 +161,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1261 passing**, 64 files |
+| Unit tests | `npm test` | **1264 passing**, 64 files |
 | End-to-end | `npm run e2e` | **81 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -240,7 +240,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **64 files, 1261 tests**. The previous
+retyped by hand. The table is the complete set: **64 files, 1264 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -251,7 +251,7 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1261 total double-counts contrast's 34 tests**: 1227 distinct test cases are
+that **the 1264 total double-counts contrast's 34 tests**: 1230 distinct test cases are
 declared across 64 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
@@ -302,7 +302,7 @@ reading it.
 | `persist.spec.ts` | 22 | typed-array round-trip, quota errors, corrupt records, rehydration |
 | `staleposition.spec.ts` | 21 | the stale-position guard, and the driver-moving-away case it used to refuse (§13.4) |
 | `errorboundary.spec.ts` | 20 | a render throw shows a recovery card rather than a blank screen |
-| `mapstyle.spec.ts` | 20 | offline style LOD: every line layer has a low-zoom floor, arterials branch on class |
+| `mapstyle.spec.ts` | 23 | offline style LOD: every line layer has a low-zoom floor, arterials branch on class |
 | `requests.spec.ts` | 19 | `RequestGate`: supersession, cancellation, and that an abandoned request writes nothing |
 | `shellcheck.spec.ts` | 18 | the service worker's shell predicate, and that the fetch handler consults it |
 | `import.spec.ts` | 21 | a bad file is refused and never replaces a working map, and that the memory guard gates the import and `forceMemory` overrides it |
@@ -1745,18 +1745,18 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx 4472  screens, navigation state, focus + announcements,
+  App.tsx 4724  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            222  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
   sw.ts                   264  offline shell service worker
   errors.ts                54  describeError: a message for any thrown value
   settings.ts             347  typed, validated, quota-safe persistence
-  theme.ts 405  AAOS design tokens (colour, type, layout, shape)
+  theme.ts 423  AAOS design tokens (colour, type, layout, shape)
   icons.tsx               421  29 maneuver kinds + system icons, hand-drawn SVG
   geo.ts                  364  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt
-  styles.css             2961  layout, insets, responsive rules
+  styles.css 3165  layout, insets, responsive rules
 
   osm/
     engine.worker.ts     1307  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
@@ -1786,8 +1786,8 @@ src/
     voice.ts              125  spoken guidance, deduped per meaning
 
   map/
-    MapView.tsx           578  MapLibre view, tile/offline style switch, basemap LRU
-    style.ts              520  Google palette, tile remap, offline LOD style
+    MapView.tsx 610  MapLibre view, tile/offline style switch, basemap LRU
+    style.ts 652  Google palette, tile remap, offline LOD style
 
   regions/
     download.ts          1493  streaming downloader, resume, part-file handling
@@ -1795,7 +1795,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              444  RegionLibrary singleton, per-region workers, memory gate
 
-test/            1261 unit tests, 64 files
+test/            1264 unit tests, 64 files
 test/e2e.mjs           81 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -2318,7 +2318,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1261 unit tests
+npm test             # 1264 unit tests
 npm run e2e          # 81 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle

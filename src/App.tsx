@@ -56,7 +56,8 @@ import {
   ManeuverIcon, IconSearch, IconBack, IconClose, IconMute, IconSound, IconOverview,
   IconLayers, IconTraffic, IconSettings, IconHome, IconGoto, IconChevronRight,
   IconFile, IconLocate, IconCar, IconRefresh,
-  IconInfo, IconPin, IconCheck,
+  IconInfo, IconPin, IconCheck, IconCompass, IconPlus, IconMinus, IconMessage,
+  IconWarning, IconClock,
 } from './icons';
 
 const ENGINE_IDS: readonly string[] = [...PROVIDERS.map((p) => p.id as string), 'any-online'];
@@ -336,6 +337,75 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   const [focus, setFocus] = useState<{ center: LatLng; zoom: number } | null>(null);
   const [fitNonce, setFitNonce] = useState(0);
   const [muted, setMuted] = useState(false);
+
+  /* ------------------ map controls, reports, toast ------------------ */
+
+  /**
+   * One-shot camera commands for the navigation map controls.
+   *
+   * `nonce` is a counter rather than a timestamp so two clicks in the same
+   * millisecond are still two commands — the state is the *identity* of the
+   * command, not a description of it, and `MapView` keys on the nonce alone.
+   */
+  const [mapCmd, setMapCmd] = useState<{ kind: 'zoom-in' | 'zoom-out' | 'north'; nonce: number } | null>(null);
+  const mapCmdNonce = useRef(0);
+  const sendMapCmd = useCallback((kind: 'zoom-in' | 'zoom-out' | 'north') => {
+    mapCmdNonce.current += 1;
+    setMapCmd({ kind, nonce: mapCmdNonce.current });
+  }, []);
+
+  /**
+   * The map's rotation, so the compass shows truth rather than north-up.
+   *
+   * The map is rotatable; a compass that assumed `0` would be a button
+   * labelled "north" pointing somewhere else the moment the driver twisted the
+   * map with two fingers.
+   */
+  const [mapBearing, setMapBearing] = useState(0);
+
+  /** The report sheet on the navigation screen. */
+  const [reportOpen, setReportOpen] = useState(false);
+  const reportOpenRef = useRef(false);
+  useEffect(() => { reportOpenRef.current = reportOpen; }, [reportOpen]);
+
+  /**
+   * What the driver has reported, and where.
+   *
+   * Marked on the map, because a report that only lives in a toast is a report
+   * the driver cannot act on later — "where was that hazard?" is the whole
+   * question. There is no server in this app: the mark is local, and nothing in
+   * the UI pretends otherwise.
+   */
+  const [reports, setReports] = useState<{ pos: LatLng; kind: string }[]>([]);
+  const reportPoints = useMemo<LatLng[]>(() => reports.map((r) => r.pos), [reports]);
+
+  /**
+   * A short-lived status message.
+   *
+   * One global region rather than per-screen ones, for the reason `App`'s
+   * screen-name region gives: a live region created together with its text is
+   * dropped by most screen readers, and one that already exists is not.
+   */
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 6000);
+  }, []);
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+
+  /**
+   * Where the search screen goes back to.
+   *
+   * `home` from the launcher, `navigating` from search-along-route. A single
+   * `BACK_FROM` table could not express that: the same screen has a different
+   * "one level up" depending on how it was opened, and sending a driver who was
+   * mid-trip back to the launcher silently ended their navigation.
+   */
+  const [searchFrom, setSearchFrom] = useState<'home' | 'nav'>('home');
+  const searchFromRef = useRef(searchFrom);
+  useEffect(() => { searchFromRef.current = searchFrom; }, [searchFrom]);
   // A character typed on a hardware keyboard before the search screen mounted.
   const [pendingInitialQuery, setPendingInitialQuery] = useState('');
   const [units, setUnits] = useState<'metric' | 'imperial'>(() => readUnits());
@@ -774,7 +844,8 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
           return;
         }
         setLayersOpen(false);
-        if (layersOpenRef.current) return;
+        setReportOpen(false);
+        if (layersOpenRef.current || reportOpenRef.current) return;
         // The same `go`, so Escape gets the focus handling every other
         // transition has, rather than being the one path that loses it.
         const target = (() => {
@@ -783,6 +854,10 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
           // Escape deliberately does nothing here. There is an explicit Exit
           // control for it, and the exit path asks.
           if (s === 'navigating') return null;
+          // Search-along-route is a level *within* the trip: one level up is the
+          // trip, not the launcher. The static table cannot say that, because it
+          // is a property of how the screen was opened rather than of the screen.
+          if (s === 'search' && searchFromRef.current === 'nav') return 'navigating';
           return BACK_FROM[s] ?? 'home';
         })();
         if (target) go(target);
@@ -815,6 +890,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         // and no seed character is set so "/" is not typed into the field.
         e.preventDefault();
         setPendingInitialQuery('');
+        setSearchFrom('home');
         go('search');
         requestAnimationFrame(() => {
           document.querySelector<HTMLInputElement>('.inline-search input')?.focus();
@@ -826,6 +902,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         // field) and pressing `s` used to replace the whole query with `s`.
         if (screenRef.current === 'search') return;
         e.preventDefault();
+        setSearchFrom('home');
         go('search');
         setPendingInitialQuery(e.key);
         requestAnimationFrame(() => {
@@ -1551,11 +1628,25 @@ const banner = rerouteNotice ?? routeError ?? null;
         destination={destination?.pos ?? null}
         location={location}
         maneuverPoints={maneuverPoints}
+        reportPoints={reportPoints}
+        viewCmd={mapCmd}
+        onBearing={setMapBearing}
         focus={focus}
         fitNonce={fitNonce}
         onBasemapChange={onBasemapChange}
       />
       </Suspense>
+
+      {/*
+        The toast: one message, one place, mounted for the life of the app.
+
+        Above the screens rather than inside any of them for the same reason the
+        screen-name live region is: a region created with its text is dropped,
+        and a toast that appears on a screen change would arrive with the screen.
+      */}
+      <div className="toast-slot" role="status" aria-live="polite" aria-atomic="true">
+        {toast ? <div className="toast">{toast}</div> : null}
+      </div>
 
       {screen === 'navigating' && route && (
         <NavOverlay
@@ -1579,14 +1670,32 @@ const banner = rerouteNotice ?? routeError ?? null;
           trafficOn={layer === 'traffic'}
           trafficReady={trafficReady}
           trafficStale={trafficStale}
-          trafficReason={trafficReason}
           onMute={() => setMuted((m) => !m)}
           onExit={() => { go('home'); beginRouteProgress(route.geometry); }}
           onOverview={() => setFitNonce((n) => n + 1)}
           onRecenter={() => setFocus({ center: location, zoom: 17 })}
           onSteps={() => go('steps')}
-          onToggleTraffic={() =>
-            setLayer((l) => (l === 'traffic' && trafficReady ? 'default' : 'traffic'))}
+          onZoom={(dir) => sendMapCmd(dir === 'in' ? 'zoom-in' : 'zoom-out')}
+          onNorth={() => sendMapCmd('north')}
+          bearing={mapBearing}
+          onSearch={() => {
+            // Search-along-route: one level down *from the trip*, so Back and
+            // Escape return to it rather than to the launcher.
+            setSearchFrom('nav');
+            setPendingInitialQuery('');
+            go('search');
+            requestAnimationFrame(() => {
+              document.querySelector<HTMLInputElement>('.inline-search input')?.focus();
+            });
+          }}
+          reportOpen={reportOpen}
+          onToggleReport={() => setReportOpen((o) => !o)}
+          reports={reports.length}
+          onReport={(kind) => {
+            setReports((r) => [...r, { pos: location, kind }]);
+            setReportOpen(false);
+            showToast(`Reported ${kind.toLowerCase()} at your position.`);
+          }}
           onToggleLayers={() => setLayersOpen((o) => !o)}
           onPickLayer={(id) => {
             setLayer(id);
@@ -1613,7 +1722,7 @@ const banner = rerouteNotice ?? routeError ?? null;
             setImportWarn(`Saved "${destination.label}" as ${slot === 'home' ? 'Home' : 'Work'}.`);
           }}
           onGo={() => go('navigating')}
-          onBack={() => go('home')}
+          onBack={() => go(searchFrom === 'nav' ? 'navigating' : 'home')}
           onProvider={() => go('settings')}
         />
       )}
@@ -1637,7 +1746,7 @@ const banner = rerouteNotice ?? routeError ?? null;
           onImport={() => go('import')}
           onImportFile={onFile}
           onRegions={() => go('regions')}
-          onSearch={() => go('search')}
+          onSearch={() => { setSearchFrom('home'); go('search'); }}
           onContinue={() => route && go('navigating')}
           onSettings={() => go('settings')}
           onRoute={(pos, label) => doRoute({ pos, label })}
@@ -1648,6 +1757,7 @@ const banner = rerouteNotice ?? routeError ?? null;
             // driver knows what picking a result is *for*.
             setPlacePending(slot);
             setPendingInitialQuery('');
+            setSearchFrom('home');
             go('search');
             requestAnimationFrame(() => {
               document.querySelector<HTMLInputElement>('.inline-search input')?.focus();
@@ -1680,13 +1790,16 @@ const banner = rerouteNotice ?? routeError ?? null;
             if (placePending) {
               savePlace(placePending, { pos, label });
               setImportWarn(`Saved "${label}" as ${placePending === 'home' ? 'Home' : 'Work'}.`);
-              go('home');
+              go(searchFrom === 'nav' ? 'navigating' : 'home');
               return;
             }
-            go('home');
+            // From search-along-route the picker replaces the trip's target, and
+            // the preview that opens is the confirmation step for that. The
+            // launcher is not involved, so it is not where this goes.
+            go(searchFrom === 'nav' ? 'navigating' : 'home');
             doRoute({ pos, label });
           }}
-          onBack={() => { setPlacePending(null); go('home'); }}
+          onBack={() => { setPlacePending(null); go(searchFrom === 'nav' ? 'navigating' : 'home'); }}
         />
       )}
 
@@ -2366,17 +2479,28 @@ function NavOverlay(props: {
   trafficOn: boolean;
   trafficReady: boolean;
   trafficStale: boolean;
-  trafficReason: string;
   onMute: () => void;
   onExit: () => void;
   onOverview: () => void;
   onRecenter: () => void;
   onSteps: () => void;
-  onToggleTraffic: () => void;
   onToggleLayers: () => void;
   onPickLayer: (id: LayerId) => void;
   onCloseLayers: () => void;
   onCheckTraffic: () => void;
+  /** Search along the route, without ending the trip. */
+  onSearch: () => void;
+  /** The report sheet. */
+  reportOpen: boolean;
+  onToggleReport: () => void;
+  onReport: (kind: string) => void;
+  /** How many reports the trip has collected so far. */
+  reports: number;
+  /** Map controls: the zoom stepper and the compass. */
+  onZoom: (dir: 'in' | 'out') => void;
+  onNorth: () => void;
+  /** The map's current rotation, for the compass needle. */
+  bearing: number;
 }) {
   const { route, units, muted, online, degraded } = props;
   const g = props.guidance;
@@ -2455,11 +2579,18 @@ function NavOverlay(props: {
   // already switches to kilometres and miles, and both read correctly at 40 km.
   const laneDist = distToTurn;
 
-  // The traffic control's label carries its state *and* its reason: a driver
-  // reaching for it must learn from the label alone what it will do.
-  const trafficLabel = props.trafficReady
-    ? `${props.trafficOn ? 'Hide' : 'Show'} the traffic overlay (${props.traffic.confidence === 'live' ? 'live' : 'estimated'} data${props.trafficStale ? ', last known — no signal to refresh' : ''})`
-    : `Traffic unavailable — ${props.trafficReason}`;
+  // The compass is the one control whose whole meaning is its own rotation: it
+  // shows where north points on the rotated map, and tapping it puts north back
+  // up. Drawn rotated *opposite* the map, so the needle tracks real north.
+  const compassTitle = Math.abs(props.bearing) < 1
+    ? 'Map is north-up'
+    : `Map rotated ${Math.round(props.bearing)}° — reset to north-up`;
+
+  // The report sheet's trigger carries what a tap will do and what is already
+  // there, because "Report" alone does not say whether anything happens.
+  const reportLabel = props.reports > 0
+    ? `Report a problem — ${props.reports} marked on the map`
+    : 'Report a problem';
 
   // One honest sentence about the map as it stands, under the buttons that change it.
   const statusDetail = props.trafficOn
@@ -2769,7 +2900,18 @@ function NavOverlay(props: {
       </div>
       </div>
 
-      {/* Right-hand control stack */}
+      {/*
+        Right-hand control stack — the *map* controls: re-centre, route
+        overview, layers, the zoom stepper and the compass. Search along the
+        route and Report went to the bottom rail with labels, which is where
+        Google Maps puts them and where the room is: measured at 892x412 this
+        column has exactly two rows of 76dp targets below the ETA bar, and six
+        cells is what two rows of three hold. Traffic is a *layer*, so it is
+        chosen in the layers sheet where its availability and its reason are
+        already spelled out — a second toggle here used to duplicate that radio
+        and, when the provider had no data, sit there disabled with no room to
+        say why.
+      */}
       <div className="nav-controls">
         <button className="round-btn" onClick={props.onRecenter} aria-label="Recenter on my position">
           <IconLocate size={ICON.primary} />
@@ -2777,29 +2919,39 @@ function NavOverlay(props: {
         <button className="round-btn" onClick={props.onOverview} aria-label="Route overview">
           <IconOverview size={ICON.primary} />
         </button>
-        {/* Traffic is a toggle: it looks pressed while the overlay is up, and is
-            visibly disabled — not merely inert — when no provider data backs it. */}
-        <button
-          className={`round-btn ${props.trafficOn ? 'on' : ''}`}
-          onClick={() => { if (props.trafficReady) props.onToggleTraffic(); }}
-          // `aria-disabled` so the reason stays reachable: `trafficLabel` carries
-          // the actual cause ("no traffic provider responded", "last known — no
-          // signal to refresh"), and a `disabled` control cannot be focused, so
-          // the one piece of information this row exists to give was unreachable.
-          aria-disabled={!props.trafficReady}
-          aria-pressed={props.trafficOn}
-          aria-label={trafficLabel}
-          title={trafficLabel}
-        >
-          <IconTraffic size={ICON.primary} />
-        </button>
+        {/*
+          The label is exactly "Map layers", and the current layer moved to
+          `title`. It used to be `Map layers — Default` in `aria-label`, which no
+          automation could match — `button[aria-label="Map layers"]` is an exact
+          attribute selector, so `tools/ui-audit.mjs` and `tools/shots.mjs` have
+          been skipping the layers sheet without saying so. The layer's name is
+          still on screen: the status line under this column carries it.
+        */}
         <button
           className={`round-btn ${props.layersOpen ? 'on' : ''}`}
           onClick={props.onToggleLayers}
           aria-expanded={props.layersOpen}
-          aria-label={`Map layers — ${props.layerName}`}
+          aria-label="Map layers"
+          title={`Map layers — ${props.layerName}`}
         >
           <IconLayers size={ICON.primary} />
+        </button>
+        <button className="round-btn" onClick={() => props.onZoom('in')} aria-label="Zoom in">
+          <IconPlus size={ICON.primary} />
+        </button>
+        <button className="round-btn" onClick={() => props.onZoom('out')} aria-label="Zoom out">
+          <IconMinus size={ICON.primary} />
+        </button>
+        {/*
+          The compass. It rotates with the map — the needle tracks real north —
+          and tapping it snaps the map back to north-up, which is the whole
+          affordance on every map that has one. The map is rotatable, so this is
+          a control with something to say rather than a decoration.
+        */}
+        <button className="round-btn" onClick={props.onNorth} aria-label={compassTitle} title={compassTitle}>
+          <span className="compass-needle" style={{ transform: `rotate(${-props.bearing}deg)` }}>
+            <IconCompass size={ICON.primary} />
+          </span>
         </button>
       </div>
 
@@ -2843,19 +2995,43 @@ function NavOverlay(props: {
         />
       )}
 
-      {/* Bottom bar */}
+      {props.reportOpen && (
+        <ReportPanel
+          reports={props.reports}
+          onPick={props.onReport}
+          onClose={props.onToggleReport}
+        />
+      )}
+
+      {/*
+        Bottom bar: the labelled trip actions — search along the route, the
+        turn list, reporting and exit. Google Maps' navigation sheet carries
+        exactly these, and this is where they fit: the map-control column on
+        the right has room for six discs and no more (measured at 892x412),
+        while four labelled buttons sit comfortably across any screen width.
+      */}
       <div className="nav-bottom">
+        <button className="nav-bottom-btn" onClick={props.onSearch} aria-label="Search along the route">
+          <IconSearch size={ICON.secondary} />
+          <span style={T.body3}>Search</span>
+        </button>
         <button className="nav-bottom-btn" onClick={props.onSteps}>
           <ManeuverIcon kind="continue" size={ICON.secondary} />
           <span style={T.body3}>Steps</span>
         </button>
+        <button
+          className={`nav-bottom-btn ${props.reportOpen ? 'on' : ''}`}
+          onClick={props.onToggleReport}
+          aria-expanded={props.reportOpen}
+          aria-label={reportLabel}
+        >
+          <IconMessage size={ICON.secondary} />
+          {props.reports > 0 && <span className="btn-badge" aria-hidden="true">{props.reports}</span>}
+          <span style={T.body3}>Report</span>
+        </button>
         <button className="nav-bottom-btn" onClick={props.onExit}>
           <IconClose size={ICON.secondary} />
           <span style={T.body3}>Exit</span>
-        </button>
-        <button className="nav-bottom-btn" onClick={props.onOverview}>
-          <IconOverview size={ICON.secondary} />
-          <span style={T.body3}>Overview</span>
         </button>
       </div>
     </div>
@@ -2996,6 +3172,82 @@ function NavPanel(props: {
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+/* ---------------------------- ReportPanel --------------------------- */
+
+/**
+ * What can be reported, and what reporting does.
+ *
+ * The sheet says out loud that a report is marked **locally**: there is no
+ * server in this app, and a "Report" button that implies one is a lie with a
+ * safe-looking answer. The mark is real — it lands on the map at the driver's
+ * position and stays for the trip — which is the part that is useful without a
+ * network: "where was that hazard" answered by the map itself.
+ */
+const REPORT_KINDS: { kind: string; icon: React.ReactNode; detail: string }[] = [
+  { kind: 'Crash', icon: <IconCar size={ICON.secondary} />, detail: 'Collision ahead or on the road' },
+  { kind: 'Hazard', icon: <IconWarning size={ICON.secondary} />, detail: 'Debris, an animal, a stalled car' },
+  { kind: 'Speed trap', icon: <IconClock size={ICON.secondary} />, detail: 'Enforcement camera or stop' },
+  { kind: 'Police', icon: <IconMessage size={ICON.secondary} />, detail: 'An officer or a checkpoint' },
+  { kind: 'Road closed', icon: <IconClose size={ICON.secondary} />, detail: 'A block, a detour, roadworks' },
+  { kind: 'Bad weather', icon: <IconInfo size={ICON.secondary} />, detail: 'Fog, ice, heavy rain, flooding' },
+];
+
+function ReportPanel(props: {
+  reports: number;
+  onPick: (kind: string) => void;
+  onClose: () => void;
+}) {
+  // Only on the mount that follows the sheet being opened, so a re-render does
+  // not yank focus back to the top of the list mid-interaction.
+  const sheetHadFocus = useRef(false);
+  return (
+    <div
+      className="nav-panel"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Report a problem"
+      ref={(el) => {
+        if (el && !sheetHadFocus.current) {
+          sheetHadFocus.current = true;
+          focusQuietly(el);
+        }
+      }}
+    >
+      <div className="panel-head">
+        <h2 className="panel-title" style={T.body3m}>Report a problem</h2>
+        <button className="icon-btn" onClick={props.onClose} aria-label="Close report sheet">
+          <IconClose size={ICON.secondary} />
+        </button>
+      </div>
+      <div className="report-note" style={{ ...T.sub3, color: ink.secondary }}>
+        Marked on the map at your position, for this trip. Nothing is uploaded —
+        this app has no server to upload to.
+      </div>
+      <div className="layer-list" role="group" aria-label="Problem type">
+        {REPORT_KINDS.map((r) => (
+          <button
+            key={r.kind}
+            className="report-row"
+            onClick={() => props.onPick(r.kind)}
+            aria-label={`Report ${r.kind.toLowerCase()} — ${r.detail}`}
+          >
+            <span className="report-icon" aria-hidden="true">{r.icon}</span>
+            <span className="layer-text">
+              <span style={T.body3m}>{r.kind}</span>
+              <span style={{ ...T.body3, color: ink.secondary }}>{r.detail}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+      {props.reports > 0 && (
+        <div className="report-count" style={{ ...T.sub3, color: ink.tertiary }} role="status">
+          {props.reports} report{props.reports === 1 ? '' : 's'} marked on the map.
+        </div>
+      )}
     </div>
   );
 }

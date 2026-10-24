@@ -162,10 +162,10 @@ describe('nothing suppresses the credit', () => {
     // moved to Google Maps' dark theme.
     const withColor = attribRules().find((b) => /color\s*:/.test(b));
     expect(withColor, 'no explicit text colour on the attribution bar').toBeTruthy();
-    expect(withColor).toMatch(/color\s*:\s*var\(--ink-secondary,\s*#C2C8D0\)/);
+    expect(withColor).toMatch(/color\s*:\s*var\(--ink-secondary,\s*#DED2BE\)/);
     // And that token must clear the floor it is being used for. 13px is body
     // text, not large text, so it is 4.5:1.
-    expect(contrast('#C2C8D0', '#1A1D21')).toBeGreaterThanOrEqual(4.5);
+    expect(contrast('#DED2BE', '#171208')).toBeGreaterThanOrEqual(4.5);
   });
 
   it('does not leave a dead close-button rule behind', () => {

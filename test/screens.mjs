@@ -209,7 +209,7 @@ for (const vp of VIEWPORTS) {
 
       // Open the layers panel and assert it is actually operable: reachable,
       // sized, and clicking a row does not fall through to the map.
-      const layerBtn = await page.$('.nav-controls button:nth-child(4)');
+      const layerBtn = await page.$('.nav-controls button[aria-label="Map layers"]');
       if (layerBtn) {
         await layerBtn.click();
         await page.waitForTimeout(800);

@@ -1,30 +1,37 @@
 /**
- * Google Maps dark theme — design tokens.
+ * Canopy Nav — design tokens: a warm dark theme with an amber accent.
  *
- * ## Why this is not the AAOS palette any more
+ * ## Why this is not the Google Maps palette any more
  *
- * This used to be the Android Auto / Automotive OS grayscale ramp
- * (`#0E1013` / `#17181B` / `#202124`, accent `#60A8F0`). That palette is a
- * faithful transcription of the AAOS specification and it is *wrong for this
- * app*: the brief is to look like Google Maps, and Google Maps' dark theme is a
- * warmer, slightly blue-shifted neutral set built on `#1E2024`–`#30343A` with the
- * `#8AB4F8` accent. Carrying both palettes meant the app was simultaneously
- * claiming to implement two systems and matching neither.
+ * This used to be Google Maps' dark neutrals (`#1E2024`–`#30343A`, accent
+ * `#8AB4F8`): a faithful transcription of their spec, and it read as theirs, not
+ * as this app's — cool blue-greys with the most recognisable accent colour in
+ * navigation software. The map underneath was their light cartography too, so a
+ * night-driving app put a near-white basemap behind its chrome.
  *
- * So the grayscale ramp is gone and the values below are Google Maps'. The
- * *layout* tokens (8dp grid, P0-P8 padding, keylines, 12% side margins, 76dp touch
- * minimum) are unchanged: those are AAOS layout guidance and they are still the
- * right numbers for a car, which is what this app is.
+ * The palette below is warm: a brown-shifted charcoal ramp under an **amber**
+ * accent (`#FFB454`), with **emerald** (`#3ECF7C`) reserved for the route line
+ * and for "it worked" states. Amber is the accent because it is the one hue a
+ * driver's eye already reads as "instrumentation" — the same register as a car's
+ * own cluster at night — and because it survives a windscreen full of blue-white
+ * headlights without disappearing into them. Emerald carries the route because a
+ * route is a "go" colour, and because it stays separable from the traffic ramp
+ * (amber/orange/red) that draws over it.
  *
- * Surface ramp (dark):
- *   page      #1E2024
- *   card      #26292E
- *   raised    #30343A   (app bar, chips, inputs)
- *   hover     #3D4249
+ * The *layout* tokens (8dp grid, P0-P8 padding, keylines, 12% side margins, 76dp
+ * touch minimum) are unchanged: those are AAOS layout guidance and they are still
+ * the right numbers for a car, which is what this app is.
+ *
+ * Surface ramp (dark, warm):
+ *   deep      #171208   (sheets, anything floating over the map)
+ *   page      #1C1712
+ *   card      #262019
+ *   raised    #322A21   (app bar, chips, inputs)
+ *   hover     #413629
  *
  * ## Ink is solid, not an alpha ramp
  *
- * The old `ink` was `rgba(255,255,255,0.88 / 0.6 / 0.5)`, the AAOS white-opacity
+ * The old `ink` was `rgba(255,255,255,0.88 / 0.6 / 0.5)`, a white-opacity
  * ramp. Alpha text is *translucent*, which makes its contrast a function of
  * whatever is behind it — so the same token measured one thing on a card and
  * something else over the map, and the ratio moved as the map panned.
@@ -32,33 +39,35 @@
  * The values below are solid hex, so contrast is a property of the token rather
  * than of the screen it landed on. Every one is asserted at >= 4.5:1 against every
  * surface in `elevation` by `test/contrast.spec.ts`, which composited and
- * measured rather than transcribing the ramp.
+ * measured rather than transcribing the ramp. The warm inks are measured on the
+ * warm ramp: `#F7F0E1` on `#1C1712` is 15.67:1 and the worst pair in the whole
+ * set — tertiary on hover — is still 5.20:1.
  *
  * The same reasoning is why the interactive states in `styles.css` are opaque:
  * a translucent fill *replaces* the one beneath it, so a hover declared as
- * `rgba(255,255,255,0.06)` on a surface floating over a near-white basemap
- * renders as the basemap. See `.quick-tile` there for the measured numbers.
+ * `rgba(255,255,255,0.06)` on a surface floating over the map renders as the
+ * basemap. See `.quick-tile` there for the measured numbers.
  */
 
 import type { CSSProperties } from 'react';
 
-/* ---------------- Google Maps dark neutral ramp ---------------- */
+/* ---------------- warm dark neutral ramp ---------------- */
 export const grey = {
   black: '#000000',
-  g958: '#1E2024', // page
-  g928: '#26292E', // card
-  g900: '#30343A', // raised: app bar, chips, inputs
-  g868: '#3D4249', // hover / pressed
-  g846: '#4A4F57',
-  g800: '#5F6368',
-  g700: '#80868B',
-  g600: '#9AA0A6',
-  g500: '#A7AEB8',
-  g400: '#C2C8D0',
-  g300: '#D5DAE0',
-  g200: '#E4E8EC',
-  g100: '#EDF0F2',
-  g50: '#F5F7F9',
+  g958: '#1C1712', // page
+  g928: '#262019', // card
+  g900: '#322A21', // raised: app bar, chips, inputs
+  g868: '#413629', // hover / pressed
+  g846: '#524334',
+  g800: '#6B5B48',
+  g700: '#8A7A64',
+  g600: '#A6947C',
+  g500: '#BCAA8F',
+  g400: '#D6C7AE',
+  g300: '#E7DAC2',
+  g200: '#F0E6D3',
+  g100: '#F7F0E1',
+  g50: '#FBF7EE',
 } as const;
 
 /** Dark elevation surfaces. */
@@ -70,17 +79,26 @@ export const elevation = {
   e4: grey.g868, // dialogs/HUN/snackbar rest at +3..+4
 } as const;
 
-/** Google Maps dark accent. `#1A73E8` is the light-mode blue and fails on dark. */
-export const accentNight = '#8AB4F8';
+/**
+ * The accent, and why there are two.
+ *
+ * `accentNight` is amber `#FFB454` — the dark-theme accent, used for every
+ * interactive fill, focus ring and selection on this app's dark surfaces.
+ * `accentDay` is the old Google blue `#1A73E8`, kept only as the light-mode
+ * accent: it is asserted by `test/contrast.spec.ts` to *fail* on the dark ramp
+ * (3.13:1 on `raised`, 2.61:1 on `hover`), which is exactly the measurement
+ * that retired it here.
+ */
+export const accentNight = '#FFB454';
 export const accentDay = '#1A73E8';
 
 /** Ink on dark surfaces. Solid, and each measured at >= 4.5:1 on every surface. */
 export const ink = {
-  primary: '#EDF0F2',   // Headline/Title, Body 1      14.25:1 on e1
-  secondary: '#C2C8D0', // Body copy, option labels     9.68:1 on e1
-  tertiary: '#A7AEB8',  // inactive icons, metadata     7.29:1 on e1
-  /** Text drawn *on* the accent fill. 6.94:1 — the accent is too light to carry it. */
-  onAccent: '#0B2545',
+  primary: '#F7F0E1',   // Headline/Title, Body 1      15.67:1 on e1
+  secondary: '#DED2BE', // Body copy, option labels    11.92:1 on e1
+  tertiary: '#BCAA8F',  // inactive icons, metadata     7.86:1 on e1, 5.20:1 on hover
+  /** Text drawn *on* the accent fill. 9.5:1 — amber is far too light to carry light ink. */
+  onAccent: '#2A1D07',
   /**
    * Text drawn on a *warning* fill, i.e. body copy inside a warning card rather
    * than its heading.

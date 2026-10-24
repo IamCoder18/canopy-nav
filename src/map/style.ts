@@ -1,104 +1,148 @@
 /**
- * A MapLibre style that reproduces Google Maps' light cartography as closely as
- * an open-data source allows.
+ * The map's cartography: a warm night style, and the navigation overlays.
  *
  * We start from OpenFreeMap's `liberty` vector style (free, no API key) and
- * remap the palette to Google's, then declare the navigation overlays ourselves
+ * remap its palette to ours, then declare the navigation overlays ourselves
  * (route casing + route line + traffic tint + markers).
  *
- * Google's style is proprietary; this is an independent re-creation of its
- * visual conventions (land/green/water/road ramps), not a copy of their tiles.
+ * ## Why a night style
+ *
+ * This used to re-create Google Maps' *light* cartography — near-white land,
+ * white roads, blue water — which put a bright basemap behind a dark UI and
+ * under a driver's dark-adapted eyes at night. The chrome has since gone warm
+ * dark (`src/theme.ts`), and the cartography follows: brown-shifted charcoal
+ * land, roads a step or two lighter than the ground they cross, deep blue-grey
+ * water, and warm amber/tan motorways so the road hierarchy still reads at a
+ * glance. The layer *roles* are unchanged — this is Google's land/green/water/
+ * road ramp structure with the values inverted and warmed, not a different
+ * cartographic design.
+ *
+ * The basemap palette below is also what `offlineStyleSpec` draws from, so the
+ * online and offline maps are the same map. They used to retype the palette as
+ * separate literals and had drifted (different motorway fills, different road
+ * casings) — the two modes were visibly different maps.
+ *
+ * The overlay colours come from `gmaps` in `theme.ts`, so the route colour the
+ * contrast suite certifies is the route colour the map draws.
  */
 
 import type { StyleSpecification } from 'maplibre-gl';
+import { gmaps } from '../theme';
 
 export const TILES = 'https://tiles.openfreemap.org/styles/liberty';
 
-/** Google Maps light-mode cartography palette. */
-const G = {
-  land: '#F8F7F5',
-  landAlt: '#F1EFEA',
-  water: '#AADAFF',
-  waterDeep: '#8FC8F5',
-  green: '#C5E8C0',
-  greenDeep: '#A8D5A0',
-  grass: '#CFEDC9',
-  building: '#EFEDE8',
-  buildingOutline: '#E2DFD8',
-  road: '#FFFFFF',
-  roadCasing: '#E3E0D8',
-  arterial: '#FFFFFF',
-  arterialCasing: '#DCD8CE',
-  highway: '#FFE8A8',
-  highwayCasing: '#F0C970',
-  motorway: '#FFDFA6',
-  motorwayCasing: '#E8A33D',
-  label: '#5F6368',
-  labelHalo: '#FFFFFF',
-  labelMajor: '#3C4043',
+/** Warm night cartography palette. */
+export const NIGHT = {
+  land: '#1C1712',
+  landAlt: '#221C15',
+  water: '#1D2B3A',
+  waterDeep: '#17222E',
+  waterLabel: '#7FA8C9',
+  green: '#202B1D',
+  greenDeep: '#1A2418',
+  building: '#292219',
+  buildingOutline: '#332A1F',
+  road: '#3B3227',
+  roadCasing: '#2A231B',
+  arterial: '#4A3E2E',
+  arterialCasing: '#2E271E',
+  highway: '#5E4E33',
+  highwayCasing: '#7A6236',
+  motorway: '#7A6132',
+  motorwayCasing: '#A9822F',
+  link: '#5A4A2E',
+  label: '#A2937D',
+  labelHalo: '#171208',
+  labelMajor: '#EDE2CC',
 } as const;
 
-/** Remap a Liberty style's paint properties onto Google's palette. */
-function remapPaint(layer: any): void {
+/**
+ * A MapLibre layer definition, as the loose JSON the style API actually is.
+ *
+ * The library's own `LayerSpecification` types every paint property per layer
+ * type, which is the right thing for a hand-written style and the wrong thing
+ * here: these layers are built as data and shipped through `as` casts to
+ * `StyleSpecification`, and fighting the type system with `any` at every
+ * signature was eighteen lint warnings and not one useful guarantee. This is
+ * the one honest shape — an id, a type, and opaque payload — and everything
+ * that consumes it does so as data.
+ */
+export interface LayerDef {
+  id: string;
+  type: string;
+  source?: string;
+  filter?: unknown;
+  layout?: Record<string, unknown>;
+  paint?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+/** Remap a Liberty style's paint properties onto the night palette. */
+function remapPaint(layer: LayerDef): void {
   const p = layer.paint ?? {};
-  const fill: string = layer['source-layer'] ?? '';
+  const fill: string = String(layer['source-layer'] ?? '');
 
   switch (layer.type) {
     case 'background':
-      p['background-color'] = G.land;
+      p['background-color'] = NIGHT.land;
       break;
 
     case 'fill':
-      if (/water|ocean|river|stream/.test(fill)) p['fill-color'] = G.water;
+      if (/water|ocean|river|stream/.test(fill)) p['fill-color'] = NIGHT.water;
       else if (/park|forest|wood|grass|cemetery|golf|scrub|pitch|garden|nature/.test(fill))
-        p['fill-color'] = /forest|wood/.test(fill) ? G.greenDeep : G.green;
+        p['fill-color'] = /forest|wood/.test(fill) ? NIGHT.greenDeep : NIGHT.green;
       else if (/building/.test(fill)) {
-        p['fill-color'] = G.building;
-        p['fill-outline-color'] = G.buildingOutline;
-      } else if (/land|earth|ground|beach|sand/.test(fill)) p['fill-color'] = G.landAlt;
+        p['fill-color'] = NIGHT.building;
+        p['fill-outline-color'] = NIGHT.buildingOutline;
+      } else if (/land|earth|ground|beach|sand/.test(fill)) p['fill-color'] = NIGHT.landAlt;
       else if (/residential|industrial|commercial|retail|suburb|quarter|neighbourhood/.test(fill))
-        p['fill-color'] = G.landAlt;
+        p['fill-color'] = NIGHT.landAlt;
       break;
 
     case 'line': {
       const isWater = /water|river|stream|canal/.test(fill);
       if (isWater) {
-        p['line-color'] = G.water;
+        p['line-color'] = NIGHT.water;
         break;
       }
-      // Motorway / trunk keep Google's warm fill with an orange casing.
+      // Motorway / trunk keep a warm tan fill with an amber casing, so the road
+      // hierarchy still reads at night without the glare of a light style.
       if (/motorway|trunk/.test(fill)) {
-        p['line-color'] = G.motorway;
+        p['line-color'] = NIGHT.motorway;
         p['line-opacity'] = 1;
-        if (p['line-width'] && typeof p['line-width'] === 'object' && (p['line-width'] as any)['stops'])
-          (p['line-width'] as any).stops = ((p['line-width'] as any).stops as [number, number][]).map(([k, v]) => [
-            k,
-            Math.max(0.4, v * 1.15),
-          ]);
+        // The Liberty style still uses the legacy `{stops: […]}` form of a
+        // property function, so this scales its widths by the same 1.15 the
+        // lighter style needed. Typed rather than cast three times: it is one
+        // shape and `stops` is its only field.
+        const lw = p['line-width'] as { stops?: [number, number][] } | undefined;
+        if (lw && typeof lw === 'object' && Array.isArray(lw.stops)) {
+          lw.stops = lw.stops.map(([k, v]) => [k, Math.max(0.4, v * 1.15)]);
+        }
         break;
       }
       if (/primary|secondary|trunk_link/.test(fill)) {
-        p['line-color'] = G.highway;
+        p['line-color'] = NIGHT.highway;
         p['line-opacity'] = 1;
         break;
       }
-      // Everything else: white fill, light grey casing (done by the casing layers).
+      // Everything else: a step lighter than the ground, with the casing layers
+      // doing the separation.
       if (/road|street|path|bridge|tunnel|service|railway|ferry/.test(fill)) {
-        p['line-color'] = G.road;
+        p['line-color'] = NIGHT.road;
         p['line-opacity'] = 1;
         break;
       }
-      p['line-color'] = G.roadCasing;
+      p['line-color'] = NIGHT.roadCasing;
       break;
     }
 
     case 'symbol': {
       const isRoadLabel = /road|street|place/.test(fill) || /place/.test(layer.id);
       const isWater = /water|ocean|river/.test(fill);
-      if (isWater) p['text-color'] = '#4A90C4';
-      else if (isRoadLabel) p['text-color'] = G.labelMajor;
-      else p['text-color'] = G.label;
-      p['text-halo-color'] = G.labelHalo;
+      if (isWater) p['text-color'] = NIGHT.waterLabel;
+      else if (isRoadLabel) p['text-color'] = NIGHT.labelMajor;
+      else p['text-color'] = NIGHT.label;
+      p['text-halo-color'] = NIGHT.labelHalo;
       p['text-halo-width'] = 1.2;
       break;
     }
@@ -107,7 +151,7 @@ function remapPaint(layer: any): void {
   // Casing layers sit directly under their fill layer with the same id prefix.
   if (/casing/i.test(layer.id)) {
     const isWater = /water|river/.test(fill);
-    p['line-color'] = isWater ? G.waterDeep : G.roadCasing;
+    p['line-color'] = isWater ? NIGHT.waterDeep : NIGHT.roadCasing;
     p['line-opacity'] = 0.9;
   }
 }
@@ -137,7 +181,7 @@ const ORDER_OPS = new Set(['<', '<=', '>', '>=']);
  * `["all", …]` short-circuits, so testing `has` first means the comparison is
  * never evaluated for a feature that lacks the property.
  */
-function guardOrderComparisons(node: any): any {
+function guardOrderComparisons(node: unknown): unknown {
   if (!Array.isArray(node)) return node;
 
   // Already guarded by an earlier pass? Return it untouched, so the transform is
@@ -168,7 +212,7 @@ export async function buildStyle(): Promise<StyleSpecification> {
   if (!res.ok) throw new Error(`Tile style unavailable (HTTP ${res.status})`);
   const style = (await res.json()) as StyleSpecification;
 
-  const layers = style.layers as any[];
+  const layers = style.layers as LayerDef[];
   for (const layer of layers) {
     layer.paint = layer.paint ?? {};
     remapPaint(layer);
@@ -181,21 +225,27 @@ export async function buildStyle(): Promise<StyleSpecification> {
   // overlay layers always resolve, whichever style is active.
   for (const [id, src] of Object.entries(overlaySources())) {
     if (!style.sources) style.sources = {};
-    if (!style.sources[id]) style.sources[id] = src;
+    if (!style.sources[id]) style.sources[id] = src as StyleSpecification['sources'][string];
   }
 
-  style.layers = [...layers, ...overlays()];
+  // The loose `LayerDef` is the same data `StyleSpecification` holds — that is
+  // what the interface above is for — and the boundary where it is accepted is
+  // written down as exactly one cast rather than one per layer.
+  style.layers = [...layers, ...overlays()] as unknown as StyleSpecification['layers'];
 
   style.glyphs = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
   return style;
 }
 
 /**
- * Google Maps' route line width, shared by the route, the portion already
+ * Google's route line width, shared by the route, the portion already
  * driven and the traffic tint. All three are the same physical stripe: the tint
  * recolours it rather than sitting beside it.
  */
 export const ROUTE_LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 4, 3.5, 10, 6.5, 14, 14, 18, 24];
+
+/** The casing is the same stripe, stepped wider so it reads as an edge. */
+export const ROUTE_CASING_WIDTH = ['interpolate', ['linear'], ['zoom'], 4, 5, 10, 10, 14, 20, 18, 30];
 
 /** GeoJSON source holding the traffic tint, one feature per stretch of road. */
 export const TRAFFIC_SOURCE = 'canopy-route-traffic';
@@ -204,13 +254,13 @@ export const TRAFFIC_SOURCE = 'canopy-route-traffic';
  * The traffic tint, as separate layers over one GeoJSON source.
  *
  * Only `slow` and `dense` stretches get a layer. A stretch the provider reported
- * no congestion for is left as the normal blue route, because a green line
+ * no congestion for is left as the normal route stripe, because a green line
  * would claim "clear road" that we were never told about.
  *
  * These are drawn *after* `canopy-route`: a tint underneath a route of at least
  * the same width is not a tint, it is a hidden layer.
  */
-export function trafficLayers(): any[] {
+export function trafficLayers(): LayerDef[] {
   return [
     {
       id: 'canopy-route-traffic',
@@ -218,7 +268,7 @@ export function trafficLayers(): any[] {
       source: TRAFFIC_SOURCE,
       filter: ['==', ['get', 'level'], 'dense'],
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-width': ROUTE_LINE_WIDTH, 'line-color': '#E5484D' },
+      paint: { 'line-width': ROUTE_LINE_WIDTH, 'line-color': gmaps.routeTrafficSlow },
     },
     {
       id: 'canopy-route-traffic-slow',
@@ -226,31 +276,40 @@ export function trafficLayers(): any[] {
       source: TRAFFIC_SOURCE,
       filter: ['==', ['get', 'level'], 'slow'],
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-width': ROUTE_LINE_WIDTH, 'line-color': '#E8A33D' },
+      paint: { 'line-width': ROUTE_LINE_WIDTH, 'line-color': gmaps.routeTraffic },
     },
   ];
 }
 
 /**
- * Navigation overlays, in draw order.
- * Google draws the route as a thick blue line with a darker blue casing and
- * slightly rounded joins; traffic tints the line amber/red rather than replacing it.
+ * The navigation overlays, in draw order: avoid boxes, the route and its
+ * casing, the traffic tint, the driven portion, then the markers.
+ *
+ * The route is a thick emerald stripe over a darker casing; traffic tints the
+ * stripe amber/red rather than replacing it.
+ *
+ * Shared by both basemaps. There used to be two copies of this list — one here
+ * for the tile style, one in `map/MapView.tsx` for the offline style — and they
+ * had drifted: different casing ramps and a destination shadow called
+ * `canopy-dest-shadow` in one and `canopy-destination-shadow` in the other.
+ * Duplicated paint is duplicated bugs, so the offline style now asks for the
+ * same list.
  */
-export function overlays(): any[] {
+export function navOverlays(): LayerDef[] {
   return [
     {
       id: 'canopy-avoid-fill',
       type: 'fill',
       source: 'canopy-avoid',
       filter: ['==', '$type', 'Polygon'],
-      paint: { 'fill-color': '#5F6368', 'fill-opacity': 0.55 },
+      paint: { 'fill-color': gmaps.routeTravelled, 'fill-opacity': 0.45 },
     },
     {
       id: 'canopy-avoid-line',
       type: 'line',
       source: 'canopy-avoid',
       filter: ['==', '$type', 'LineString'],
-      paint: { 'line-color': '#80868B', 'line-width': 3, 'line-dasharray': [2, 2] },
+      paint: { 'line-color': gmaps.routeTravelled, 'line-width': 3, 'line-dasharray': [2, 2] },
     },
 
     // --- route casing ---
@@ -259,7 +318,7 @@ export function overlays(): any[] {
       type: 'line',
       source: 'canopy-route',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': '#0B4FB0', 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 5, 10, 10, 14, 20, 18, 30], 'line-opacity': 0.55 },
+      paint: { 'line-color': gmaps.routeCasing, 'line-width': ROUTE_CASING_WIDTH, 'line-opacity': 0.9 },
     },
     // --- the route itself ---
     {
@@ -267,20 +326,20 @@ export function overlays(): any[] {
       type: 'line',
       source: 'canopy-route',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': '#1A73E8', 'line-width': ROUTE_LINE_WIDTH },
+      paint: { 'line-color': gmaps.route, 'line-width': ROUTE_LINE_WIDTH },
     },
     // --- traffic tint, above the route so it can actually be seen ---
     ...trafficLayers(),
-    // --- travelled portion (dimmed, Google Maps greys out the part already driven) ---
+    // --- travelled portion (dimmed, greys out the part already driven) ---
     // Drawn last of the three, and deliberately: all three are the same stripe
-    // in the same place, so a grey line *under* a blue line of equal width is
+    // in the same place, so a grey line *under* a route line of equal width is
     // not a dimmed route, it is an invisible one.
     {
       id: 'canopy-route-travelled',
       type: 'line',
       source: 'canopy-route-travelled',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': '#9AA0A6', 'line-width': ROUTE_LINE_WIDTH, 'line-opacity': 0.75 },
+      paint: { 'line-color': gmaps.routeTravelled, 'line-width': ROUTE_LINE_WIDTH, 'line-opacity': 0.75 },
     },
 
     // --- maneuver markers along the route ---
@@ -290,8 +349,8 @@ export function overlays(): any[] {
       source: 'canopy-maneuvers',
       paint: {
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 4, 14, 7, 18, 10],
-        'circle-color': '#FFFFFF',
-        'circle-stroke-color': '#1A73E8',
+        'circle-color': NIGHT.land,
+        'circle-stroke-color': gmaps.maneuverRing,
         'circle-stroke-width': 2.5,
       },
     },
@@ -301,13 +360,13 @@ export function overlays(): any[] {
       id: 'canopy-origin-halo',
       type: 'circle',
       source: 'canopy-origin',
-      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 9, 14, 16, 18, 24], 'circle-color': '#1A73E8', 'circle-opacity': 0.18 },
+      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 9, 14, 16, 18, 24], 'circle-color': gmaps.originDot, 'circle-opacity': 0.18 },
     },
     {
       id: 'canopy-origin',
       type: 'circle',
       source: 'canopy-origin',
-      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 4.5, 14, 7.5, 18, 11], 'circle-color': '#FFFFFF', 'circle-stroke-width': 3, 'circle-stroke-color': '#1A73E8' },
+      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 4.5, 14, 7.5, 18, 11], 'circle-color': NIGHT.labelMajor, 'circle-stroke-width': 3, 'circle-stroke-color': gmaps.originDot },
     },
 
     // --- destination pin ---
@@ -315,7 +374,7 @@ export function overlays(): any[] {
       id: 'canopy-dest-shadow',
       type: 'circle',
       source: 'canopy-destination',
-      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 6, 14, 10, 18, 14], 'circle-color': '#000000', 'circle-opacity': 0.2, 'circle-translate': [0, 2] },
+      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 6, 14, 10, 18, 14], 'circle-color': '#000000', 'circle-opacity': 0.32, 'circle-translate': [0, 2] },
     },
     {
       id: 'canopy-destination',
@@ -323,7 +382,7 @@ export function overlays(): any[] {
       source: 'canopy-destination',
       paint: {
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 5, 14, 8.5, 18, 12],
-        'circle-color': '#EA4335',
+        'circle-color': gmaps.destinationPin,
         'circle-stroke-color': '#FFFFFF',
         'circle-stroke-width': 2.5,
       },
@@ -343,16 +402,46 @@ export function overlays(): any[] {
       id: 'canopy-location-accuracy',
       type: 'circle',
       source: 'canopy-location',
-      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 12, 14, 40, 18, 90], 'circle-color': '#1A73E8', 'circle-opacity': 0.12 },
+      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 12, 14, 40, 18, 90], 'circle-color': gmaps.accuracyCircle, 'circle-opacity': 0.14 },
     },
     {
       id: 'canopy-location',
       type: 'circle',
       source: 'canopy-location',
-      paint: { 'circle-radius': 7, 'circle-color': '#1A73E8', 'circle-stroke-width': 3, 'circle-stroke-color': '#FFFFFF' },
+      paint: { 'circle-radius': 7, 'circle-color': gmaps.originDot, 'circle-stroke-width': 3, 'circle-stroke-color': NIGHT.land },
     },
 
-    // --- imported .osm overlay ---
+    // --- driver reports (hazards, closures, …) ---
+    // Amber, the chrome accent, because a report is a "something ahead" mark
+    // rather than a traffic state: the traffic ramp owns red/orange/green on the
+    // route stripe, and reusing it here would make a user report indistinguishable
+    // from provider data — which this app never does.
+    {
+      id: 'canopy-report-marks',
+      type: 'circle',
+      source: 'canopy-reports',
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 5, 14, 9, 18, 13],
+        'circle-color': gmaps.originDot,
+        'circle-stroke-color': NIGHT.land,
+        'circle-stroke-width': 2,
+      },
+    },
+  ];
+}
+
+/**
+ * The imported-`.osm` road overlay, for the *tile* style only.
+ *
+ * On the tile basemap the imported extract is drawn as a class-coloured road
+ * network over the tiles. The offline style draws its own `canopy-osm-*`
+ * layers with a zoom ramp tuned for province scale, and a second
+ * `canopy-osm-roads` there would be a duplicate layer id — which MapLibre
+ * rejects outright. That split is why this is a separate function rather than
+ * one more entry in `navOverlays()`.
+ */
+export function tileOsmOverlay(): LayerDef[] {
+  return [
     {
       id: 'canopy-osm-roads',
       type: 'line',
@@ -360,11 +449,19 @@ export function overlays(): any[] {
       filter: ['==', ['geometry-type'], 'LineString'],
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
-        'line-color': ['match', ['get', 'class'], 'motorway', '#F0A03C', 'trunk', '#F0A03C', 'primary', '#FFE8A8', 'secondary', '#FFF3D0', '#FFFFFF'],
+        'line-color': roadClassColour(),
         'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1, 14, 3, 18, 8],
       },
     },
   ];
+}
+
+/**
+ * Every overlay layer the tile style draws: the shared navigation set plus the
+ * imported-extract roads.
+ */
+export function overlays(): LayerDef[] {
+  return [...navOverlays(), ...tileOsmOverlay()];
 }
 
 /**
@@ -383,39 +480,77 @@ export function overlays(): any[] {
  * on class) is what allows that: a single `line-width` cannot make one class
  * thick at zoom 6 and another almost invisible.
  */
-export function widthAt(stops: readonly (number | any[])[]): any {
+export function widthAt(stops: readonly (number | readonly number[])[]): unknown {
   return ['interpolate', ['linear'], ['zoom'], ...stops.flat()];
 }
 
 /** Highways that must stay legible at province zoom. */
 const ARTERIAL = ['motorway', 'trunk', 'primary', 'secondary'];
 
-/** Links and ramps: real roads, but not the structure of the network. */
-const LINK = ['motorway_link', 'trunk_link', 'primary_link', 'secondary_link'];
+/**
+ * Class → colour for the imported road network.
+ *
+ * This used to be written as one `match` expression with `...LINK` spread into
+ * it — four labels sprayed against a *single* output — which is not a `match`
+ * at all: after the input, MapLibre wants label/output *pairs* plus a fallback,
+ * and the hand-written form had an even argument count where an odd one was
+ * required. MapLibre rejected the whole style with
+ * `layers[N].paint.line-color: Expected an even number of arguments`, and the
+ * rejection is total — no layers, no attribution, an empty map — while the unit
+ * tests, which inspect the object rather than load it, saw nothing wrong.
+ *
+ * The colours now come from this table and the expression is built by pairing
+ * them mechanically, so the shape cannot drift again: every key is a label, the
+ * value beside it is its output, and the fallback is added last.
+ */
+const ROAD_CLASS_COLOUR: Record<string, string> = {
+  motorway: NIGHT.motorway,
+  trunk: NIGHT.motorway,
+  motorway_link: NIGHT.link,
+  trunk_link: NIGHT.link,
+  primary_link: NIGHT.link,
+  secondary_link: NIGHT.link,
+  primary: NIGHT.highway,
+  secondary: NIGHT.arterial,
+};
+
+/** `['match', ['get', 'class'], label, colour, …, fallback]`, well-formed by construction. */
+export function roadClassColour(): unknown[] {
+  return [
+    'match', ['get', 'class'],
+    ...Object.entries(ROAD_CLASS_COLOUR).flatMap(([klass, colour]) => [klass, colour]),
+    NIGHT.road,
+  ];
+}
 
 /** MapLibre filter matching only arterial classes. */
-export function arterialFilter(): any {
-  return ['match', ['get', 'class'], ...ARTERIAL, true, false];
+export function arterialFilter(): unknown[] {
+  // Label/output pairs, mechanically — the same mistake as `roadClassColour`'s
+  // predecessor lived here: `['match', input, ...four labels, true, false]` is
+  // six arguments after the input where `match` wants 2N+1, so MapLibre
+  // rejected the whole offline style and the tests, which only looked at the
+  // array's shape from the outside, saw a plausible-looking filter.
+  return ['match', ['get', 'class'], ...ARTERIAL.flatMap((klass) => [klass, true]), false];
 }
 
 /**
- * The offline style: Google's palette over our own parsed `.osm` geometry.
+ * The offline style: the night palette over our own parsed `.osm` geometry.
  *
  * Takes the navigation overlay layers as an argument rather than importing them,
  * because those live with the map component that owns them, and importing the
  * component here would drag `maplibre-gl` into a pure module.
  */
-export function offlineStyleSpec(overlayLayerDefs: any[]): StyleSpecification {
+export function offlineStyleSpec(overlayLayerDefs: LayerDef[]): StyleSpecification {
   return {
     version: 8,
     glyphs: undefined,
     sources: overlaySources(),
     layers: [
-      { id: 'bg', type: 'background', paint: { 'background-color': '#F8F7F5' } },
+      { id: 'bg', type: 'background', paint: { 'background-color': NIGHT.land } },
       {
         id: 'canopy-osm-green', type: 'fill', source: 'canopy-osm-green',
         paint: {
-          'fill-color': ['match', ['get', 'class'], 'forest', '#A8D5A0', 'wood', '#A8D5A0', '#C5E8C0'],
+          'fill-color': ['match', ['get', 'class'], 'forest', NIGHT.greenDeep, 'wood', NIGHT.greenDeep, NIGHT.green],
           'fill-opacity': 0.9,
         },
       },
@@ -425,18 +560,18 @@ export function offlineStyleSpec(overlayLayerDefs: any[]): StyleSpecification {
         // Floored for the same reason as the roads: a river that vanishes below
         // zoom 9 makes a province look like it has no geography.
         paint: {
-          'line-color': '#AADAFF',
+          'line-color': NIGHT.water,
           'line-width': widthAt([4, 0.8, 8, 1.4, 14, 4, 18, 12]),
         },
       },
-      // Casing under everything, so a pale road still reads against the pale
-      // background. Drawn first for that reason.
+      // Casing under everything, so a road still reads against the ground it
+      // crosses. Drawn first for that reason.
       {
         id: 'canopy-osm-casing', type: 'line', source: 'canopy-osm',
         filter: ['==', ['geometry-type'], 'LineString'],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
-          'line-color': '#E3E0D8',
+          'line-color': NIGHT.roadCasing,
           'line-width': widthAt([4, 1.4, 8, 2.2, 14, 5, 18, 12]),
         },
       },
@@ -447,7 +582,7 @@ export function offlineStyleSpec(overlayLayerDefs: any[]): StyleSpecification {
         filter: ['all', ['==', ['geometry-type'], 'LineString'], ['!', arterialFilter()]],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
-          'line-color': '#FFFFFF',
+          'line-color': NIGHT.road,
           'line-width': widthAt([5, 0.5, 9, 1, 13, 2.4, 16, 5, 18, 8]),
           // Slightly translucent when far out: the point is to show that a
           // network exists, not to compete with the arterials drawn on top.
@@ -460,13 +595,7 @@ export function offlineStyleSpec(overlayLayerDefs: any[]): StyleSpecification {
         filter: ['==', ['geometry-type'], 'LineString'],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
-          'line-color': [
-            'match', ['get', 'class'],
-            'motorway', '#F0A03C', 'trunk', '#F0A03C',
-            ...LINK, '#FFD98A',
-            'primary', '#FFE8A8', 'secondary', '#FFF3D0',
-            '#FFFFFF',
-          ],
+          'line-color': roadClassColour(),
           // Held wide down to zoom 6, which is where a province sits.
           'line-width': [
             'interpolate', ['linear'], ['zoom'],
@@ -501,7 +630,7 @@ export const OSM_ATTRIBUTION =
   '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>';
 
 /** Empty GeoJSON sources for every layer the overlays reference. */
-export function overlaySources(): Record<string, any> {
+export function overlaySources(): Record<string, unknown> {
   return {
     'canopy-route': { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
     'canopy-route-travelled': { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
@@ -509,6 +638,9 @@ export function overlaySources(): Record<string, any> {
     // without every other feature having to pretend to be a road.
     [TRAFFIC_SOURCE]: { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
     'canopy-maneuvers': { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
+    // The driver's own reports. No attribution: this is not map data, it is
+    // what the person in the car just told us.
+    'canopy-reports': { type: 'geojson', data: EMPTY },
     'canopy-origin': { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
     'canopy-destination': { type: 'geojson', data: EMPTY, attribution: OSM_ATTRIBUTION },
     'canopy-location': { type: 'geojson', data: EMPTY },

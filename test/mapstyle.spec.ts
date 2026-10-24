@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { offlineStyleSpec } from '../src/map/style';
+import { offlineStyleSpec, overlays, roadClassColour } from '../src/map/style';
 
 /**
  * The real style, built by the real function.
@@ -142,5 +142,69 @@ describe('layer ordering', () => {
 
   it('background is first, so nothing is drawn under it', () => {
     expect(style.layers[0].id).toBe('bg');
+  });
+});
+
+/*
+ * Every expression a shipped style carries must be well-formed.
+ *
+ * This is the test the missing one should have been. The imported-road
+ * `match` was written with four link classes sprayed against a single output —
+ * `...LINK, colour` — which is an even argument count after the input where
+ * MapLibre demands label/output *pairs* plus a fallback. MapLibre rejects the
+ * style outright (`paint.line-color: Expected an even number of arguments`),
+ * and a rejected style is *total*: no layers, no attribution, an empty map.
+ *
+ * Nothing caught it, because every test here inspected the object graph and
+ * none of them asked whether the expressions inside it were legal. These walk
+ * the real styles and check the shape of every `match`, which is where that
+ * class of error lives.
+ */
+describe('style expressions are well-formed', () => {
+  /** Depth-first over an expression tree, visiting every array node. */
+  const walk = (node: unknown, visit: (expr: unknown[]) => void): void => {
+    if (!Array.isArray(node)) return;
+    visit(node);
+    for (const child of node) walk(child, visit);
+  };
+
+  /** Every mis-paired `match` in a layer's expressions, for one readable failure. */
+  const badMatches = (layers: { id: string; paint?: unknown; layout?: unknown; filter?: unknown }[]): string[] => {
+    const bad: string[] = [];
+    for (const l of layers) {
+      walk([l.paint, l.layout, l.filter], (expr) => {
+        if (expr[0] !== 'match') return;
+        // ['match', input, (label, output) × N, fallback] — after the input the
+        // count is 2N+1, so odd and at least 3.
+        const args = expr.slice(2);
+        if (args.length < 3 || args.length % 2 !== 1) {
+          bad.push(`${l.id}: ${JSON.stringify(expr).slice(0, 160)}`);
+        }
+      });
+    }
+    return bad;
+  };
+
+  it('the offline style carries no mis-paired match', () => {
+    expect(badMatches(style.layers)).toEqual([]);
+  });
+
+  it('the tile style\'s overlay layers carry none either', () => {
+    expect(badMatches(overlays() as never)).toEqual([]);
+  });
+
+  it('the class-colour match pairs every road class with exactly one colour', () => {
+    const expr = roadClassColour();
+    expect(expr[0]).toBe('match');
+    // match + input + pairs + fallback is an odd length by construction.
+    expect(expr.length % 2).toBe(1);
+    const args = expr.slice(2);
+    const labels = args.slice(0, -1).filter((_, i) => i % 2 === 0);
+    const outputs = args.slice(0, -1).filter((_, i) => i % 2 === 1);
+    expect(labels.length).toBe(outputs.length);
+    expect(new Set(labels).size).toBe(labels.length);
+    for (const out of [...outputs, args[args.length - 1]]) {
+      expect(typeof out).toBe('string');
+    }
   });
 });
