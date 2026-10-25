@@ -20,6 +20,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { importRegionFile } from '../src/regions/store';
+import { buildStageStep } from '../src/osm/engine';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -304,5 +305,31 @@ describe('the post-parse policy, as a rule', () => {
   it('says plainly that nothing was changed', () => {
     // A refusal the user cannot tell from a partial success is not a refusal.
     expect(judge('a.osm', { nodes: 0, ways: 0, routable: 0 }).message).toMatch(/Nothing was changed/);
+  });
+});
+describe('the reported stages map to the steps the import screen draws', () => {
+  it('puts every read-and-parse stage on the same step', () => {
+    // The engine names the first phase by format (`Reading PBF` for protobuf,
+    // `Parsing XML` for XML) and the region library adds two more of its own
+    // (`Reading file`, `Reading extract`). One step per phase: four names for
+    // "getting the elements out of the file" are one step to a driver.
+    expect(buildStageStep('Reading PBF')).toBe('read');
+    expect(buildStageStep('Parsing XML')).toBe('read');
+    expect(buildStageStep('Reading file')).toBe('read');
+    expect(buildStageStep('Reading extract')).toBe('read');
+  });
+
+  it('gives the graph build its own step', () => {
+    expect(buildStageStep('Building graph')).toBe('build');
+    // The trim: a stage reported with stray whitespace must not silently fall
+    // into the earlier step and claim the map is still being read.
+    expect(buildStageStep('  Building graph  ')).toBe('build');
+  });
+
+  it('reads an unrecognised stage as the phase everything starts in', () => {
+    // A wrong guess here mislabels a progress line; the other way round would
+    // claim the map is built while it is still being read.
+    expect(buildStageStep('Frobnicating')).toBe('read');
+    expect(buildStageStep('')).toBe('read');
   });
 });

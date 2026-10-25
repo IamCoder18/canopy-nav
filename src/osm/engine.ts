@@ -90,6 +90,25 @@ export interface BuildProgress {
   pct: number;
 }
 
+/**
+ * Which phase of the pipeline a reported stage belongs to: reading and
+ * parsing the file, or building the routing graph from what was read.
+ *
+ * The vocabulary is the engine's (`Reading PBF`, `Parsing XML`, `Building
+ * graph`, plus the region library's `Reading file` / `Reading extract`), and
+ * the import screen draws one step per *phase* rather than per stage — three
+ * formats of "getting the elements out of the file" are one step to a driver.
+ * `Building graph` is the step that produces the map, so it is its own.
+ *
+ * Anything unrecognised reads as the first phase: it is the one already in
+ * progress for every stage this codebase emits before the graph build, and a
+ * wrong guess there mislabels a progress line, while a wrong guess the other
+ * way would claim the map is built while it is still being read.
+ */
+export function buildStageStep(stage: string): 'read' | 'build' {
+  return /^building/i.test(stage.trim()) ? 'build' : 'read';
+}
+
 export class OsmEngine {
   /**
    * Nullable so `dispose()` is safe on a half-built engine.

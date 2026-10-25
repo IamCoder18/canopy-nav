@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TrafficOverlay } from './map/overlays';
-import type { BuildProgress } from './osm/engine';
+import { buildStageStep, type BuildProgress } from './osm/engine';
 import type { OsmDataset } from './osm/engine.worker';
 import { searchGazetteer } from './osm/engine.worker';
 import { searchPlaces, type Place } from './nav/geocode';
@@ -1004,8 +1004,15 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
 
   const onFile = useCallback(async (file: File) => {
     const ds = await build(file, localRegionId(file), localRegionName(file), 'local');
-    if (ds) go('home');
-  }, [build, go]);
+    if (ds) {
+      // The map screen the driver lands on states the same fact in its status
+      // row; the toast is the *arrival* — the import they started has finished
+      // and what it produced, said once, without them having to read the row.
+      const ways = ds.counts.routable;
+      showToast(`Map imported — ${ways.toLocaleString()} routable way${ways === 1 ? '' : 's'} ready to route offline.`);
+      go('home');
+    }
+  }, [build, go, showToast]);
 
   /* ---------------------------- routing --------------------------- */
 
@@ -2269,8 +2276,18 @@ function HomeScreen(p: HomeProps) {
           </div>
         )}
         {!p.dataset && !p.progress && (
-          <div className="hint-card">
-            <div style={{ ...T.body3m, marginBottom: DP.P1 }}>Import a map to route offline</div>
+          <div className="hint-card import-invite">
+            {/*
+              The launcher's call to action, laid out as one: an icon, one
+              sentence of why, the one command that matters. The label is
+              exactly `Import .osm file` — the browser gates select it by that
+              text — and it is the only element on this screen whose text
+              contains it.
+            */}
+            <div className="import-invite-head">
+              <IconFile size={ICON.primary} color={accentNight} />
+              <div style={T.body3m}>Import a map to route offline</div>
+            </div>
             <div style={{ ...T.sub3, color: ink.secondary, marginBottom: DP.P3 }}>
               Download an extract from Geofabrik —
               <code>.osm.pbf</code> directly, or convert with
@@ -2450,6 +2467,57 @@ function QuickTile({
 }
 
 /**
+ * The import pipeline as three steps: choose the file, read and parse it,
+ * build the routing graph.
+ *
+ * One step per *phase*, not per stage: `Reading PBF`, `Parsing XML`,
+ * `Reading file` and `Reading extract` are all "getting the elements out of
+ * the file" to a driver, and `buildStageStep` is the engine's answer to which
+ * phase a stage belongs to. The run card below shows the live stage verbatim;
+ * this is the shape of the whole job.
+ *
+ * The labels are load-bearing and deliberately bland. The browser gates wait
+ * for the strings `Parsing` and `Building graph` to *disappear* to know an
+ * import finished, so no persistent label may contain either — the live stage
+ * is the only place they are written, and it goes away with the import.
+ */
+function ImportSteps(props: {
+  phase: 'choose' | 'read' | 'build';
+  done: boolean;
+  failed: boolean;
+}) {
+  const order = { choose: 0, read: 1, build: 2 } as const;
+  const state = (step: keyof typeof order): 'pending' | 'active' | 'done' | 'failed' => {
+    if (props.failed && step === props.phase) return 'failed';
+    if (props.done) return 'done';
+    if (step === props.phase) return 'active';
+    return order[step] < order[props.phase] ? 'done' : 'pending';
+  };
+  const dot = (s: ReturnType<typeof state>, n: number) =>
+    s === 'done' ? <IconCheck size={ICON.tertiary} />
+      : s === 'failed' ? <IconClose size={ICON.tertiary} />
+      : n;
+
+  return (
+    <div className="import-steps" aria-hidden="true">
+      {(['choose', 'read', 'build'] as const).map((step, i) => (
+        <React.Fragment key={step}>
+          {i > 0 && (
+            <div className={`import-connector ${order[step] <= order[props.phase] || props.done ? 'on' : ''}`} />
+          )}
+          <div className={`import-step ${state(step)}`}>
+            <span className="import-dot">{dot(state(step), i + 1)}</span>
+            <span className="import-label">
+              {step === 'choose' ? 'Choose file' : step === 'read' ? 'Read & parse' : 'Build graph'}
+            </span>
+          </div>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+/**
  * A long-running import, and what a driver hears while it runs.
  *
  * ## The two things this gets wrong if done naively
@@ -2479,6 +2547,7 @@ function ProgressCard({ progress }: { progress: BuildProgress }) {
 
   return (
     <div className="progress-card">
+      <ImportSteps phase={buildStageStep(progress.stage)} done={false} failed={false} />
       <div className="progress-stage" role="status" aria-live="polite" aria-atomic="true">
         {ready ? progress.stage : ''}
       </div>
@@ -4764,15 +4833,42 @@ function ImportScreen(props: {
   headingRef?: React.Ref<HTMLHeadingElement>;
 }) {
   const [dragging, setDragging] = useState(false);
+  /** The file the user picked, named back at them while it is worked through. */
+  const [pickedName, setPickedName] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  /**
+   * The last stage reported, kept after the report stops.
+   *
+   * A failed import clears its progress like a finished one, and the step that
+   * failed is the one that was running when it did — without this the pipeline
+   * would collapse back to "Choose file" and blame the wrong step for the
+   * refusal.
+   */
+  const [lastStage, setLastStage] = useState<string | null>(null);
+  if (props.progress && props.progress.stage !== lastStage) setLastStage(props.progress.stage);
+
+  const running = !!props.progress;
+  const phase = running && props.progress
+    ? buildStageStep(props.progress.stage)
+    : lastStage
+      ? buildStageStep(lastStage)
+      : 'choose';
+
+  const pick = (f: File) => {
+    setPickedName(f.name);
+    props.onFile(f);
+  };
+
   return (
     <div className="search-root">
       <div className="top-app-bar">
         <button className="icon-btn" onClick={props.onBack} aria-label="Back"><IconBack size={ICON.primary} /></button>
-        <h1 ref={props.headingRef} tabIndex={-1} className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Import .osm</h1>
+        <h1 ref={props.headingRef} tabIndex={-1} className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Import a map</h1>
       </div>
 
       <div className="settings-body">
+        <ImportSteps phase={phase} done={false} failed={!!props.error} />
+
         {/*
           The picker is a real button, not a styled `<label>` wrapped around a
           `hidden` input.
@@ -4786,28 +4882,36 @@ function ImportScreen(props: {
 
           The button carries the drop handlers too, so both gestures land on one
           element rather than two overlapping ones.
+
+          While a file is being worked through, the target is replaced by the
+          run card: picking a second extract mid-parse would queue behind the
+          first with nothing on screen to say so.
         */}
-        <button
-          type="button"
-          className={`dropzone ${dragging ? 'over' : ''}`}
-          onClick={() => fileRef.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragging(false);
-            const f = e.dataTransfer.files[0];
-            if (f) props.onFile(f);
-          }}
-        >
-          <IconFile size={64} color={ink.secondary} />
-          <span style={{ ...T.body1m, marginTop: DP.P3 }}>Choose or drop an .osm file</span>
-          <span style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1, textAlign: 'center' }}>
-            Accepts <code>.osm</code> (XML) and <code>.osm.pbf</code> (protobuf),<br />
-            which is what Geofabrik publishes. Smaller extracts can be converted
-            with <code>osmium cat region.osm.pbf -o region.osm</code>.
-          </span>
-        </button>
+        {running && props.progress ? (
+          <ImportRunCard progress={props.progress} pickedName={pickedName} />
+        ) : (
+          <button
+            type="button"
+            className={`dropzone ${dragging ? 'over' : ''}`}
+            onClick={() => fileRef.current?.click()}
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragging(false);
+              const f = e.dataTransfer.files[0];
+              if (f) pick(f);
+            }}
+          >
+            <span className="dropzone-icon"><IconFile size={64} color={ink.secondary} /></span>
+            <span style={{ ...T.body1m, marginTop: DP.P3 }}>Choose or drop an .osm file</span>
+            <span style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1, textAlign: 'center' }}>
+              Accepts <code>.osm</code> (XML) and <code>.osm.pbf</code> (protobuf),<br />
+              which is what Geofabrik publishes. Smaller extracts can be converted
+              with <code>osmium cat region.osm.pbf -o region.osm</code>.
+            </span>
+          </button>
+        )}
         {/* Present for the programmatic `.click()` above and for automation;
             taken out of the layout and out of the tab order so the visible
             button is the only stop. */}
@@ -4818,10 +4922,9 @@ function ImportScreen(props: {
           className="visually-hidden-input"
           tabIndex={-1}
           aria-hidden="true"
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) props.onFile(f); }}
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) pick(f); }}
         />
 
-        {props.progress && <ProgressCard progress={props.progress} />}
         {props.error && (
           <ImportMessage tone="error" message={props.error} onDismiss={() => props.onDismissError?.()} />
         )}
@@ -4829,6 +4932,60 @@ function ImportScreen(props: {
           <ImportMessage tone="warn" message={props.warn} onDismiss={() => props.onDismissWarn?.()} />
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * What is on screen while a file is being worked through: the live stage, the
+ * percentage, the bar and the file named back at the driver.
+ *
+ * Its own component so the `announceAfterMount` trick below is scoped to the
+ * *run*: the live region must be created empty and filled afterwards, which
+ * only works if "afterwards" is a mount of its own. Lifted into `ImportScreen`
+ * the frame would already have passed by the time the import started, and the
+ * first thing a screen reader heard would be silently dropped — which is the
+ * whole thing this avoids. The same reason `ProgressCard` carries its own.
+ *
+ * The live region and the number are separate elements for the firehose
+ * reason spelled out on `ProgressCard`: the stage changes a handful of times
+ * and is announced; the percentage changes hundreds of times and is not. The
+ * file name rides with the stage — one message, in order — rather than
+ * becoming a second announcement after it.
+ */
+function ImportRunCard({ progress, pickedName }: { progress: BuildProgress; pickedName: string | null }) {
+  const pct = Math.round(progress.pct * 100);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setReady(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  return (
+    <div className="import-run">
+      <div className="import-run-head">
+        <div className="import-run-stage" role="status" aria-live="polite" aria-atomic="true">
+          {ready ? (pickedName ? `${progress.stage} — ${pickedName}` : progress.stage) : ''}
+        </div>
+        <div className="import-run-pct" aria-hidden="true">{pct}%</div>
+      </div>
+      <div
+        className="bar"
+        role="progressbar"
+        aria-label="Importing map"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct}
+        aria-valuetext={`${pct} percent — ${progress.stage}`}
+      >
+        <div className="fill" style={{ width: `${pct}%` }} />
+      </div>
+      {pickedName && (
+        <div className="import-run-file">
+          <IconFile size={ICON.tertiary} />
+          <span>{pickedName}</span>
+        </div>
+      )}
     </div>
   );
 }

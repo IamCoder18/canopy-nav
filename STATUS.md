@@ -147,7 +147,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1284 unit tests across 65 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1287 unit tests across 65 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -161,7 +161,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1284 passing**, 65 files |
+| Unit tests | `npm test` | **1287 passing**, 65 files |
 | End-to-end | `npm run e2e` | **81 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -240,7 +240,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **65 files, 1284 tests**. The previous
+retyped by hand. The table is the complete set: **65 files, 1287 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -251,7 +251,7 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1284 total double-counts contrast's 34 tests**: 1250 distinct test cases are
+that **the 1287 total double-counts contrast's 34 tests**: 1253 distinct test cases are
 declared across 65 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
@@ -305,7 +305,7 @@ reading it.
 | `mapstyle.spec.ts` | 23 | offline style LOD: every line layer has a low-zoom floor, arterials branch on class |
 | `requests.spec.ts` | 19 | `RequestGate`: supersession, cancellation, and that an abandoned request writes nothing |
 | `shellcheck.spec.ts` | 18 | the service worker's shell predicate, and that the fetch handler consults it |
-| `import.spec.ts` | 21 | a bad file is refused and never replaces a working map, and that the memory guard gates the import and `forceMemory` overrides it |
+| `import.spec.ts` | 24 | a bad file is refused and never replaces a working map, that the memory guard gates the import and `forceMemory` overrides it, and that the engine's stage names map onto the pipeline steps the import screen draws |
 | `navigation.spec.ts` | 17 | off-route detection, speed-scaled thresholds, traffic verdicts |
 | `serve.spec.ts` | 16 | test-server path containment and no side effects on import |
 | `renderzoom.spec.ts` | 14 | zoom LOD re-application and reduced motion |
@@ -1746,7 +1746,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx 4834  screens, navigation state, focus + announcements,
+  App.tsx 4991  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            222  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
@@ -1758,12 +1758,13 @@ src/
   geo.ts                  489  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt,
                                 + headingAlong and lookAheadMetres (camera geometry)
-  styles.css 3165  layout, insets, responsive rules
+  styles.css 3282  layout, insets, responsive rules
 
   osm/
     engine.worker.ts     1307  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
     pbf.ts               1007  .osm.pbf protobuf reader, whole-buffer and streaming
-    engine.ts             442  worker client, format sniff, GeoJSON mirroring
+    engine.ts             461  worker client, format sniff, GeoJSON mirroring,
+                              + buildStageStep (which pipeline phase a stage is)
     regions.ts            465  RegionLibrary, catalogue, bbox helpers, merge cache
     merge.ts              318  union-find merge of adjacent extracts
     mergeguard.ts         201  can a merge be afforded here? three outcomes
@@ -1798,7 +1799,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              444  RegionLibrary singleton, per-region workers, memory gate
 
-test/            1284 unit tests, 65 files
+test/            1287 unit tests, 65 files
 test/e2e.mjs           81 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -2321,7 +2322,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1284 unit tests
+npm test             # 1287 unit tests
 npm run e2e          # 81 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
