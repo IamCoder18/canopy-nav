@@ -8,8 +8,9 @@ on:
 
 jobs:
   check:
-    name: Typecheck, lint, test, build
+    name: All gates
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -20,55 +21,27 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run typecheck
-      # Ratcheted at 27 warnings, all `no-explicit-any` at the MapLibre style
-      # boundary. Raising the number is a deliberate act; leaving it to drift is
-      # not, which is the same failure shape as a green result nobody re-derives.
-      - run: npm run lint
-      - run: npm test
-      - run: npx vite build
 
-      # The entry chunk is parsed on a phone's main thread before anything is
-      # interactive. It was 399 kB gzipped until it was measured; this is the
-      # number that fails the build if it starts growing back.
-      - name: Bundle budget
-        run: npm run bundle
-
-      # End-to-end: drives the real built app in headless Chrome through
-      # import -> offline search -> route -> navigate -> regions. This is the
-      # only check that exercises the worker, region store, router and screens
+      # End-to-end drives the real built app in headless Chromium through
+      # import -> offline search -> route -> navigate -> regions. That is the
+      # only check exercising the worker, region store, router and screens
       # together, so a wiring regression can't slip past unit tests.
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      # .osm.pbf is what Geofabrik publishes, so it is the primary path; both
-      # are exercised against the real file picker.
-      - name: Build .osm.pbf fixture
-        run: node tools/osm2pbf.mjs test/fixture.osm test/fixture.osm.pbf 700
-
-      - name: End-to-end smoke test (.osm)
-        run: |
-          npx vite preview --port 4192 --host &
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:4192/ >/dev/null && break
-            sleep 1
-          done
-          node test/e2e.mjs
-
-      - name: End-to-end smoke test (.osm.pbf)
-        run: node test/e2e.mjs
-        env:
-          E2E_FIXTURE: fixture.osm.pbf
-
-      # Every screen at phone-portrait, phone-landscape and head-unit sizes,
-      # asserting no horizontal overflow and no invisible text.
-      # screens.mjs defaults to port 4193 while the E2E step above served on
-      # 4192, so this step was connecting to nothing and every CI run failed
-      # with ERR_CONNECTION_REFUSED. Both now use 4192 explicitly.
-      - name: Screen coverage at three viewports
-        run: node test/screens.mjs
-        env:
-          E2E_PORT: '4192'
+      # Every gate, in one list — `tools/verify.mjs`, the same file `npm run
+      # verify` runs locally. It used to be spelled out here step by step,
+      # which is how the reflow, textscale and ui-audit gates came to exist on
+      # developers' machines and not in CI: two lists of gates drift, and the
+      # one nobody re-reads is the one that loses one. The distinctive steps
+      # this file used to carry are all in there now — the ratcheted lint, the
+      # bundle budget, the .osm.pbf fixture rebuild and its staleness check,
+      # both end-to-end passes (`.osm` and the `.osm.pbf` that Geofabrik
+      # publishes), and the three-viewport screen run that once connected to
+      # the wrong port and failed every build with ERR_CONNECTION_REFUSED
+      # before both were pinned to 4192.
+      - name: All gates
+        run: npm run verify
 
       - uses: actions/upload-artifact@v4
         if: always()

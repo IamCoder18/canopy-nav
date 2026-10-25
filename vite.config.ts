@@ -83,13 +83,15 @@ export default defineConfig({
     target: 'es2020',
     outDir: 'dist',
     sourcemap: false,
-    // The app ships inside an Android WebView, so the 500 kB warning fired on
-    // every build was accurate: one chunk was carrying MapLibre, React and the
-    // whole OSM pipeline together. Splitting is now real (the map and the region
-    // manager are `React.lazy`), and this only sets the size at which Vite
-    // nags. Left at 500 kB it nags; raised to 900 kB with the intent recorded,
-    // because silencing a warning is not the same as fixing it.
-    chunkSizeWarningLimit: 900,
+    // The 500 kB warning once fired on every build and was accurate: one chunk
+    // carried MapLibre, React and the whole OSM pipeline together. That is now
+    // fixed rather than silenced — the screens are their own lazy chunks and
+    // MapLibre is split into a vendor chunk below — and this number is what is
+    // left: the measured vendor floor (1,053 kB for maplibre-gl 5.24) plus room
+    // for the library to grow across updates, so the nag that remains says
+    // "the vendor moved", which is worth knowing. See `manualChunks` and
+    // `tools/bundle-budget.mjs`.
+    chunkSizeWarningLimit: 1100,
     rollupOptions: {
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
@@ -107,6 +109,28 @@ export default defineConfig({
           // byte. The cache name carries the version instead.
           chunk.name === 'sw' ? 'sw.js' : 'assets/[name]-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
+        /**
+         * MapLibre gets a chunk of its own.
+         *
+         * It is `dist/maplibre-gl.js` — a UMD bundle, the package's `main`, with
+         * no ESM build shipped and therefore nothing for Rollup to shake: all
+         * 1,032 kB of it arrive whether or not the app uses Marker, Popup or the
+         * fullscreen control. Bundled with app code (which is what this chunk
+         * used to be), every app change also invalidated a megabyte of vendor
+         * JavaScript in every driver's cache. Split out, the app chunks are
+         * small and re-download on app changes; the vendor chunk changes only
+         * when the library does.
+         *
+         * `chunkSizeWarningLimit` above is sized to this chunk and nothing
+         * else: the measured floor plus room for the library's own growth, not
+         * a target. The budget that fails builds is `tools/bundle-budget.mjs`,
+         * which measures every chunk in gzip, per role — because that is what
+         * crosses the wire, and because a raw-size number shared by a 1 MB
+         * vendor and a 40 kB screen is a number that cannot mean both.
+         */
+        manualChunks: {
+          maplibre: ['maplibre-gl'],
+        },
       },
     },
   },

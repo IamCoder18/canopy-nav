@@ -1805,7 +1805,8 @@ test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
                              extract slicing is done by osmium on a desktop)
 tools/serve.mjs         306 LAN static server for on-device manual testing
-tools/bundle-budget.mjs 153 gzip size budget; fails on regression
+tools/bundle-budget.mjs 173 gzip size budget per role (entry, map vendor, totals); fails on regression
+tools/verify.mjs 133 every gate in one command: local and CI run this same list
 tools/reflow.mjs        368 chrome overlap at 100/175/200% text (§13.8) — a
                              diagnostic, still not a gate: it needs a
                              browser and takes minutes, and one that

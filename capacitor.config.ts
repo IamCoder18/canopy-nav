@@ -8,7 +8,14 @@ const config: CapacitorConfig = {
     // Landscape-locked: this app is a head-unit UI replica.
     backgroundColor: '#0B0B0F',
     allowMixedContent: true,
-    webContentsDebuggingEnabled: true,
+    // `webContentsDebuggingEnabled` is deliberately *not* set here.
+    //
+    // It means "always enable debuggable web content" — including release
+    // builds, where `chrome://inspect` over USB reaches the WebView's
+    // localStorage, which is where this app keeps the engine API keys.
+    // Capacitor's own default is the right one: on for development builds,
+    // off otherwise. Do not add the line back to "make DevTools work"; it
+    // already does, on exactly the builds where it should.
     // Android 15 (SDK 35) draws edge-to-edge by default, which puts the status
     // and navigation bars over the WebView.
     //

@@ -39,7 +39,15 @@ const BUDGET = {
   entryCss: 16,
   /** Everything a cold visit downloads before the map appears. */
   initialTotal: 150,
-  /** The largest single chunk, currently MapLibre. */
+  /**
+   * The deferred MapLibre vendor chunk, named rather than left to
+   * "largest". It is a UMD bundle the app cannot shake (see `manualChunks` in
+   * `vite.config.ts`) and its floor is measured: 278 kB gzip for maplibre-gl
+   * 5.24. The margin is for the library's growth across updates, so a failure
+   * here says "the vendor moved" rather than "something got big".
+   */
+  mapJs: 290,
+  /** The largest single chunk — kept as the catch-all for anything unnamed. */
   largestChunk: 300,
   /** Every JS byte the build emits, deferred included. */
   totalJs: 460,
@@ -142,6 +150,18 @@ const entryGz = entryAssets.reduce((n, f) => n + f.gz, 0);
 check(entryGz, BUDGET.initialTotal, 'initial total');
 
 const js = files.filter((f) => f.name.endsWith('.js'));
+const mapVendor = js.filter((f) => f.name.startsWith('maplibre-'));
+for (const f of mapVendor) {
+  check(f.gz, BUDGET.mapJs, `map vendor ${f.name.slice(0, 14)}…`);
+}
+if (mapVendor.length === 0) {
+  // The split reverting would put MapLibre back inside the map chunk and every
+  // app change would again invalidate a megabyte of vendor JavaScript in each
+  // driver's cache. That is exactly the regression a budget exists for, so it
+  // fails rather than warns.
+  console.log('  FAIL  no MapLibre vendor chunk — is `manualChunks` still set in vite.config.ts?');
+  failed = true;
+}
 check(Math.max(...js.map((f) => f.gz)), BUDGET.largestChunk, 'largest chunk');
 check(js.reduce((n, f) => n + f.gz, 0), BUDGET.totalJs, 'total js');
 
