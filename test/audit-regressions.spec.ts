@@ -33,6 +33,12 @@ const src = (rel: string) => readFileSync(join(here, '..', 'src', rel), 'utf8');
 const APP = src('App.tsx');
 const CSS = src('styles.css');
 const MAP = src('map/MapView.tsx');
+/**
+ * The overlay writer lives in its own module — plain logic, tested through a
+ * stub map in `test/mapoverlays.spec.ts`. Pins that describe what is written,
+ * and when, follow it here.
+ */
+const OVERLAYS = src('map/overlays.ts');
 const SETTINGS = src('settings.ts');
 const LOC = src('nav/location.ts');
 const REGIONS = src('regions/RegionsScreen.tsx');
@@ -145,8 +151,8 @@ describe('map: overlays must not depend on a boot-time closure', () => {
   it('does not re-serialise the offline basemap once a second', () => {
     // `roadsToGeoJSON` walks every way in the extract; for a province that is
     // 10⁵–10⁶ objects built on the main thread, once per GPS fix, forever.
-    expect(MAP).toMatch(/const basemapCache = new WeakMap/);
-    expect(MAP).toMatch(/basemapFor\(p\.dataset, Math\.round\(m\.getZoom\(\)\)\)/);
+    expect(OVERLAYS).toMatch(/const basemapCache = new WeakMap/);
+    expect(OVERLAYS).toMatch(/basemapFor\(p\.dataset, Math\.round\(m\.getZoom\(\)\)\)/);
   });
 
   it('does not re-serialise the basemap at every zoom boundary either', () => {
@@ -156,8 +162,8 @@ describe('map: overlays must not depend on a boot-time closure', () => {
     // the main thread. A guard that pays full price at the boundary it was added
     // to smooth is not a guard. `test/basemapcache.spec.ts` covers the behaviour;
     // this pins the shape that makes it true.
-    expect(MAP).toMatch(/roadsByZoom\s*:\s*Map<number, GeoJSON\.FeatureCollection>/);
-    expect(MAP).not.toMatch(/hit\.zoom === zoom/);
+    expect(OVERLAYS).toMatch(/roadsByZoom\s*:\s*Map<number, GeoJSON\.FeatureCollection>/);
+    expect(OVERLAYS).not.toMatch(/hit\.zoom === zoom/);
   });
 
   it('refreshes the offline level of detail when the zoom changes', () => {

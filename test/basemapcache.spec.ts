@@ -13,7 +13,7 @@
  * So the cache is extracted here by re-implementing `basemapFor`'s logic over a
  * counted `roadsToGeoJSON`. That is a real weakness of this test and it is stated
  * rather than hidden: **it verifies the algorithm, not the shipped function.** If
- * `MapView.tsx` is edited to reintroduce a single-slot cache, this suite stays
+ * `map/overlays.ts` is edited to reintroduce a single-slot cache, this suite stays
  * green. `test/audit-regressions.spec.ts` covers that half by asserting on the
  * source text instead, which catches the shape but not the behaviour.
  *
@@ -42,7 +42,7 @@ function makeCounters() {
 /**
  * `basemapFor` as shipped, with the converters replaced by counting stubs.
  *
- * Kept structurally identical to `MapView.tsx` on purpose — the value of this
+ * Kept structurally identical to `map/overlays.ts` on purpose — the value of this
  * test is that the two can be diffed by eye.
  */
 function makeBasemapFor(
@@ -262,7 +262,9 @@ describe('basemap cache: dataset isolation', () => {
  * implementation being rewritten.
  */
 describe('basemap cache: shipped source', () => {
-  const MAP = readFileSync(join(__dirname, '..', 'src', 'map', 'MapView.tsx'), 'utf8');
+  // The writer lives in `map/overlays.ts` (split out of MapView as plain
+  // logic); the cache is what matters and it moved with it.
+  const MAP = readFileSync(join(__dirname, '..', 'src', 'map', 'overlays.ts'), 'utf8');
 
   it('keys roads by zoom rather than holding one zoom', () => {
     expect(MAP).toMatch(/roadsByZoom\s*:\s*Map<number, GeoJSON\.FeatureCollection>/);

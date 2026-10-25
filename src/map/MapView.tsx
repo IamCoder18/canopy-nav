@@ -12,29 +12,15 @@
 import { useEffect, useRef } from 'react';
 import maplibregl, { type Map as MLMap, type StyleSpecification } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { LatLng } from '../geo';
-import type { TrafficLevel } from '../nav/traffic';
+import { destinationPoint, lookAheadMetres, type LatLng } from '../geo';
 // The map's opening position is the app's no-fix position, not a hard-coded
 // London. They used to disagree by 7,000 km, which meant that with no GPS the
 // map showed one place, the position model used another, and routing asked for a
 // trip between them. See `NO_FIX_POSITION`.
 import { NO_FIX_POSITION } from '../nav/location';
 import { buildStyle, navOverlays, offlineStyleSpec, NIGHT } from './style';
-import {
-  greenToGeoJSON,
-  lineToGeoJSON,
-  pointsToGeoJSON,
-  roadsToGeoJSON,
-  waterToGeoJSON,
-} from '../osm/engine';
+import { applyOverlays, type TrafficOverlay } from './overlays';
 import type { OsmDataset } from '../osm/engine.worker';
-
-/** One stretch of the route, coloured by the congestion the provider reported. */
-export interface TrafficOverlay {
-  level: TrafficLevel;
-  /** The road coordinates this level applies to. */
-  path: LatLng[];
-}
 
 export interface MapViewProps {
   dataset: OsmDataset | null;
@@ -57,7 +43,38 @@ export interface MapViewProps {
   onMapClick?: (p: LatLng) => void;
   onMapLongPress?: (p: LatLng) => void;
   /** Programmatic camera target; changes re-fit the map. */
-  focus?: { center: LatLng; zoom: number } | null;
+  focus?: { center: LatLng; zoom: number; bearing?: number; pitch?: number } | null;
+  /**
+   * Where the camera should be while it is following the car.
+   *
+   * A tracking shot, not a description of one: every change animates the
+   * camera to `center`/`bearing`/`pitch`, and the car is kept in the lower
+   * third by *aiming ahead of it* — `lookAheadMetres` solves the look-ahead
+   * against the live projection so the car holds its screen position while the
+   * driver pinches. (`centerOffset`, Mapbox's marker-offset option, no longer
+   * exists on MapLibre 5's `easeTo`.)
+   *
+   * Zoom is deliberately not part of it: pinch and the zoom buttons keep
+   * working while following, the way they do in Google Maps. The follow
+   * target carries only what the road dictates.
+   *
+   * `null` means the driver has the camera. Nothing here moves it without
+   * being asked again — see `onUserCamera`.
+   */
+  follow?: { center: LatLng; bearing: number; pitch: number } | null;
+  /**
+   * The driver took the camera: a drag, a two-finger twist, a tilt.
+   *
+   * Reported rather than handled here, because "stop following" is a decision
+   * about the trip, not about the map — `App` owns that state. Pinch-zoom is
+   * deliberately *not* a takeover: zooming in on the road you are following is
+   * what a driver does, and losing the camera for it would be the old bug
+   * wearing a new hat.
+   *
+   * Programmatic moves (follow ticks, recentre, overview, the compass) carry
+   * no `originalEvent`, so they never call this.
+   */
+  onUserCamera?: () => void;
   /** Bumping this re-fits to the route. */
   fitNonce?: number;
   /**
@@ -68,8 +85,12 @@ export interface MapViewProps {
    * exporting the MapLibre instance — would make every control a part-owner of
    * the map's internals, which is the coupling the `focus`/`fitNonce` pair
    * already avoids.
+   *
+   * `flat` is "end of trip": north-up and un-tilted, where the map *is* —
+   * unlike `focus`, it moves no position and no zoom, so ending a trip never
+   * yanks the view out from under a driver who has panned somewhere else.
    */
-  viewCmd?: { kind: 'zoom-in' | 'zoom-out' | 'north'; nonce: number } | null;
+  viewCmd?: { kind: 'zoom-in' | 'zoom-out' | 'north' | 'flat'; nonce: number } | null;
   /**
    * The map's current rotation, in degrees clockwise from north.
    *
@@ -134,6 +155,9 @@ export function MapView(props: MapViewProps) {
   /** Live bearing reporter, same ref treatment as the tap handlers. */
   const bearingRef = useRef(props.onBearing);
   bearingRef.current = props.onBearing;
+  /** Camera-takeover reporter, same ref treatment as the tap handlers. */
+  const userCameraRef = useRef(props.onUserCamera);
+  userCameraRef.current = props.onUserCamera;
 
   /**
    * Current overlay props, for the same reason — and for one more.
@@ -159,10 +183,12 @@ export function MapView(props: MapViewProps) {
 
     const m = new maplibregl.Map({
       container: container.current,
-      // Top-down presentation: no pitch, but *rotation* stays on so the compass
-      // has something to say. Drag-rotate (right button / two fingers) is how a
-      // user explores a map, and disabling it made the compass control a button
-      // that reset a value which could never change.
+      // The map tilts (up to 60°) and rotates, because a navigation camera that
+      // cannot face forward is the top-down complaint by construction. Pitch is
+      // driven by the follow camera during a trip and stays flat elsewhere;
+      // `pitchWithRotate` keeps the two-finger gesture reading as one motion —
+      // twist to turn, push to tilt — instead of two modes the driver has to
+      // discover separately.
       style: { version: 8, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': NIGHT.land } }] } as StyleSpecification,
       center: NO_FIX_POSITION,
       zoom: 12,
@@ -172,8 +198,8 @@ export function MapView(props: MapViewProps) {
       // tile provider's and ours end up in one legible place.
       attributionControl: { compact: false },
       dragRotate: true,
-      pitchWithRotate: false,
-      maxPitch: 0,
+      pitchWithRotate: true,
+      maxPitch: 60,
     });
     map.current = m;
     mapRef.current = m;
@@ -184,6 +210,23 @@ export function MapView(props: MapViewProps) {
       pressTimer = setTimeout(() => longPressRef.current?.([e.lngLat.lng, e.lngLat.lat]), 550);
     });
     m.on('mouseup', () => { if (pressTimer) clearTimeout(pressTimer); });
+
+    /**
+     * Handovers from the camera to the driver.
+     *
+     * `dragstart` is always a hand on the map. `rotatestart` and `pitchstart`
+     * are not: the follow camera and the compass animate both, and a takeover
+     * on those would mean the app's own camera moves disengaging the app's own
+     * follow mode — the camera fighting itself. Animations carry no
+     * `originalEvent`; gestures always do. That is the whole test.
+     */
+    const takeover = () => userCameraRef.current?.();
+    m.on('dragstart', takeover);
+    const gestureOnly = (e: { originalEvent?: unknown }) => {
+      if (e.originalEvent) takeover();
+    };
+    m.on('rotatestart', gestureOnly);
+    m.on('pitchstart', gestureOnly);
 
     // The compass control is driven by the map's real bearing, so it reports it.
     // `rotate` fires on every frame of a gesture; the consumer stores a number
@@ -216,6 +259,9 @@ export function MapView(props: MapViewProps) {
       if (pressTimer) clearTimeout(pressTimer);
       m.off('rotate', onRotate);
       m.off('zoomend', onZoomEnd);
+      m.off('dragstart', takeover);
+      m.off('rotatestart', gestureOnly);
+      m.off('pitchstart', gestureOnly);
       m.remove();
       map.current = null;
       mapRef.current = null;
@@ -313,9 +359,86 @@ export function MapView(props: MapViewProps) {
   useEffect(() => {
     const m = map.current;
     if (!m || !props.focus) return;
-    m.easeTo({ center: props.focus.center, zoom: props.focus.zoom, duration: cameraDuration(400) });
+    // `bearing`/`pitch` are omitted unless the caller means them: an explicit
+    // `undefined` would be read as "zero" by a camera that tests `in`, and every
+    // pre-trip focus (region centre, route preview) means "keep the current
+    // angle", not "face north and lie flat". The one caller that does mean it
+    // is Exit navigation, which passes 0/0 to undo the trip's tilt.
+    const angle =
+      props.focus.bearing !== undefined || props.focus.pitch !== undefined
+        ? { bearing: props.focus.bearing ?? 0, pitch: props.focus.pitch ?? 0 }
+        : {};
+    m.easeTo({ center: props.focus.center, zoom: props.focus.zoom, ...angle, duration: cameraDuration(400) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.focus?.center?.[0], props.focus?.center?.[1], props.focus?.zoom]);
+  }, [props.focus?.center?.[0], props.focus?.center?.[1], props.focus?.zoom, props.focus?.bearing, props.focus?.pitch]);
+
+  /**
+   * The follow camera: one animated move per new target, corrected once.
+   *
+   * Keyed on the target's fields, not its identity, so App can rebuild the
+   * object every tick without re-running the move on unrelated renders — and
+   * so the move runs exactly when the road, not the render, says so.
+   *
+   * `easing: (t) => t` is deliberate. This is a tracking shot that runs every
+   * second; ease-in/out on each leg would make the map breathe — accelerate,
+   * decelerate, pause, repeat — and the pause between legs is precisely the
+   * stutter being fixed. Linear hands the motion on at constant velocity, so
+   * consecutive legs read as one continuous glide.
+   *
+   * The camera aims *ahead* of the car (`lookAheadMetres`) so the car sits in
+   * the lower third with the road filling the view — 16% of the viewport
+   * height below centre, measured against the nav layouts at 892×412 and
+   * 1280×720 where the banner stack owns the top third. The look-ahead is
+   * solved against the map's own projection and scales with the live zoom, so
+   * pinching changes how much road is visible without shoving the car off the
+   * bottom of the screen.
+   *
+   * The settle pass exists because the aim is solved against the transform
+   * *before* the move, and the move's own tilt changes the mapping — the
+   * first tick of a trip is the wide-awake one. It re-checks where the car
+   * actually landed and corrects once if it is more than 6px off. A drag
+   * disengages following before its `moveend` arrives, so `cancelled` is
+   * already set and the pass never fights the driver.
+   */
+  useEffect(() => {
+    const m = map.current;
+    const f = props.follow;
+    if (!m || !f) return;
+    let cancelled = false;
+    let corrections = 0;
+    const offY = (m.getContainer().clientHeight || 412) * 0.16;
+
+    const centreNow = (): LatLng => [m.getCenter().lng, m.getCenter().lat];
+    const move = () => {
+      const centre = centreNow();
+      const ahead = lookAheadMetres((p) => m.project(p), centre, f.center, f.bearing, offY);
+      m.easeTo({
+        center: destinationPoint(f.center, f.bearing, ahead),
+        bearing: f.bearing,
+        pitch: f.pitch,
+        // Corrections are small and should feel like the camera settling, not
+        // setting off again.
+        duration: cameraDuration(corrections ? 400 : 900),
+        easing: (t) => t,
+      });
+    };
+    move();
+
+    const settle = () => {
+      if (cancelled || corrections >= 2) return;
+      const err = m.project(f.center).y - (m.project(centreNow()).y + offY);
+      if (Math.abs(err) <= 6) return;
+      corrections += 1;
+      move();
+      m.once('moveend', settle);
+    };
+    m.once('moveend', settle);
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.follow?.center?.[0], props.follow?.center?.[1], props.follow?.bearing, props.follow?.pitch]);
 
   /**
    * One-shot camera commands from the navigation controls.
@@ -330,6 +453,7 @@ export function MapView(props: MapViewProps) {
     if (!m || !cmd) return;
     if (cmd.kind === 'zoom-in') m.zoomIn({ duration: cameraDuration(220) });
     else if (cmd.kind === 'zoom-out') m.zoomOut({ duration: cameraDuration(220) });
+    else if (cmd.kind === 'flat') m.easeTo({ bearing: 0, pitch: 0, duration: cameraDuration(400) });
     else m.easeTo({ bearing: 0, duration: cameraDuration(350) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.viewCmd?.nonce]);
@@ -394,107 +518,6 @@ export function MapView(props: MapViewProps) {
 }
 
 /**
- * The three layers a basemap is made of, at one zoom.
- *
- * `water` and `green` are carried per-entry even though they are built once and
- * shared, because the caller reads all three off one value and splitting them
- * would push that decision into every call site.
- */
-type BasemapLayers = {
-  roads: GeoJSON.FeatureCollection;
-  water: GeoJSON.FeatureCollection;
-  green: GeoJSON.FeatureCollection;
-};
-
-/**
- * How many zooms' worth of roads to keep per dataset.
- *
- * Two is enough to survive a single boundary crossing; three leaves room to zoom
- * out and back without paying again. Capped because each entry is a serialised
- * copy of the whole extract's road network at one level of detail, so an
- * unbounded per-zoom cache would itself become the memory problem.
- */
-const MAX_CACHED_ZOOMS = 3;
-
-/**
- * Serialised offline basemap, cached per dataset and per integer zoom.
- *
- * `roadsToGeoJSON` walks every way in the extract and allocates a Feature per
- * way. For a province — the 100–900 MB extracts this app is built for — that is
- * 10⁵–10⁶ objects and a multi-megabyte JSON string, built on the main thread.
- *
- * `applyOverlays` runs on every GPS fix (~1 Hz, and `maximumAge: 0` means even
- * while stationary), so before this cache the entire provincial road network was
- * re-serialised once a second, forever, while driving — and the code's own
- * comment named the cause and left it in place. The banner and route line
- * stuttered at exactly the moment the driver needed them.
- *
- * Keyed on the dataset object with a `WeakMap`, so an imported region is
- * collectable once it is replaced, and on the integer zoom, because the LOD is
- * a function of zoom only.
- *
- * ## Why this holds several zooms rather than one
- *
- * It held a **single** slot: `WeakMap<dataset, {zoom, roads, water, green}>`,
- * with a hit only when `entry.zoom === zoom`. So the moment the driver crossed an
- * integer zoom boundary — the single most common camera movement there is, and
- * one the LOD exists to make cheaper rather than more expensive — the entire
- * provincial road network was re-serialised on the main thread. Pinch-zoom in,
- * pinch-zoom out, and the whole province was built twice. A guard that pays full
- * price at exactly the boundary it was added to smooth is not a guard.
- *
- * Two further things were rebuilt needlessly. `water` and `green` do not vary
- * with zoom at all — `RENDER_MIN_ZOOM` applies to roads only — so they were being
- * re-walked and re-allocated on every boundary crossing to produce values
- * identical to the ones already in hand.
- *
- * So: roads are cached per integer zoom in a small LRU, and the zoom-independent
- * layers are built exactly once per dataset. Zooming across a boundary now
- * usually finds a cached entry for the level it is arriving at, because the
- * level it came from is still resident.
- */
-const basemapCache = new WeakMap<object, {
-  /** Zoom-independent. Built once; shared by every zoom's entry. */
-  water: GeoJSON.FeatureCollection;
-  green: GeoJSON.FeatureCollection;
-  /** Roads by integer zoom, in most-recently-used order. */
-  roadsByZoom: Map<number, GeoJSON.FeatureCollection>;
-}>();
-
-function basemapFor(dataset: OsmDataset, zoom: number): BasemapLayers {
-  const key = dataset as unknown as object;
-  let entry = basemapCache.get(key);
-  if (!entry) {
-    entry = {
-      water: waterToGeoJSON(dataset),
-      green: greenToGeoJSON(dataset),
-      roadsByZoom: new Map(),
-    };
-    basemapCache.set(key, entry);
-  }
-
-  // Re-insert on hit so `Map`'s insertion order is least-recently-used first,
-  // which is what the eviction below assumes.
-  let roads = entry.roadsByZoom.get(zoom);
-  if (roads !== undefined) {
-    entry.roadsByZoom.delete(zoom);
-  } else {
-    roads = roadsToGeoJSON(dataset, zoom);
-  }
-  entry.roadsByZoom.set(zoom, roads);
-
-  // Evict oldest first. The arriving zoom and the one just left are the pair
-  // worth keeping, so `MAX_CACHED_ZOOMS - 1` others survive behind them.
-  while (entry.roadsByZoom.size > MAX_CACHED_ZOOMS) {
-    const oldest = entry.roadsByZoom.keys().next();
-    if (oldest.done) break;
-    entry.roadsByZoom.delete(oldest.value);
-  }
-
-  return { roads, water: entry.water, green: entry.green };
-}
-
-/**
  * Whether the driver asked for reduced motion.
  *
  * Read live rather than captured once: the preference can change while the app
@@ -505,8 +528,8 @@ function basemapFor(dataset: OsmDataset, zoom: number): BasemapLayers {
  * `prefers-reduced-motion` rule in `styles.css` cannot reach them. That rule's
  * comment says as much and points here — but nothing here implemented it, so
  * every recentre, overview, fit-route and fit-region move animated for 400–450 ms
- * regardless of the setting. `fitPoints` is exported and used by the overlay, so
- * it reads the same value.
+ * regardless of the setting. Every camera move now goes through
+ * `cameraDuration`, so the setting is honoured in one place.
  */
 function reducedMotion(): boolean {
   try {
@@ -520,69 +543,14 @@ function reducedMotion(): boolean {
 /** `duration: 0` is a jump. That is the point. */
 const cameraDuration = (ms: number) => (reducedMotion() ? 0 : ms);
 
-function applyOverlays(m: MLMap, p: MapViewProps) {
-  // Sources only exist once a style has loaded; setData before that is a no-op.
-  if (!m.getSource('canopy-route')) return;
-  const set = (id: string, data: GeoJSON.FeatureCollection) => {
-    const src = m.getSource(id) as maplibregl.GeoJSONSource | undefined;
-    if (src && 'setData' in src) src.setData(data);
-  };
-
-  // Offline base layers only exist in the offline style.
-  if (p.dataset) {
-    // The current zoom decides how much road is worth sending: rebuilding every
-    // way in a provincial extract to draw sub-pixel lines is the expensive part.
-    const layers = basemapFor(p.dataset, Math.round(m.getZoom()));
-    //
-    // **`canopy-osm`, not `canopy-osm-roads`.**
-    //
-    // `canopy-osm-roads` is the id of the *layer* that draws arterials; the *source*
-    // every road layer reads is `canopy-osm` (`canopy-osm-casing`, `canopy-osm-minor`
-    // and `canopy-osm-roads` all declare `source: 'canopy-osm'`). Passing the layer id
-    // where a source id belongs meant `m.getSource` returned `undefined`, `set` took
-    // its silent no-op branch, and **the imported road network was never drawn** —
-    // water and green appeared, roads did not, and nothing errored.
-    //
-    // It survived because the id *looks* right: it matches the layer you would check
-    // to confirm roads are being styled. `test/mapsources.spec.ts` now cross-checks
-    // every id this function passes against `overlaySources()`, which is the check
-    // that was missing.
-    set('canopy-osm', layers.roads);
-    set('canopy-osm-water', layers.water);
-    set('canopy-osm-green', layers.green);
-  }
-
-  set('canopy-route', lineToGeoJSON(p.route ?? []));
-  set('canopy-route-travelled', lineToGeoJSON(p.travelled ?? []));
-  set('canopy-route-traffic', trafficToGeoJSON(p.traffic ?? []));
-  set('canopy-maneuvers', pointsToGeoJSON(p.maneuverPoints));
-  set('canopy-reports', pointsToGeoJSON(p.reportPoints ?? []));
-  set('canopy-origin', pointsToGeoJSON(p.origin ? [p.origin] : []));
-  set('canopy-destination', pointsToGeoJSON(p.destination ? [p.destination] : []));
-  set('canopy-location', pointsToGeoJSON(p.location ? [p.location] : []));
-}
-
 /**
- * GeoJSON for the traffic tint.
+ * Frame some points: one point is zoomed to, several are fitted.
  *
- * `unknown` and `free` are dropped rather than drawn: "we have no idea" and
- * "clear road" are different claims, and only the second one may be coloured.
- * (A `free` stretch is drawn as the normal blue route underneath.)
+ * Module-private — this used to be exported with a comment claiming "the
+ * overlay" used it, and no module did. An export nobody consumes is a public
+ * promise nobody can keep.
  */
-function trafficToGeoJSON(spans: TrafficOverlay[]): GeoJSON.FeatureCollection {
-  return {
-    type: 'FeatureCollection',
-    features: spans
-      .filter((s) => (s.level === 'slow' || s.level === 'dense') && s.path.length > 1)
-      .map((s) => ({
-        type: 'Feature',
-        properties: { level: s.level },
-        geometry: { type: 'LineString', coordinates: s.path },
-      })),
-  };
-}
-
-export function fitPoints(m: MLMap, pts: LatLng[], padding = 72) {
+function fitPoints(m: MLMap, pts: LatLng[], padding = 72) {
   if (pts.length === 1) {
     m.easeTo({ center: pts[0], zoom: 16, duration: cameraDuration(400) });
     return;

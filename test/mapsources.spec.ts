@@ -21,12 +21,12 @@
  *
  * This is the app's *primary* mode. It survived because the id looks right: it matches
  * the layer a reader would check in order to confirm roads are being styled, and
- * `test/basemap.spec.ts` asserts on the *text* of `MapView.tsx` rather than on whether
+ * `test/basemapcache.spec.ts` asserts on the *text* of the writer rather than on whether
  * the data reached anything.
  *
  * ## What is checked
  *
- * Every id passed to `set(...)` in `MapView.tsx` is resolved against
+ * Every id passed to `set(...)` in `map/overlays.ts` is resolved against
  * `overlaySources()`, which is the single place sources are declared. A layer id
  * mistaken for a source id cannot survive this, and a source removed from the style
  * cannot leave a caller writing to it.
@@ -42,13 +42,15 @@ import { fileURLToPath } from 'node:url';
 import { overlaySources } from '../src/map/style';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const mapview = readFileSync(join(ROOT, 'src', 'map', 'MapView.tsx'), 'utf8');
+// The overlay writer — every `set('…', …)` call lives here since it was split
+// out of MapView as plain logic.
+const overlays = readFileSync(join(ROOT, 'src', 'map', 'overlays.ts'), 'utf8');
 
 /** The sources the style declares. */
 const declared = new Set(Object.keys(overlaySources()));
 
 /** Every id handed to `set('…', …)` inside `applyOverlays`. */
-const written = [...mapview.matchAll(/\bset\('([^']+)'/g)].map((m) => m[1]);
+const written = [...overlays.matchAll(/\bset\('([^']+)'/g)].map((m) => m[1]);;
 
 describe('every source this app writes to is one the style declares', () => {
   it('finds the writes, so the checks below are not vacuous', () => {

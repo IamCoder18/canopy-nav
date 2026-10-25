@@ -311,6 +311,131 @@ export function lineLength(line: LatLng[]): number {
   return t;
 }
 
+/**
+ * The direction the road runs at `along` metres into `line`, in degrees
+ * clockwise from north.
+ *
+ * The per-vertex answer is the wrong one for a camera. At a junction the next
+ * segment's bearing can jump 40° in a single fix, and a map that snaps its
+ * rotation once a second is the "clunky" feeling in one line. This reads the
+ * bearing across a *window* of the line — `windowM` metres behind the position
+ * to `windowM` ahead of it — which is what a driver perceives as "the way the
+ * road goes", and which turns gradually as the window slides through a corner
+ * instead of pivoting at its vertex.
+ *
+ * `nav/simulator.ts` has its own `headingAlong` on a ±3 m window, which is the
+ * right scale for a GPS fix pretending to be a dashboard compass and the wrong
+ * one for a viewport: this is the same question asked at camera scale.
+ *
+ * Endpoints clamp (a window overhangs the start of the route and still reads
+ * the first leg), and a degenerate line answers 0 — north, which is also what
+ * a flat map says.
+ */
+export function headingAlong(line: LatLng[], along: number, windowM = 45): number {
+  if (line.length < 2) return 0;
+  const total = lineLength(line);
+  if (total <= 0) return 0;
+  // The position clamps first and the window is built around it, so a driver
+  // before the route reads the first leg's heading and one past the end reads
+  // the last — rather than both reading a degenerate zero-width window and
+  // answering "north". (And the window's own ends clamp too: `pointAtFraction`
+  // extrapolates for out-of-range fractions, so an unclamped window overhanging
+  // the start produced a point hundreds of metres before the first vertex and a
+  // heading to match — 270° where the road ran east.)
+  const at = Math.max(0, Math.min(total, along));
+  const from = pointAtFraction(line, Math.max(0, at - windowM) / total);
+  const to = pointAtFraction(line, Math.min(total, at + windowM) / total);
+  if (from[0] === to[0] && from[1] === to[1]) return 0;
+  // `bearing` answers −180..180; the camera and the compass both speak 0..360.
+  return (bearing(from, to) + 360) % 360;
+}
+
+/**
+ * The point `metres` away from `pos` on a `bearingDeg` bearing.
+ *
+ * Equirectangular, like `nav/simulator.ts`'s `offsetPerpendicular`: at the
+ * distances this is used for (a camera's look-ahead, tens to hundreds of
+ * metres) the spherical correction is smaller than one map pixel at every zoom
+ * the app renders, and the flat form is exact about *which direction* it went.
+ */
+export function destinationPoint(pos: LatLng, bearingDeg: number, metres: number): LatLng {
+  const rad = (bearingDeg * Math.PI) / 180;
+  const mPerDegLat = 110540;
+  const mPerDegLon = 111320 * Math.cos((pos[1] * Math.PI) / 180);
+  return [
+    pos[0] + (metres * Math.sin(rad)) / mPerDegLon,
+    pos[1] + (metres * Math.cos(rad)) / mPerDegLat,
+  ];
+}
+
+/**
+ * How far ahead of `subject` a pitched camera must aim for the subject to
+ * settle `offsetPx` pixels below the centre of the view — the "car in the
+ * lower third" arrangement.
+ *
+ * Solved against `project`, the renderer's own projection, rather than a
+ * closed form. The closed form *was* here first — the pinhole camera with
+ * MapLibre's documented `cameraToCenterDistance` and pitch — and it placed the
+ * car 3× too low: measured against a live map at pitch 55°, the subject landed
+ * at y=1224 on a 720px screen where the model said y=631. The fit to the real
+ * curve is exact and has a camera at *half* the reported distance from the
+ * view centre, which is not a model to bet a driver's view on. The renderer's
+ * own `project` cannot be wrong about its own renderer, so this asks it.
+ *
+ * The question is "how far ahead", and the projection answers it because
+ * moving the camera centre is the same as shifting the world the other way:
+ * the subject's screen position under a camera centred on `aim` is its
+ * position under the current camera at `subject + centre − aim`. The offset
+ * that shift produces grows monotonically with the look-ahead until the
+ * projection's near-field pole (the ground behind the camera's image plane),
+ * so a bracket is grown to just past the target — stopping at the pole — and
+ * bisected to a quarter of a metre.
+ *
+ * `MapView` runs this per follow tick, and then checks the result after the
+ * move lands and corrects once if it is off — which is what absorbs the tilt
+ * of the move itself (the mapping this solves against is the one *before* the
+ * camera pitched).
+ */
+export function lookAheadMetres(
+  project: (p: LatLng) => { x: number; y: number },
+  centre: LatLng,
+  subject: LatLng,
+  bearingDeg: number,
+  offsetPx: number,
+): number {
+  const offsetY = (ahead: number): number => {
+    const aim = destinationPoint(subject, bearingDeg, ahead);
+    const shifted: LatLng = [subject[0] + centre[0] - aim[0], subject[1] + centre[1] - aim[1]];
+    return project(shifted).y - project(centre).y;
+  };
+  if (offsetY(0) >= offsetPx) return 0;
+
+  // Grow a bracket until the target is passed — or the projection flips at
+  // its pole, which is the far end of what can be aimed at.
+  let lo = 0;
+  let hi = 250;
+  let yHi = offsetY(hi);
+  while (yHi < offsetPx && hi < 100_000) {
+    const next = Math.min(hi * 2, 100_000);
+    const yNext = offsetY(next);
+    if (yNext < yHi || next === hi) break;
+    lo = hi;
+    hi = next;
+    yHi = yNext;
+  }
+  // Without a `hi` that actually reaches the target — the flip, or the cap —
+  // the bisection below would "converge" on the wrong side of the pole and
+  // answer confidently past the horizon. The honest answer is the furthest
+  // aim the projection can still place.
+  if (yHi < offsetPx) return hi;
+  for (let i = 0; i < 40 && hi - lo > 0.25; i++) {
+    const mid = (lo + hi) / 2;
+    if (offsetY(mid) < offsetPx) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
 /** Interpolate a position at `frac` (0..1) of the way along a polyline. */
 export function pointAtFraction(line: LatLng[], frac: number): LatLng {
   const total = lineLength(line);

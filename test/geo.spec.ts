@@ -21,6 +21,9 @@ import {
   snapToPolyline,
   bboxOf,
   simplify,
+  headingAlong,
+  lookAheadMetres,
+  destinationPoint,
   R_EARTH,
   type LatLng,
 } from '../src/geo';
@@ -628,5 +631,125 @@ describe('simplify', () => {
   it('returns the same array instance when nothing needs removing', () => {
     const l = line(5);
     expect(simplify(l, 5)).toBe(l);
+  });
+});
+
+describe('headingAlong — camera heading along a route', () => {
+  // One thousandth of a degree is 111.19 m at the equator (`DEG_LAT * 0.001`),
+  // so every segment here has a closed-form length and the 45 m windows map
+  // onto the lines exactly.
+  const SEG = DEG_LAT * 0.001;
+  /** Due east for two segments. */
+  const east: LatLng[] = [[0, 0], [0.001, 0], [0.002, 0]];
+  /** East, then north: a right-angle junction at exactly `SEG` metres in. */
+  const corner: LatLng[] = [[0, 0], [0.001, 0], [0.001, 0.001]];
+
+  it('reads the direction of a straight line', () => {
+    expect(headingAlong(east, SEG)).toBeCloseTo(90, 5);
+  });
+
+  it('clamps the window at both ends instead of failing', () => {
+    expect(headingAlong(east, -500)).toBeCloseTo(90, 5);
+    expect(headingAlong(east, 10000)).toBeCloseTo(90, 5);
+  });
+
+  it('averages across a junction: at the vertex the window sees both legs', () => {
+    // 45 m behind and 45 m ahead of the corner describe a square, so the
+    // honest answer is north-east — 45° exactly, neither leg's heading.
+    expect(headingAlong(corner, SEG)).toBeCloseTo(45, 6);
+  });
+
+  it('turns gradually through the junction instead of snapping at its vertex', () => {
+    // The defect this exists for: per-vertex bearings jump 90° in one fix at
+    // the corner and a camera that follows them jerks. Ten metres of driving
+    // either side of the junction, the windowed heading has moved a fraction
+    // of the turn — and it does make the turn: east before, north after.
+    const at = headingAlong(corner, SEG);
+    expect(Math.abs(at - headingAlong(corner, SEG - 5))).toBeLessThan(15);
+    expect(Math.abs(headingAlong(corner, SEG + 5) - at)).toBeLessThan(15);
+    expect(headingAlong(corner, SEG - 90)).toBeCloseTo(90, 0);
+    expect(headingAlong(corner, SEG + 90)).toBeCloseTo(0, 0);
+  });
+
+  it('answers 0 for lines with nothing to measure', () => {
+    expect(headingAlong([], 10)).toBe(0);
+    expect(headingAlong([[0, 0]], 10)).toBe(0);
+    // Two identical points: a line of zero length, not a line of heading 90.
+    expect(headingAlong([[0, 0], [0, 0]], 10)).toBe(0);
+  });
+});
+
+describe('destinationPoint', () => {
+  it('moves by the documented metres-per-degree convention', () => {
+    // 110540 m/° latitude and 111320 m/° longitude at the equator — the same
+    // equirectangular convention `nav/simulator.ts` offsets with.
+    expect(destinationPoint([0, 0], 0, 110540)).toEqual([0, 1]);
+    expect(destinationPoint([0, 0], 180, 110540)[1]).toBeCloseTo(-1, 12);
+    expect(destinationPoint([0, 0], 90, 111320)[0]).toBeCloseTo(1, 12);
+  });
+});
+
+describe('lookAheadMetres — where a pitched camera aims', () => {
+  /**
+   * A flat projection: one screen pixel per 1/200 degree of latitude, north
+   * up, screen y growing downward. Solvable by hand, so the solver can be
+   * checked against arithmetic rather than against itself.
+   */
+  const flat = (p: LatLng) => ({ x: p[0] * 200, y: -p[1] * 200 });
+
+  it('solves a flat projection exactly', () => {
+    // Aiming `d` metres due north from the centre puts the subject at
+    // y = 200·d/110540; asking for 20 px gives d = 20·110540/200. The solver
+    // bisects to a quarter of a metre, and the answer is within it.
+    const d = lookAheadMetres(flat, [0, 0], [0, 0], 0, 20);
+    expect(Math.abs(d - (20 * 110540) / 200)).toBeLessThan(0.25);
+  });
+
+  /**
+   * A hyperbolic projection with a pole — the shape a pitched MapLibre map
+   * actually has (measured at pitch 55°: the offset grows without bound at a
+   * finite look-ahead and flips beyond it). Scaled so the arithmetic is
+   * checkable by hand.
+   */
+  const pitched = (p: LatLng) => {
+    const u = -p[1]; // degrees "behind" the aim
+    return { x: 0, y: (100 * u) / (0.1 - u) };
+  };
+
+  it('solves a hyperbolic projection exactly', () => {
+    // 20 = 100u/(0.1−u) ⇒ u = 2/120 degrees, and the bearing-0 shift is
+    // exactly `d/110540` degrees, so d = (2/120)·110540 — within the same
+    // quarter-metre bisection.
+    const d = lookAheadMetres(pitched, [0, 0], [0, 0], 0, 20);
+    expect(Math.abs(d - (2 / 120) * 110540)).toBeLessThan(0.25);
+  });
+
+  it('returns 0 when no offset is asked for', () => {
+    expect(lookAheadMetres(flat, [0, 0], [0, 0], 0, 0)).toBe(0);
+  });
+
+  it('stops short of the projection pole rather than aiming past it', () => {
+    // A target near the asymptote is reachable only just below the pole; a
+    // target past it is not reachable at all. Either way the answer must be a
+    // finite point the map can still place — not `Infinity`, and not the
+    // wrong side of the flip where the bisection would "converge" if the
+    // bracket were trusted blindly.
+    const d = lookAheadMetres(pitched, [0, 0], [0, 0], 0, 1e6);
+    expect(Number.isFinite(d)).toBe(true);
+    expect(d).toBeGreaterThan(0);
+    expect(d).toBeLessThan(0.1 * 110540);
+  });
+
+  it('gives up honestly on a bounded projection that never reaches the target', () => {
+    // Cap at 50 px no matter how far the aim goes: the bracket hits its
+    // 100 km ceiling and the answer is that ceiling, not a loop and not NaN.
+    const bounded = (p: LatLng) => {
+      const u = -p[1];
+      return { x: 0, y: (50 * u) / (0.1 + u) };
+    };
+    const d = lookAheadMetres(bounded, [0, 0], [0, 0], 0, 100);
+    expect(Number.isFinite(d)).toBe(true);
+    expect(d).toBeGreaterThan(0);
+    expect(d).toBeLessThanOrEqual(100_000);
   });
 });

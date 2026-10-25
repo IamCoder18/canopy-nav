@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { TrafficOverlay } from './map/MapView';
+import type { TrafficOverlay } from './map/overlays';
 import type { BuildProgress } from './osm/engine';
 import type { OsmDataset } from './osm/engine.worker';
 import { searchGazetteer } from './osm/engine.worker';
@@ -33,7 +33,7 @@ import {
 import type { SimulatorState } from './nav/simulator';
 import { observeChromeHeights } from './nav/chrome';
 import {
-  formatDistance, formatDuration, formatClock, lineLength,
+  formatDistance, formatDuration, formatClock, lineLength, headingAlong,
   snapToPolyline, vertexAt, type LatLng,
 } from './geo';
 import { placeOnRoute, startPosition, type RoutePosition } from './nav/progress';
@@ -334,9 +334,33 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   const [degraded, setDegraded] = useState<string[]>([]);
 
   const [progressAlong, setProgressAlong] = useState(0);
-  const [focus, setFocus] = useState<{ center: LatLng; zoom: number } | null>(null);
+  /**
+   * Programmatic camera target.
+   *
+   * `bearing`/`pitch` are optional and passed only by the one caller that means
+   * them — Exit navigation, restoring the flat presentation. Every other focus
+   * keeps the angle the map is already at.
+   */
+  const [focus, setFocus] = useState<{ center: LatLng; zoom: number; bearing?: number; pitch?: number } | null>(null);
   const [fitNonce, setFitNonce] = useState(0);
   const [muted, setMuted] = useState(false);
+
+  /**
+   * Whether the camera is following the car.
+   *
+   * The trip's default and the driver's to take away: any drag, twist or tilt
+   * of the map drops it (see `MapView`'s `onUserCamera`), and the recentre
+   * button puts it back. While it is up, the camera faces forward along the
+   * route and holds the car in the lower third; while it is down, nothing in
+   * the app moves the camera except the buttons the driver pressed.
+   *
+   * This is the fix for "when I moved, it kept moving the view back to the
+   * current position": the app used to re-fit the camera on a timer and on
+   * every reroute, so a driver who looked around was snapped home every few
+   * seconds. Following is now a *state*, and it is off the moment the driver
+   * touches the map.
+   */
+  const [follow, setFollow] = useState(false);
 
   /* ------------------ map controls, reports, toast ------------------ */
 
@@ -347,9 +371,9 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
    * millisecond are still two commands — the state is the *identity* of the
    * command, not a description of it, and `MapView` keys on the nonce alone.
    */
-  const [mapCmd, setMapCmd] = useState<{ kind: 'zoom-in' | 'zoom-out' | 'north'; nonce: number } | null>(null);
+  const [mapCmd, setMapCmd] = useState<{ kind: 'zoom-in' | 'zoom-out' | 'north' | 'flat'; nonce: number } | null>(null);
   const mapCmdNonce = useRef(0);
-  const sendMapCmd = useCallback((kind: 'zoom-in' | 'zoom-out' | 'north') => {
+  const sendMapCmd = useCallback((kind: 'zoom-in' | 'zoom-out' | 'north' | 'flat') => {
     mapCmdNonce.current += 1;
     setMapCmd({ kind, nonce: mapCmdNonce.current });
   }, []);
@@ -1340,6 +1364,36 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   const navActive = screen === 'navigating' && route !== null;
 
   /**
+   * Where the follow camera points, re-read on every fix.
+   *
+   * `center` is the car — the GPS fix, not the snapped route point: when the
+   * driver takes a detour the camera follows the car, because that is what
+   * "following" means. The lower-third placement is `MapView`'s `centerOffset`,
+   * not a shifted centre, so the tilt does not skew the horizon.
+   *
+   * `bearing` is the road's heading at the car's along-route position, read
+   * across a ±45 m window (`headingAlong`) so a junction turns the camera the
+   * way the road turns over a couple of fixes instead of snapping it at the
+   * vertex. `routePos` is the ref this render already trusts for the guidance
+   * model, advanced by the effect below before the next render reads it.
+   */
+  const followCam = useMemo(() => {
+    if (!navActive || !follow || !route || route.geometry.length < 2) return null;
+    return {
+      center: location,
+      bearing: headingAlong(route.geometry, routePos.current.along),
+      // 55° is the navigation tilt: enough that the map reads as "the road
+      // ahead" rather than "a diagram", shallow enough that the horizon stays
+      // well inside the banner-free part of the viewport at 412px tall. Google's
+      // own navigation camera sits in this range.
+      pitch: 55,
+    };
+    // `routePos` is a ref: the same render's guidance model reads it the same
+    // way, and the values this depends on are the ones that move it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navActive, follow, route, progressAlong, location]);
+
+  /**
    * Advance "already driven" from where the car actually is.
    *
    * A timer can only guess at this; the GPS knows. Each fix is projected onto
@@ -1445,7 +1499,12 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         });
         beginRouteProgress(outcome.route.geometry);
         resetTraffic({ from: origin, to: trip.pos });
-        setFitNonce((n) => n + 1);
+        // No camera move here, deliberately. This used to bump `fitNonce`, which
+        // framed the whole new route mid-drive — yanking the view out from under
+        // a driver who had panned or zoomed anywhere, on a timer they never set.
+        // While following, the camera picks the new heading up on the next fix;
+        // while not, the driver's view is theirs and the banner says the route
+        // changed. Overview remains one tap away.
       } catch (e) {
         // Abandoned work says nothing. Reported, it would be a failure for a trip
         // that no longer exists — and `finishReroute(ok: false)` on freshly-reset
@@ -1631,6 +1690,8 @@ const banner = rerouteNotice ?? routeError ?? null;
         reportPoints={reportPoints}
         viewCmd={mapCmd}
         onBearing={setMapBearing}
+        onUserCamera={() => setFollow(false)}
+        follow={followCam}
         focus={focus}
         fitNonce={fitNonce}
         onBasemapChange={onBasemapChange}
@@ -1671,13 +1732,35 @@ const banner = rerouteNotice ?? routeError ?? null;
           trafficReady={trafficReady}
           trafficStale={trafficStale}
           onMute={() => setMuted((m) => !m)}
-          onExit={() => { go('home'); beginRouteProgress(route.geometry); }}
-          onOverview={() => setFitNonce((n) => n + 1)}
-          onRecenter={() => setFocus({ center: location, zoom: 17 })}
+          onExit={() => {
+            // End of trip: the tilt and the forward view were the trip's. The
+            // map is left where the driver last had it — `flat` changes only
+            // the angle — because "exit" is not "go to overview".
+            setFollow(false);
+            sendMapCmd('flat');
+            go('home');
+            beginRouteProgress(route.geometry);
+          }}
+          onOverview={() => {
+            // Overview and following are opposite answers to "whose camera is
+            // this", so overview gives the driver the camera first and then
+            // frames the route. Without the first step the follow target would
+            // fight the fit on the next fix — the old bug, one button later.
+            setFollow(false);
+            setFitNonce((n) => n + 1);
+          }}
+          onRecenter={() => setFollow(true)}
           onSteps={() => go('steps')}
           onZoom={(dir) => sendMapCmd(dir === 'in' ? 'zoom-in' : 'zoom-out')}
-          onNorth={() => sendMapCmd('north')}
+          onNorth={() => {
+            // Facing north is the driver's choice of angle, so it ends
+            // following: otherwise the next fix would swing the camera back
+            // around and the compass would appear broken.
+            setFollow(false);
+            sendMapCmd('north');
+          }}
           bearing={mapBearing}
+          following={follow}
           onSearch={() => {
             // Search-along-route: one level down *from the trip*, so Back and
             // Escape return to it rather than to the launcher.
@@ -1721,7 +1804,11 @@ const banner = rerouteNotice ?? routeError ?? null;
             savePlace(slot, { pos: destination.pos, label: destination.label });
             setImportWarn(`Saved "${destination.label}" as ${slot === 'home' ? 'Home' : 'Work'}.`);
           }}
-          onGo={() => go('navigating')}
+          onGo={() => {
+            // A trip begins with the camera on the driver's side.
+            setFollow(true);
+            go('navigating');
+          }}
           onBack={() => go(searchFrom === 'nav' ? 'navigating' : 'home')}
           onProvider={() => go('settings')}
         />
@@ -1747,7 +1834,11 @@ const banner = rerouteNotice ?? routeError ?? null;
           onImportFile={onFile}
           onRegions={() => go('regions')}
           onSearch={() => { setSearchFrom('home'); go('search'); }}
-          onContinue={() => route && go('navigating')}
+          onContinue={() => {
+            if (!route) return;
+            setFollow(true);
+            go('navigating');
+          }}
           onSettings={() => go('settings')}
           onRoute={(pos, label) => doRoute({ pos, label })}
           places={places}
@@ -2482,7 +2573,14 @@ function NavOverlay(props: {
   onMute: () => void;
   onExit: () => void;
   onOverview: () => void;
+  /**
+   * Re-engage the follow camera. Also the button's state: `following` is what
+   * lets the driver see whether the camera is theirs or the trip's — without
+   * it the two modes look identical and "why did the map move" has no answer
+   * on screen.
+   */
   onRecenter: () => void;
+  following: boolean;
   onSteps: () => void;
   onToggleLayers: () => void;
   onPickLayer: (id: LayerId) => void;
@@ -2913,7 +3011,19 @@ function NavOverlay(props: {
         say why.
       */}
       <div className="nav-controls">
-        <button className="round-btn" onClick={props.onRecenter} aria-label="Recenter on my position">
+        {/*
+          Recentre shows the follow state, not just its action. `aria-pressed`
+          makes the state readable to a screen reader, the `.on` disc to a
+          driver: a pressed recentre means "the camera is following you" — and
+          its momentary de-pressing after a drag is exactly the feedback that
+          the old camera behaviour (snap back on its own) never gave.
+        */}
+        <button
+          className={`round-btn ${props.following ? 'on' : ''}`}
+          onClick={props.onRecenter}
+          aria-label="Recenter on my position"
+          aria-pressed={props.following}
+        >
           <IconLocate size={ICON.primary} />
         </button>
         <button className="round-btn" onClick={props.onOverview} aria-label="Route overview">
