@@ -543,7 +543,14 @@ export function arterialFilter(): unknown[] {
 export function offlineStyleSpec(overlayLayerDefs: LayerDef[]): StyleSpecification {
   return {
     version: 8,
-    glyphs: undefined,
+    // No `glyphs` key at all — and the difference from `glyphs: undefined` is the
+    // whole basemap. The validator reads a present key as a declaration and
+    // reports "glyphs: string expected, undefined found", and `Style._load`
+    // returns early on the first validation error, so the style was **rejected**
+    // rather than applied: with no network to reach the tile style, the fallback
+    // this function exists to provide drew nothing at all. There is no glyphs URL
+    // here to omit either — these layers have no symbol layers, so the offline
+    // map never asks for a font.
     sources: overlaySources(),
     layers: [
       { id: 'bg', type: 'background', paint: { 'background-color': NIGHT.land } },

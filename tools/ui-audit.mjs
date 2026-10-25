@@ -171,11 +171,25 @@ async function auditScreen(page, sample, vpName, screenName) {
     const restPix = await sample(info.x, info.y);
     await page.mouse.move(info.x, info.y);
     await page.waitForTimeout(190);
-    // Read the *hover* declaration while the pointer is genuinely on it.
-    const hoverDeclared = await page.evaluate(
-      ([x, y]) => getComputedStyle(document.elementFromPoint(x, y)).backgroundColor,
-      [info.x, info.y],
-    );
+    /*
+     * Read the *hover* declaration from the audited element's own handle, while
+     * the pointer is genuinely on it.
+     *
+     * This used to re-resolve `elementFromPoint` under the pointer, which is the
+     * wrong element the moment the control animates: these buttons scale on
+     * hover (`transform: scale(1.06)`), which magnifies their glyph *over* the
+     * probe point, so `elementFromPoint` started returning the icon SVG — whose
+     * `background-color` is transparent — and the audit reported controls
+     * "throwing their surface away" while they were still opaque. Measured on
+     * the Recenter disc at 412x915: `elementFromPoint` = `svg`, background
+     * `rgba(0,0,0,0)`, button background `rgb(255,209,148)`.
+     *
+     * `:hover` applies to an element whenever the pointer is over it *or any
+     * descendant*, so the handle is both exact and sufficient — and if some
+     * other element does cover the control, the overlap check above is the one
+     * that should say so.
+     */
+    const hoverDeclared = await el.evaluate((e) => getComputedStyle(e).backgroundColor);
     const hovPix = await sample(info.x, info.y);
     await page.mouse.move(1, 1);
 
@@ -360,7 +374,16 @@ async function auditScreen(page, sample, vpName, screenName) {
       if (cs.visibility === 'hidden' || cs.display === 'none') continue;
       // Inline links inside prose are not controls.
       if (cs.backgroundColor === 'rgba(0, 0, 0, 0)' && Number(cs.paddingLeft) < 8) continue;
-      if (r.height < 56 || r.width < 32) {
+      /*
+       * The floor is the compact scale's, not AAOS's.
+       *
+       * `styles.css` documents the trade: on a handset the smallest interactive
+       * control is a 40dp chip or pill and the square controls are 48dp (44dp on
+       * the narrowest phones), where the car-display spec this app's wide layout
+       * is built from says 76dp. 32dp wide keeps an icon-only control honest
+       * about its glyph. Anything under this floor is a slip, not a decision.
+       */
+      if (r.height < 40 || r.width < 32) {
         out.push({
           label: (e.getAttribute('aria-label') || e.textContent || e.className).trim().replace(/\s+/g, ' ').slice(0, 30),
           cls: typeof e.className === 'string' ? (e.className.split(/\s+/)[0] || e.tagName) : e.tagName,
@@ -370,7 +393,7 @@ async function auditScreen(page, sample, vpName, screenName) {
     }
     return out.slice(0, 10);
   });
-  for (const s of small) add_('minor', 'touch-target', `.${s.cls} "${s.label}" is ${s.w}x${s.h}px (project floor is 76dp tall).`);
+  for (const s of small) add_('minor', 'touch-target', `.${s.cls} "${s.label}" is ${s.w}x${s.h}px (compact floor is 40dp tall, 32dp wide).`);
 }
 
 /* ------------------------------------------------------------------- main */

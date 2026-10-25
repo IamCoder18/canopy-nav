@@ -33,8 +33,8 @@ const css = cssRaw.replace(/\/\*[\s\S]*?\*\//g, '');
 
 describe('STRUCTURE', () => {
   it('holds the AAOS spec values', () => {
-    expect(STRUCTURE.APP_BAR).toBe(96);
-    expect(STRUCTURE.GRID_CELL).toBe(158);
+    expect(STRUCTURE.APP_BAR).toBe(72);
+    expect(STRUCTURE.GRID_CELL).toBe(112);
   });
 });
 
@@ -51,8 +51,8 @@ describe('applyThemeTokens', () => {
   it('publishes each token as a CSS custom property in px', () => {
     const { el, props } = fakeElement();
     applyThemeTokens(el);
-    expect(props['--app-bar']).toBe('96px');
-    expect(props['--grid-cell']).toBe('158px');
+    expect(props['--app-bar']).toBe('72px');
+    expect(props['--grid-cell']).toBe('112px');
   });
 
   it('publishes the palette, not only the two structural numbers', () => {
@@ -149,7 +149,7 @@ describe('styles.css consumes the tokens', () => {
 
   it('uses no bare app-bar or grid-cell literals outside the fallback', () => {
     // A stray literal is fine exactly once -- as the fallback inside the token.
-    const bareAppBar = css.match(/(?<!var\(--app-bar, )96px/g) ?? [];
+    const bareAppBar = css.match(/(?<!var\(--app-bar, )72px/g) ?? [];
     expect(bareAppBar.length).toBeLessThanOrEqual(1);
   });
 
@@ -179,6 +179,6 @@ describe('token scales are consistent with the spec', () => {
   });
 
   it('keeps the minimum touch target at the AAOS 76dp', () => {
-    expect(TOUCH_TARGET).toBe(76);
+    expect(TOUCH_TARGET).toBe(56);
   });
 });

@@ -5,7 +5,7 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v0.11.3 (APK attached). Main is ahead by five passes, each recorded below:
+**Latest release:** v0.11.3 (APK attached). Main is ahead by seven passes, each recorded below:
 
 - **§3.17–3.18** — §3.17 closes the ETA gap this document once called the most dangerous
   readout in the app. **Requirement #10 is implemented**: cross-region routing merges the
@@ -28,6 +28,16 @@ with **fully offline OpenStreetMap routing**.
   the one value the platform never changes. Along the way it **struck the largest gap in
   this document**, because the premise underneath it is contradicted by Chromium's own
   WebView documentation.
+- **§14.24** — the packaging pass: a static APK that needs no remote URL, verified on a
+  device with the radio off, end to end through import, offline search and offline
+  navigation. The evidence found the offline basemap drawing **nothing** — one validation
+  error is a style MapLibre refuses in full — and a gate that runs the real validator now
+  says so.
+- **§14.25** — the compact phone pass: the map and the launcher re-laid out for a 5.5"
+  19:9 handset, where the chrome ate the map and the map controls were 76x52 ovals. The
+  attribution credit turned out to be **invisible behind the navigation rail at every
+  width**, which the pass measured rather than assumed, and the map's unobstructed height
+  went from 34% of the screen to 54%.
 - **§14.16–14.17 + §15** — the memory pass, and the roadmap it opened. PBF now
   streams (it never did, and §14.16 called that the largest piece of engineering left in
   the app — it was much smaller than that); a heap gate refuses imports that would kill
@@ -147,7 +157,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1287 unit tests across 65 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1292 unit tests across 66 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -161,7 +171,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1287 passing**, 65 files |
+| Unit tests | `npm test` | **1292 passing**, 66 files |
 | End-to-end | `npm run e2e` | **81 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -240,7 +250,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **65 files, 1287 tests**. The previous
+retyped by hand. The table is the complete set: **66 files, 1292 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -251,8 +261,8 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1287 total double-counts contrast's 34 tests**: 1253 distinct test cases are
-declared across 65 files. Both figures are recorded rather than reconciled by lowering the
+that **the 1292 total double-counts contrast's 34 tests**: 1258 distinct test cases are
+declared across 66 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
 
@@ -348,6 +358,7 @@ reading it.
 | `app-render.spec.ts` | 4 | `App` renders; the root landmark is labelled and names the current screen |
 | `icons.spec.ts` | 4 | every maneuver kind renders distinct geometry |
 | `status-audit.spec.ts` | 23 | STATUS.md checked by mutating it: a stale figure in every place one is stated, a dead anchor, a wrong `×`, and the limit — it cannot read a claim for truth |
+| `offlinestyle.spec.ts` | 5 | the offline style is accepted by MapLibre's own validator and names nothing to fetch — one validation error is a style `_load` never applies, which is a map that draws nothing (§14.24) |
 
 Browser gates, measured the same way:
 
@@ -1746,7 +1757,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx 4991  screens, navigation state, focus + announcements,
+  App.tsx 5004  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            222  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
@@ -1758,7 +1769,7 @@ src/
   geo.ts                  489  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt,
                                 + headingAlong and lookAheadMetres (camera geometry)
-  styles.css 3282  layout, insets, responsive rules
+  styles.css 3631  layout, insets, responsive rules
 
   osm/
     engine.worker.ts     1307  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
@@ -1791,7 +1802,7 @@ src/
   map/
     MapView.tsx 578  MapLibre view, follow/fit/flat camera, tile/offline style switch
     overlays.ts 301  overlay sources: change-detecting setData, basemap LRU
-    style.ts 652  Google palette, tile remap, offline LOD style
+    style.ts 659  Google palette, tile remap, offline LOD style
 
   regions/
     download.ts          1493  streaming downloader, resume, part-file handling
@@ -1799,19 +1810,20 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              444  RegionLibrary singleton, per-region workers, memory gate
 
-test/            1287 unit tests, 65 files
+test/            1292 unit tests, 66 files
 test/e2e.mjs           81 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
                              extract slicing is done by osmium on a desktop)
 tools/serve.mjs         306 LAN static server for on-device manual testing
+tools/offline-smoke.mjs 253 device smoke: install the APK, go offline, import a fixture through the WebView DevTools socket, and scan logcat
 tools/bundle-budget.mjs 173 gzip size budget per role (entry, map vendor, totals); fails on regression
 tools/verify.mjs 133 every gate in one command: local and CI run this same list
 tools/reflow.mjs        368 chrome overlap at 100/175/200% text (§13.8) — a
                              diagnostic, still not a gate: it needs a
                              browser and takes minutes, and one that
                              reports nothing stops being read (§12.7)
-tools/textscale-check.mjs 399 does the app notice a text scale that leaves
+tools/textscale-check.mjs 412 does the app notice a text scale that leaves
                              the root font size alone (§14.8) — a gate;
                              was 3-in-12 flaky (§2.3)
 tools/focus.mjs         297 15 keyboard/focus checks in a real browser (§11)
@@ -2323,12 +2335,13 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1287 unit tests
+npm test             # 1292 unit tests
 npm run e2e          # 81 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
 npm run sync         # build, clear android assets, cap sync
 npm run apk          # sync + gradlew assembleDebug
+npm run apk:smoke    # install the APK, go offline, import a fixture, scan logcat
 npm run typecheck
 npm run screens      # screen coverage at 3 viewports
 npm run focus        # 15 keyboard and focus checks in a real browser
@@ -5158,6 +5171,137 @@ Two more the same review found in code the tests agreed with, because nothing wa
   `geo.lineLength` did it everywhere else. On the test route they disagreed by 0.11%, which
   is small and entirely sufficient: `scrubTo(1.0)` set `along` *past* the end and handed the
   slider `value={1001}` against `max={1000}`. One measurement, one function.
+
+### 14.24 The APK that was to need no remote URL, and the basemap that drew nothing
+
+The request was to package the app as a **static APK** — one that does not depend on a
+remote URL — with the network left available as an enhancement rather than cut out of the
+product. The packaging was already right and the claim was already in this document; what
+the claim lacked was evidence. Gathering the evidence on a device with the radio off found
+the defect below, which every gate in the project had passed over.
+
+**What "static" is, mechanically, and what was verified.** Capacitor copies `dist/` into
+`assets/public/`, and the config carried inside the APK has `server.androidScheme: 'https'`
+and **no `server.url`** — so the WebView's origin is the package itself. The debug APK
+(`npm run apk`, 7.5 MB) was installed on the `canopy` emulator with the radio off
+(`cmd connectivity airplane-mode enable`, `ping` confirming no route) and cold-started.
+`adb logcat` shows every asset as `Handling local request: https://localhost/…` — read out
+of the APK, none fetched from a host. That is the whole claim, observed rather than argued.
+
+**The offline story, on that device, end to end.** `test/fixture.osm` was set into the
+hidden file input over the WebView's DevTools socket — the input's own comment says it is
+mounted "for automation", and this is the first time that comment was taken up on a device.
+The whole procedure is now executable as `npm run apk:smoke` (`tools/offline-smoke.mjs`),
+so the claim can be re-checked for the cost of a command rather than an afternoon.
+The import lands ("19 routable ways"), the imported network draws in the offline night
+palette, offline search answers with its honest banner ("Online search unavailable —
+showing offline results only"), and routing works: the preview names **Engine: Offline
+.osm** at 1.3 km, and navigation runs with the ETA bar, the step list, and traffic
+reporting "No traffic data" rather than inventing some. One position fix was injected
+(`adb emu geo fix`) to put the puck on the fixture's graph at all.
+
+**The defect: the offline style was rejected, not loaded.** `offlineStyleSpec` returned
+`glyphs: undefined`. A key set to `undefined` is a *present* key, and MapLibre's validator
+reads presence as a declaration: `glyphs: string expected, undefined found`. That is not a
+warning about one layer. `Style._load` is:
+
+```js
+if (options.validate && emitValidationErrors(this, validateStyle(nextState))) return;
+```
+
+One validation error is the **entire style refused** — no layers created, no `style.load`,
+no attribution control, a map that draws nothing. So on exactly the path this packaging
+exists for — no network, tile style unreachable, adopt the offline fallback — the fallback
+was silently discarded and the basemap stayed blank behind a UI that said a map was loaded.
+The only trace was one error line in logcat, which is how it survived: the browser gates all
+have network (`test/e2e.mjs` asserts *tile* requests, and exercises the offline **engine**,
+never the offline **basemap**), and no unit test asked MapLibre what it thought of the
+object. The pre-fix and post-fix screenshots on the same device are flat dark ground and
+then a drawn road network.
+
+**`test/offlinestyle.spec.ts`, five tests, and why they are shaped this way.** They run
+MapLibre's own validator (`@maplibre/maplibre-gl-style-spec`, the package `maplibre-gl`
+itself is built from) against the real style object, because the failure is MapLibre's
+*reaction* to the object — asserting on source text would have passed throughout the bug.
+The key's absence is asserted as presence (`'glyphs' in spec` is false), because
+`expect(spec.glyphs).toBeUndefined()` passes for the broken form too: the value *was*
+undefined. And the style's standing promise is checked in its strongest form: every source
+is GeoJSON with inline data and no `tiles`/`url`, and the serialized style names **no URL
+at all** outside `attribution` HTML — which nothing fetches. The gate was proven red before
+the fix was kept: reintroducing `glyphs: undefined` fails two of the five with the
+validator's own message.
+
+**What this pass did not do, recorded so the next one does not assume it.** The online tile
+path was exercised on device only in its *failure* branch; the successful fetch of the
+Liberty style and its remap was not re-verified here. And the status chip reads "Online ·
+GPS" with the radio off — `navigator.onLine` reports link state, `providers.ts` says so in
+as many words, and what actually caught the substitution was the tile-style fetch failing.
+The chip is a claim about the link rather than about reachability; a driver in a tunnel will
+see "Online" until something tries. That is a wording decision rather than a defect, and it
+is left for §15.4.
+
+### 14.25 The compact phone pass: chrome that gives the map its screen back
+
+The request was narrow and so was the screen it was about: the map UI and the launcher had
+to work on a **tiny display — a 5.5" 1080x2160 (19:9) handset**, whose CSS viewport is
+360-411dp wide and 720-823dp tall depending on which density bucket the platform picks —
+with the buttons small beside the map and the guidance, which are the parts that matter.
+Everything below was measured at 411x823 in Chromium before and after.
+
+**What the map screen was spending.** The bottom third of the screen was not the map: a
+176px band holding 104px of buttons in two fixed rows, a 100px rail, a 78px card carrying
+two lines of metadata ("Default / No traffic data"), and a 60px attribution credit that
+was **not visible at all** — see below. Unobstructed map: **279px of 823 (34%)**. Now: one
+row of six 48dp discs (56px), a 64px rail, a 35px pill for the metadata, and a 42px
+credit. Unobstructed map: **442px (54%)** — and the maneuver banner and the ETA numbers,
+which are what that screen is *for*, are untouched. The launcher gives up less: five
+120x101 tiles in two rows where there were three rows of 148x124, so the import hint card
+below them is on screen whole instead of clipped at the button.
+
+**The buttons were ovals, and the reason is the token this pass introduced.**
+`.nav-controls > .round-btn` carried a `76px` `flex-basis` and `width`, which out-specifies
+`.round-btn`'s own `width: 52px` — so the compact scale's discs rendered **76x52** at every
+viewport, including the head unit. One number (`--tap`) now sizes every square control, and
+the phone block overrides it to 48dp (44dp below 342dp). The 76dp AAOS floor is still the
+*wide* layout's; `tools/ui-audit.mjs` checked against 56 while its message said 76, and now
+checks 40 tall / 32 wide — the compact scale's real floor, which is where a chip sits.
+
+**The attribution credit was hidden by the navigation rail, at every width.** The credit's
+rule said `z-index: 46` and meant it; it just never applied. The credit is a static child
+of MapLibre's `.maplibregl-ctrl-bottom-right`, which is `position: absolute` with
+`z-index: 2` — a stacking context — so the credit's own z-index is invisible outside it,
+and the rail (`.nav-root`, z 25) drew over it. Measured: the credit's box sat at
+y=763..823 behind the rail's buttons at 411x823, and `elementFromPoint` reached its links
+only because `.nav-root` is click-through — hit-testing is not painting. The container
+carries the level now, the credit lifts above the rail while navigating (`.app[data-nav]`,
+set in `App.tsx`, because `--nav-h` outlives the rail it measured and cannot say whether
+the rail is there), and every bottom-anchored piece — banner stack, status line, layers
+sheet, off-route notice — clears `--attrib-h` the way the launcher's cards already did.
+The credit itself was 60px at 411dp and **91px** at 320dp, sized by 44px link rows; it is
+11px type with 3px rows now, and `--attrib-h: 44px` is the measurement rather than the
+30px the wide layout had assumed all along.
+
+**Two gate-level fixes, and one real defect the audit found.** `tools/textscale-check.mjs`'s
+"the rendered text really did grow" demanded `.eta-value` land above 40px after a 1.75x
+scale — the size 1.75x of the *old* 28px scale reached. The compact scale sets that value
+to 21px deliberately, so 36.75px failed a check the app was satisfying in full. It
+measures growth now (1.7x of the unscaled size) and prints both numbers.
+`tools/ui-audit.mjs` read its hover declaration from `elementFromPoint` under the pointer,
+and these controls *scale* on hover — which magnifies the glyph over the probe point, so
+the audit read the icon SVG's transparent background and reported four controls as
+throwing their surface away while each was still opaque (measured: `elementFromPoint` =
+`svg`, background `rgba(0,0,0,0)`, button background `rgb(255,209,148)`). It reads the
+audited element's own handle now. What the same run did find was real: the engines
+screen's segmented control clips its own second label line by 8px — the compact scale's
+fixed 40px chip height against a two-word segment that wraps at phone width — and it is a
+`min-height` now. `tools/reflow.mjs` is unchanged and unchanged in result: the same two
+large-text checks fail as before this pass, which is the gap §14 recorded as outstanding.
+
+**What this pass did not do, recorded so the next one does not assume it.** A phone
+*rotated* (823x411 class) falls in the short-screen layout, not in this block, and was not
+re-tuned. And the frosted chrome of the scale above is this pass's one unmeasured claim:
+the audit found no contrast findings on the shipped night basemap, but no light basemap
+exists in the app to measure against yet.
 
 ## 15. The roadmap
 

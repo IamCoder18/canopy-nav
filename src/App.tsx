@@ -1653,7 +1653,20 @@ const banner = rerouteNotice ?? routeError ?? null;
       screens. `aria-label` on the main region names the current screen, which
       makes "jump to main" tell you where you are as well as getting you there.
     */
-    <main className="app" aria-label={`Canopy Nav — ${SCREEN_NAMES[screen]}`}>
+    <main
+      className="app"
+      /*
+        `data-nav` while the navigation rail is on screen.
+
+        The map's attribution credit has to clear that rail — it is legal text
+        and the rail would otherwise draw over it — and CSS cannot see whether
+        `.nav-bottom` exists without `:has()`. The app can, so it says so. When
+        the attribute is absent the credit sits at the viewport corner as usual,
+        where `--attrib-h` is the clearance every pinned card already reserves.
+      */
+      data-nav={navActive ? 'on' : undefined}
+      aria-label={`Canopy Nav — ${SCREEN_NAMES[screen]}`}
+    >
       {/*
         "You have arrived on <screen>", mounted once for the life of the app.
 

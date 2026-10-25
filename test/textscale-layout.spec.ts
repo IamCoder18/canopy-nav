@@ -42,17 +42,17 @@ const chrome = readFileSync(join(ROOT, 'src', 'nav', 'chrome.ts'), 'utf8');
 
 /** The scale as Google's *Design for Driving* states it: dp type, dp leading. */
 const SPEC: Record<string, [number, number]> = {
-  display1: [56, 64],
-  display2: [44, 52],
-  display3: [36, 44],
-  body1: [32, 40],
-  body1m: [32, 40],
-  body2: [28, 36],
-  body3: [24, 32],
-  body3m: [24, 32],
-  sub1: [22, 28],
-  sub2: [20, 26],
-  sub3: [18, 24],
+  display1: [44, 52],
+  display2: [35, 42],
+  display3: [28, 34],
+  body1: [25, 32],
+  body1m: [25, 32],
+  body2: [22, 28],
+  body3: [19, 25],
+  body3m: [19, 25],
+  sub1: [17, 22],
+  sub2: [16, 21],
+  sub3: [14, 19],
 };
 
 describe('the type scale emits leading as a multiplier, not a length', () => {
@@ -90,8 +90,8 @@ describe('the type scale emits leading as a multiplier, not a length', () => {
       type[name].lineHeight * (type[name].fontSize * factor);
     // Two decimals: `step` rounds the ratio to 4dp, so a 36dp font at 2x lands on
     // 87.9984 rather than 88. The bound is the rounding, not the scale.
-    expect(at('body1', 1.75)).toBeCloseTo(70, 2);
-    expect(at('display3', 2)).toBeCloseTo(88, 2);
+    expect(at('body1', 1.75)).toBeCloseTo(56, 2);
+    expect(at('display3', 2)).toBeCloseTo(68, 2);
   });
 
   it('states the reason in the source, so the next reader does not "fix" it back', () => {

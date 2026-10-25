@@ -143,7 +143,7 @@ export const white = (pct: number) => `rgba(255,255,255,${pct})`;
 export const SEP = '\u00A0·\u00A0';
 
 /** Padding scale P0-P8. */
-export const DP = { P0: 4, P1: 8, P2: 12, P3: 16, P4: 24, P5: 32, P6: 48, P7: 64, P8: 96 } as const;
+export const DP = { P0: 4, P1: 8, P2: 12, P3: 16, P4: 20, P5: 24, P6: 32, P7: 40, P8: 56 } as const;
 
 /**
  * Corner radius scale.
@@ -161,8 +161,8 @@ export const DP = { P0: 4, P1: 8, P2: 12, P3: 16, P4: 24, P5: 32, P6: 48, P7: 64
 export const R = { R0: 0, R1: 4, R2: 8, R3: 12, R4: 16, R5: 28, R6: 9999 } as const;
 
 /** Icon sizes + minimum touch target. */
-export const ICON = { primary: 44, secondary: 36, tertiary: 24 } as const;
-export const TOUCH_TARGET = 76;
+export const ICON = { primary: 32, secondary: 26, tertiary: 18 } as const;
+export const TOUCH_TARGET = 56;
 
 /**
  * Structural dimensions that the layout repeats everywhere.
@@ -178,9 +178,9 @@ export const TOUCH_TARGET = 76;
  */
 export const STRUCTURE = {
   /** App bar height. */
-  APP_BAR: 96,
+  APP_BAR: 72,
   /** Minimum content height of a grid cell. */
-  GRID_CELL: 158,
+  GRID_CELL: 112,
 } as const;
 
 /**
@@ -329,17 +329,17 @@ function step(
 }
 
 export const type = {
-  display1: step(sans, 56, 64, 0),
-  display2: step(sans, 44, 52, 0.1),
-  display3: step(sans, 36, 44, 0.2),
-  body1: step(sans, 32, 40, 0.3),
-  body1m: step(sans, 32, 40, 0.3, 500),
-  body2: step(roboto, 28, 36, 0.3),
-  body3: step(roboto, 24, 32, 0.6),
-  body3m: step(roboto, 24, 32, 0.6, 500),
-  sub1: step(roboto, 22, 28, 1.1),
-  sub2: step(roboto, 20, 26, 1.2),
-  sub3: step(roboto, 18, 24, 1.2),
+  display1: step(sans, 44, 52, 0),
+  display2: step(sans, 35, 42, 0.1),
+  display3: step(sans, 28, 34, 0.2),
+  body1: step(sans, 25, 32, 0.3),
+  body1m: step(sans, 25, 32, 0.3, 500),
+  body2: step(roboto, 22, 28, 0.3),
+  body3: step(roboto, 19, 25, 0.6),
+  body3m: step(roboto, 19, 25, 0.6, 500),
+  sub1: step(roboto, 17, 22, 1.1),
+  sub2: step(roboto, 16, 21, 1.2),
+  sub3: step(roboto, 14, 19, 1.2),
 } satisfies Record<string, TypeToken>;
 
 export type ScreenWidthClass = 'standard' | 'wide' | 'extraWide' | 'superWide';

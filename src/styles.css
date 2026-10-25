@@ -56,13 +56,31 @@
      there is one source of truth. The fallbacks repeat the literals on purpose:
      a stylesheet that has not been through that call must still lay out
      correctly rather than collapse to `height: auto`. */
-  --app-bar: 96px;
-  --grid-cell: 158px;
+  --app-bar: 72px;
+  --grid-cell: 112px;
   /* Height of the bottom navigation rail. The control stack sits directly above
      it, and both read this variable so they can never disagree about the rail's
      height — which used to be the `.nav-controls` offset clamping to the 96px
      app-bar while the rail stayed 128px, a 20px overlap at phone portrait. */
-  --navbot: 128px;
+  --navbot: 100px;
+
+  /* The square control size: every round map button, icon button and floating
+     back disc.
+
+     One token, because three rules used to carry three numbers and drifted:
+     `.nav-controls > .round-btn` kept a 76px `flex-basis` while `.round-btn`
+     itself shrank to 52px, so the map controls rendered as 76x52 ovals — a
+     circle is the one shape a control cannot be "a bit wrong" about. When this
+     number changes, every control changes with it. The compact-phone block at
+     the end of this file overrides it per screen size. */
+  --tap: 52px;
+
+  /* Height of the map-control band when it is a row along the bottom of the
+     map (phone portrait). The status line above the band and the layers sheet
+     are offset by it, so the row count the band wraps into decides where they
+     land — and that used to be the literal `176px` (two rows of 76dp targets)
+     hand-copied into three different offsets. One number, one place. */
+  --controls-h: 176px;
 
   /* Height of the map's attribution control.
 
@@ -270,19 +288,68 @@ code {
     bottom and the right, it read as a slab of chrome stuck to the frame, and it
     is also the reason several screens had their bottom content clipped: the
     card underneath ran out of the viewport behind it.
+
+    `!important` because MapLibre's own stylesheet zeroes the margin on this
+    element (`.maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib`), and its
+    rule is both later and more specific — measured, the credit sat flush in
+    the corner with this declaration dead. The file's first comment says why
+    the flag is the honest tool here.
   */
   border-radius: var(--r-sm, 8px) 0 0 0;
-  margin: 0 8px 8px 0;
+  margin: 0 8px 8px 0 !important;
   padding: 4px 6px;
-  /* Above the pinned cards, which must clear it via `--attrib-h`. */
+  /* Above the pinned cards, which must clear it via `--attrib-h` — and see the
+     container rule below: 46 against the map controls' own stacking context is
+     what actually raises this. */
   z-index: 46;
 }
-/* 44px tall tap targets, not 16. */
+/*
+ * The z-index that the credit's own `46` never had.
+ *
+ * `.maplibregl-ctrl-attrib` is a static, in-flow child of MapLibre's
+ * `.maplibregl-ctrl-bottom-right`, which is `position: absolute` with
+ * `z-index: 2` — a stacking context. A z-index on a child *inside* that
+ * context is invisible to the rest of the page: the navigation rail
+ * (`.nav-root`, z-index 25) drew over the credit, so during navigation the app
+ * displayed no attribution at all. Measured at 411x823: the credit's box sat at
+ * y=763..823 behind the rail's opaque buttons, and `elementFromPoint` reached
+ * its links only because `.nav-root` is click-through — hit-testing is not
+ * painting.
+ *
+ * The container carries the level instead. 46 is the credit's own number: above
+ * the screens (25-35) because the licence requires the credit to be *seen*, and
+ * the screens clear the space for it via `--attrib-h` so it never lands on one.
+ */
+.maplibregl-ctrl-bottom-right { z-index: 46 !important; }
+/*
+ * While navigating, the credit lifts out from under the bottom rail.
+ *
+ * The rail is full-width on a phone, so the corner the credit sits in is also
+ * the rail's own right end — either the credit covers "Exit" or the rail covers
+ * the credit. It lifts above the rail instead: `--nav-h` is the rail's measured
+ * height (published by `src/nav/chrome.ts` only while the rail exists), so on
+ * every other screen the credit stays in the corner where `--attrib-h` is the
+ * clearance the pinned cards already reserve.
+ *
+ * `data-nav` on `.app` is how CSS knows the rail is up. The alternative was
+ * reading `--nav-h`'s absence as "no rail", which stops being true the moment
+ * navigation ends: the property survives the rail it measured.
+ */
+.app[data-nav] .maplibregl-ctrl-attrib {
+  margin-bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + 6px) !important;
+}
+/*
+ * The links are tappable, but they are legal text: a 3px lift and the project's
+ * type, sized so the whole credit measures the `--attrib-h` the screens reserve.
+ */
 .maplibregl-ctrl-attrib a {
   color: var(--ink-secondary, #DED2BE) !important;
   text-decoration: none;
   display: inline-block;
-  padding: 6px 2px;
+  /* 3px, not 6px: this padding is also the credit's *height*, which every
+     screen's bottom clearance is computed from — and the file's own note above
+     says the type is legal text, not a control to be read at arm's length. */
+  padding: 3px 2px;
 }
 .maplibregl-ctrl-attrib a:hover { color: #FFFFFF !important; text-decoration: underline; }
 /*
@@ -308,7 +375,7 @@ code {
 .top-app-bar {
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: var(--app-bar, 96px);
+  height: var(--app-bar, 72px);
   display: flex;
   align-items: center;
   gap: 16px;
@@ -368,7 +435,9 @@ code {
 .brand > svg { flex: 0 0 auto; }
 
 .icon-btn {
-  width: 76px; height: 76px;
+  /* `--tap`, not a literal: see the token's note — the map controls rendered as
+     ovals because one rule kept its own 76px while the buttons shrank. */
+  width: var(--tap, 52px); height: var(--tap, 52px);
   display: grid; place-items: center;
   border-radius: 9999px;
   color: var(--ink-primary, #F7F0E1);
@@ -496,7 +565,7 @@ code {
   left: 12%;
   right: 12%;
   /* clear the app bar plus the system status bar */
-  top: calc(var(--app-bar, 96px) + var(--inset-top) + 16px);
+  top: calc(var(--app-bar, 72px) + var(--inset-top) + 16px);
   /*
     Clears the map's attribution control as well as the safe area.
 
@@ -632,7 +701,7 @@ code {
   /*
     A *minimum*, not a height.
   */
-  min-height: var(--grid-cell, 158px);
+  min-height: var(--grid-cell, 112px);
   overflow: hidden;
   padding: 16px;
   border-radius: var(--r-xl, 28px);
@@ -1042,7 +1111,7 @@ code {
      ("1234 km") or a wrapped caption can need more than the token allows, and a
      fixed height clips it rather than growing. `--app-bar` is the design minimum and
      `chrome.ts` publishes the result as `--eta-h` for everything anchored to it. */
-  min-height: var(--app-bar, 96px);
+  min-height: var(--app-bar, 72px);
   display: flex; align-items: center; gap: 24px;
   /* One shorthand, with the inset folded in. This used to be
      `padding-top: var(--inset-top)` followed by `padding: 0 16px 0 24px`, and
@@ -1163,7 +1232,7 @@ code {
 .banner-stack {
   position: absolute;
   left: 24px;
-  top: calc(var(--eta-h, var(--app-bar, 96px)) + var(--inset-top) + 24px);
+  top: calc(var(--eta-h, var(--app-bar, 72px)) + var(--inset-top) + 24px);
   /* Bounded below by the bottom bar, at every text size.
    *
    * This bound used to exist only under `[data-textsize="large"]`, which left the
@@ -1178,8 +1247,13 @@ code {
    * large-text rule already makes, and the same one §13.15 settled: a banner the
    * driver can scroll to is correct; one they cannot see is not. The instruction gets
    * priority because it is first in the column.
+   *
+   * The bound clears the attribution credit as well as the bar: while navigating
+   * the credit lifts out from under the rail and is drawn *above* the cards
+   * (its `z-index` is the licence's, not the layout's), so the stack stops
+   * below it. `--attrib-h` is the credit's height.
    */
-  bottom: calc(var(--nav-h, var(--navbot, 128px)) + var(--inset-bottom));
+  bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 6px);
   overflow-y: auto;
   overscroll-behavior: contain;
   display: flex;
@@ -1299,7 +1373,7 @@ code {
      ETA numbers wrap to two lines at 200%, and the bar is now allowed to be as tall
      as they need — which turned the constant into an overlap of 168x8px at 200%,
      measured. Reading `--eta-h` puts this column back under the bar at every size. */
-  top: calc(var(--eta-h, var(--app-bar, 96px)) + var(--inset-top) + 24px);
+  top: calc(var(--eta-h, var(--app-bar, 72px)) + var(--inset-top) + 24px);
   display: flex; flex-direction: column; gap: 16px;
   /* Keep the stack clear of the maneuver card on narrow screens — and of the
      status pill below it, which is `right`-anchored on the same margin. Also
@@ -1311,7 +1385,7 @@ code {
      1280x720, the pill covered the bottom two buttons whole, which is why the
      audit reported them as "no hover feedback": the hover landed on the pill. */
   max-height: calc(
-    100% - var(--eta-h, var(--app-bar, 96px)) - var(--nav-h, var(--navbot, 128px)) - 48px - 104px
+    100% - var(--eta-h, var(--app-bar, 72px)) - var(--nav-h, var(--navbot, 100px)) - 48px - 104px
   );
   overflow: hidden;
   /* Wraps to a second column when the column cannot fit vertically. Measured at
@@ -1323,8 +1397,10 @@ code {
   justify-content: flex-end;
 }
 /* `position: relative` so the report badge is anchored to its button rather
-   than to the wrapping column. */
-.nav-controls > .round-btn { flex: 0 0 76px; width: 76px; position: relative; }
+   than to the wrapping column. `--tap` for the size: a `flex-basis` of 76px
+   here out-specified `.round-btn`'s width and stretched the discs into
+   76x52 ovals at every viewport. */
+.nav-controls > .round-btn { flex: 0 0 var(--tap, 52px); width: var(--tap, 52px); position: relative; }
 
 /* The compass needle rotates against the map's bearing, so it is its own
    element: the button must not rotate with it, or its hit area would too. */
@@ -1365,7 +1441,11 @@ code {
     top: auto;
     left: 16px;
     right: 16px;
-    bottom: calc(var(--navbot, 128px) + var(--inset-bottom) + 12px);
+    /* Measured (`--nav-h`), not designed (`--navbot`): the rail grows with its
+       own labels and the band has to grow with it. Above the attribution credit,
+       which lifts clear of the rail while navigating — `--attrib-h` is its
+       height, and the band is what the credit used to be drawn underneath. */
+    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 12px);
     /* Defence in depth: whatever the heights work out to, the guidance wins.
        The banner is the one element a driver must be able to read. */
     z-index: 1;
@@ -1384,9 +1464,10 @@ code {
      * 412px the status line sat *on* the top row of buttons once the stack
      * grew past four controls. Two rows is what six controls need at every
      * width this breakpoint covers; 320px is the exception and gives itself a
-     * third row explicitly, below.
+     * third row explicitly, below. `--controls-h` is that height, and the
+     * offsets that clear the band read it instead of copying `176px`.
      */
-    height: 176px;
+    height: var(--controls-h, 176px);
   }
   .banner-stack { left: 16px; width: calc(100% - 32px); }
   .maneuver-banner {
@@ -1495,7 +1576,9 @@ code {
 @media (max-height: 599px) {
   .offroute-banner {
     top: auto;
-    bottom: calc(var(--app-bar, 96px) + var(--inset-bottom) + 16px);
+    /* Clear of the bottom bar and of the attribution credit above it, the same
+       two things every other bottom-anchored piece on this screen clears. */
+    bottom: calc(var(--app-bar, 72px) + var(--inset-bottom) + var(--attrib-h, 30px) + 16px);
   }
 }
 
@@ -1513,7 +1596,7 @@ code {
   .banner-stack { width: calc(100% - 344px); }
 }
 .round-btn {
-  width: 76px; height: 76px;
+  width: var(--tap, 52px); height: var(--tap, 52px);
   display: grid; place-items: center;
   border-radius: var(--r-pill, 9999px);
   /*
@@ -1609,7 +1692,10 @@ code {
 .nav-status {
   position: absolute;
   right: 24px;
-  bottom: calc(var(--nav-h, var(--navbot, 128px)) + var(--inset-bottom) + 16px);
+  /* Above the bottom bar *and* the attribution credit, which lifts out from
+     under that bar while navigating and is drawn above everything pinned over
+     the map. `--attrib-h` is the credit's height. */
+  bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 12px);
   display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
   width: max-content;
   max-width: min(320px, calc(100vw - 48px));
@@ -1646,13 +1732,13 @@ code {
     Above the bottom bar, measured. `--nav-h` is the bottom rail's real height
     and the gap is the panel's own separation from it.
   */
-  bottom: calc(var(--nav-h, var(--navbot, 128px)) + var(--inset-bottom) + 16px);
+  bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + 16px);
   width: min(560px, calc(100% - 24% - 24px));
   /*
     Bounded above by the ETA bar, which is what the maneuver card hangs from —
     so the panel can never grow up into the instruction it would be hiding.
   */
-  max-height: calc(100% - var(--eta-h, var(--app-bar, 96px)) - var(--nav-h, var(--navbot, 128px)) - 48px);
+  max-height: calc(100% - var(--eta-h, var(--app-bar, 72px)) - var(--nav-h, var(--navbot, 100px)) - 48px);
   overflow-y: auto;
   /* .nav-root is click-through to the map; a popover is not. Without this the
      panel inherits `pointer-events: none` and every row passes clicks to the
@@ -1667,10 +1753,11 @@ code {
   @media (max-width: 599px) {
     left: 16px;
     right: 16px;
-    bottom: calc(var(--nav-h, var(--navbot, 128px)) + var(--inset-bottom) + 12px + 176px + 12px);
+    /* The whole bottom stack, from the same tokens: rail, credit, band. */
+    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 12px + var(--controls-h, 176px) + 8px);
     width: auto;
     max-width: none;
-    max-height: calc(100% - var(--eta-h, var(--app-bar, 96px)) - var(--nav-h, var(--navbot, 128px)) - 216px);
+    max-height: calc(100% - var(--eta-h, var(--app-bar, 72px)) - var(--nav-h, var(--navbot, 100px)) - var(--attrib-h, 30px) - var(--controls-h, 176px) - 32px);
   }
   /* Above the bottom bar: the panel is rendered before it in the document. */
   z-index: 2;
@@ -1757,7 +1844,7 @@ code {
  */
 .toast-slot {
   position: absolute;
-  top: calc(var(--eta-h, var(--app-bar, 96px)) + var(--inset-top) + 16px);
+  top: calc(var(--eta-h, var(--app-bar, 72px)) + var(--inset-top) + 16px);
   left: 0; right: 0;
   display: flex; justify-content: center;
   pointer-events: none;
@@ -1781,7 +1868,7 @@ code {
      height clipped them by 4px. `--navbot` is the design minimum; the content decides
      above it, and `chrome.ts` publishes the result as `--nav-h` so the banner stack's
      lower bound rises with it instead of being overlapped. */
-  min-height: var(--navbot, 128px);
+  min-height: var(--navbot, 100px);
   display: flex; align-items: center; justify-content: space-around;
   gap: 8px;
   /* Same longhand/shorthand bug as `.eta-bar`: `padding-bottom` was reset by
@@ -1836,7 +1923,7 @@ code {
   position: absolute;
   top: calc(var(--inset-top) + 24px);
   left: calc(var(--inset-left) + 24px);
-  width: 76px; height: 76px;
+  width: var(--tap, 52px); height: var(--tap, 52px);
   display: grid; place-items: center;
   border-radius: var(--r-pill, 9999px);
   /*
@@ -2177,7 +2264,7 @@ ol.search-results { list-style: none; margin: 0; padding-left: 12%; padding-righ
 .settings-body {
   flex: 1;
   overflow-y: auto;
-  padding: calc(var(--app-bar, 96px) + var(--inset-top)) 12%
+  padding: calc(var(--app-bar, 72px) + var(--inset-top)) 12%
     calc(48px + var(--inset-bottom) + var(--attrib-h, 30px));
   /* Scroll padding applies the same clearance when a row is scrolled to with
      `scrollIntoView` or a keyboard focus, which padding alone does not cover. */
@@ -2660,7 +2747,7 @@ ol.search-results { list-style: none; margin: 0; padding-left: 12%; padding-righ
 
 /* Landscape phones / head units are short — tighten the vertical rhythm. */
 @media (max-height: 520px) {
-  :root { --navbot: var(--app-bar, 96px); }
+  :root { --navbot: var(--app-bar, 72px); }
   .top-app-bar { height: 76px; }
   .search-results, .settings-body { padding-top: calc(76px + var(--inset-top)); }
   .home-search { top: calc(76px + var(--inset-top) + 12px); }
@@ -2672,7 +2759,7 @@ ol.search-results { list-style: none; margin: 0; padding-left: 12%; padding-righ
      measured, the bottom bar's three labels need 100px of a 96px box at 200%, and the
      ETA bar needs 128px of a 76px one at 200%. `chrome.ts` publishes the results as
      `--nav-h` and `--eta-h`, so everything anchored to them moves with them. */
-  .nav-bottom { min-height: var(--app-bar, 96px); }
+  .nav-bottom { min-height: var(--app-bar, 72px); }
   .eta-bar { min-height: 76px; }
   /* Four stacked 76dp buttons do not fit above a 96dp bottom bar on a 412dp-tall
      screen — the last two used to be clipped out of reach. Wrap into a grid
@@ -2689,7 +2776,7 @@ ol.search-results { list-style: none; margin: 0; padding-left: 12%; padding-righ
        starting at y=152 on a 412px screen, and the bottom bar begins at y=316 —
        a 4px intersection. The bound is the distance left between the two bars. */
     max-height: calc(
-      100% - var(--eta-h, var(--app-bar, 96px)) - var(--nav-h, var(--navbot, 128px)) - 48px
+      100% - var(--eta-h, var(--app-bar, 72px)) - var(--nav-h, var(--navbot, 100px)) - 48px
     );
   }
   /* The layers panel has to clear the 76dp bar and the control stack on a short
@@ -2760,7 +2847,7 @@ button.chip.ok { background: rgba(255, 180, 84, 0.18); color: var(--accent, #FFB
 /* Clear the app bar and keep the instruction inside the safe area, so the words
    land on the dimmed launcher rather than under the chrome. */
 .drop-hint > div {
-  margin-top: var(--app-bar, 96px);
+  margin-top: var(--app-bar, 72px);
   max-width: min(560px, 76vw);
   text-align: center;
 }
@@ -2768,7 +2855,7 @@ button.chip.ok { background: rgba(255, 180, 84, 0.18); color: var(--accent, #FFB
 /* Startup notice while cached regions are rehydrated from IndexedDB. */
 .restoring-bar {
   position: absolute;
-  top: calc(var(--app-bar, 96px) + var(--inset-top)); left: 50%;
+  top: calc(var(--app-bar, 72px) + var(--inset-top)); left: 50%;
   transform: translateX(-50%);
   z-index: 35;
   display: flex; align-items: center;
@@ -2978,7 +3065,7 @@ button.chip.ok { background: rgba(255, 180, 84, 0.18); color: var(--accent, #FFB
   .nav-status {
     right: 16px;
     left: 16px;
-    bottom: calc(var(--nav-h, var(--navbot, 128px)) + var(--inset-bottom) + 12px + 176px + 12px);
+    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 12px + var(--controls-h, 176px) + 8px);
     width: auto;
     max-width: none;
     align-items: flex-start;
@@ -3280,3 +3367,265 @@ ul.result-list > li { margin: 0; }
 /* Labels wrap instead of being clipped: at 2x "Overview" is wider than the 76dp
    button, and there is nothing to gain by hiding it. */
 [data-textsize="large"] .nav-bottom-btn span { white-space: normal; line-height: 1.1; }
+
+/* ===========================================================================
+ * COMPACT SCALE + FROSTED CHROME
+ *
+ * The AAOS numbers this app was built from (96dp app bar, 76dp touch targets,
+ * 32dp body type) are right for a car display and far too big for a small
+ * phone: on a 320-412dp handset the chrome ate the map and the type wrapped.
+ * Everything below deliberately goes *below* the spec minimums — it is a
+ * compact mode for small handsets, not a compliance regression.
+ *
+ * It is one block at the end of the file on purpose: every rule here overrides
+ * an earlier one, and keeping the retune in one place means it is one edit to
+ * change the scale again rather than a hunt through 3000 lines.
+ * ======================================================================== */
+
+/* ---- geometry ---- */
+/* The square controls (`--tap`) are sized by the token's own default now: the
+   52px that used to be written here and in `.round-btn`, `!important`-lessly
+   losing to `.nav-controls > .round-btn`'s 76px `flex-basis`. */
+.status-pill { height: 32px; padding: 0 10px; gap: 6px; }
+.status-pill .dot { width: 8px; height: 8px; }
+.search-field { height: 46px; padding: 0 14px; }
+.quick-tile { min-height: 112px; padding: 12px; gap: 8px; }
+.quick-icon { width: 40px; height: 40px; }
+.primary-btn, .secondary-btn { min-width: 112px; height: 48px; padding: 0 18px; }
+.pill-btn, .text-btn, .seg button, .choice, button.chip, .chip {
+  height: 40px; min-height: 40px; padding-top: 0; padding-bottom: 0;
+}
+.inline-search { min-height: 48px; padding: 0 12px; gap: 8px; margin-right: 8px; }
+.inline-search .search-clear { width: 48px; height: 48px; }
+.nav-bottom-btn { min-height: 48px; padding: 6px 4px; }
+.result-row, .settings-row, .layer-row, .provider-row, .report-row, .choice-row {
+  height: auto; min-height: 52px;
+}
+.report-icon { width: 32px; height: 32px; }
+.maneuver-icon { width: 70px; height: 70px; flex: 0 0 70px; }
+.maneuver-icon svg { width: 48px; height: 48px; }
+.maneuver-banner { padding: 12px 16px; gap: 12px; }
+.banner-stack { width: min(440px, calc(100% - 32px)); gap: 6px; }
+.offroute-banner { padding: 8px 14px; }
+.eta-bar { gap: 12px; padding: var(--inset-top) 12px 0 16px; }
+.eta-sep { height: 32px; }
+.toast { padding: 10px 16px; }
+.source-tag { height: 22px; padding: 0 8px; }
+.btn-badge { min-width: 18px; height: 18px; }
+.maplibregl-ctrl-attrib-button span { width: 30px; height: 30px; line-height: 30px; }
+
+/* ---- type (inline token styles lose to `!important`) ---- */
+.primary-btn, .secondary-btn, .text-btn, .pill-btn, .seg button, .choice, button.chip {
+  font-size: 18px !important; line-height: 24px !important;
+}
+.maneuver-banner .maneuver-dist { font-size: 21px !important; line-height: 26px !important; }
+.maneuver-banner .maneuver-instr { font-size: 17px !important; line-height: 22px !important; }
+.eta-value { font-size: 21px !important; line-height: 26px !important; }
+.offroute-banner { font-size: 16px !important; line-height: 21px !important; }
+.chip { font-size: 14px !important; }
+.offline-chip, .remove-detail, .progress-pct, .map-status, .shield, .source-tag { font-size: 13px !important; }
+.quick-hint, .unavailable-reason, .error-card { font-size: 15px !important; }
+.quick-label { font-size: 17px !important; }
+.btn-badge { font-size: 11px !important; }
+.field input { font-size: 18px !important; }
+.top-app-bar .chip-sub { font-size: 13px !important; }
+
+/* ---- frosted chrome over the map ----
+ *
+ * Bars, banners and floating buttons sit on top of the map; opaque, they hid
+ * it. These are see-through with a blur behind them, so the map stays visible
+ * under the chrome and the controls read as floating above it.
+ */
+.eta-bar, .nav-bottom, .toast, .maneuver-banner, .offroute-banner,
+.status-pill, .map-status, .restoring-bar, .result-panel, .nav-panel, .pick-hint,
+.round-btn, .icon-btn, .pill-btn, .text-btn, .chip, .offline-chip,
+.search-field, .quick-tile {
+  background: rgba(23, 18, 8, 0.58);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  backdrop-filter: blur(16px) saturate(1.15);
+}
+.search-field { background: rgba(23, 18, 8, 0.42); }
+.maneuver-banner, .offroute-banner, .toast, .result-panel, .nav-panel { background: rgba(23, 18, 8, 0.52); }
+
+/*
+ * A segmented control whose labels wrap, and were clipped by their own box.
+ *
+ * The compact scale above fixed every chip-like control at 40px tall with no
+ * vertical padding — right for a one-line label, and wrong for the engines
+ * screen's two-word segments ("Use another engine", "Fail instead"), which
+ * wrap at phone width and lost their second line: measured 8px of content
+ * outside a 40px `overflow: hidden` box, i.e. half a label gone. `min-height`
+ * keeps the one-line case exactly as it was and lets the wrapped case grow.
+ */
+.seg button { height: auto; min-height: 40px; padding: 6px 10px; }
+
+/* ===========================================================================
+ * COMPACT PHONE — the 5.5" 19:9 handset, and everything smaller
+ *
+ * The scale above sizes the *controls*; this block lays out the *screens* for
+ * the one display class where every pixel of chrome is taken from the map: a
+ * 5.5" 1080x2160 (19:9) phone. Its CSS viewport is 360-411dp wide and
+ * 720-823dp tall depending on which density bucket the platform picks, and
+ * the whole block is written against that range rather than against one
+ * number.
+ *
+ * The rule the numbers follow: the map and the guidance are the product, and
+ * everything else is chrome. Buttons stay tappable — 48dp, the Material phone
+ * floor, where AAOS's 76dp is a car-display minimum and is what the wide
+ * layout is still built from — but they stop competing with the map for area.
+ * Measured at 411x823, before → after, on the navigation screen:
+ *
+ *     unobstructed map     279px (34%) ->  442px (54%)
+ *     control band         176px fixed ->  one row of six 48dp discs (56px)
+ *     bottom rail          100px       ->  64px
+ *     status line          78px card   ->  35px pill
+ *     attribution credit   60px, hidden under the rail -> 42px, visible
+ *
+ * ("Unobstructed map" is the viewport less the ETA bar, the maneuver banner and
+ * everything pinned below the map — the banner is content and is left alone.)
+ * The maneuver banner and the ETA numbers are *not* in the list: they are the
+ * part a driver reads, and shrinking chrome to keep them is the whole point.
+ *
+ * One block at the end of the file, for the reason the compact scale gives —
+ * every rule here overrides an earlier one, and narrow-screen overrides win on
+ * source order only if they are last.
+ * ======================================================================== */
+
+@media (max-width: 599px) {
+  :root {
+    --tap: 48px;
+    /* The rail is a label-and-glyph row: 48dp of button plus its own padding,
+       and a floor rather than a height so wrapped labels (large text) grow it
+       and `--nav-h` carries the growth to everything anchored on it. */
+    --navbot: 64px;
+    /* One row of six 48dp discs at 6px gaps is 318px, which every phone from
+       342dp up has between the band's two 12px margins. Below that it wraps to
+       two rows and says so below. */
+    --controls-h: 56px;
+    /* The credit is two lines of 11px legal text at this width (its sentence is
+       ~420px long and the box is ~400px), plus padding: measured 42px. */
+    --attrib-h: 44px;
+  }
+
+  /* ---- home ---------------------------------------------------------- */
+
+  /*
+   * Three tiles a row, not two.
+   *
+   * Five tiles in two columns is three rows of 124px — 392px of the launcher's
+   * own scroll before a hint card or a map summary is on screen at all. Three
+   * columns is two rows and shorter tiles (118x94 at 411dp), and the widest
+   * label ("Regions", ~62px at 16px) still fits the 106px tile the narrowest
+   * phone in range leaves. This overrides the two-column rule in the 760px
+   * block above, which is written for a tablet-held-wide and not for this.
+   */
+  .quick-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    /*
+     * Re-declared here, not in a `:root` block: `applyThemeTokens()` publishes
+     * `--grid-cell` as an *inline* style on the document element, which beats
+     * any stylesheet rule for `:root`. Custom properties inherit, so setting it
+     * on the grid — the one element that reads it — wins without `!important`
+     * and without fighting the token that owns the value.
+     */
+    --grid-cell: 88px;
+  }
+  /* `min-height` restated because the compact scale above sets a literal 112px
+     here, which beats the base rule's `var(--grid-cell)` on source order. */
+  .quick-tile { min-height: var(--grid-cell, 88px); padding: 10px 6px; gap: 4px; border-radius: var(--r-lg, 16px); }
+  .quick-icon { width: 34px; height: 34px; }
+  .quick-icon svg { width: 22px; height: 22px; }
+  .quick-label { font-size: 16px !important; line-height: 20px !important; gap: 0; }
+  .quick-hint { font-size: 13px !important; line-height: 17px !important; }
+  /* 12% of the working space is a head-unit keyline; on a phone it is two
+     49px strips of map that carry nothing but margin. */
+  .home-search { left: 16px; right: 16px; gap: 10px; }
+  .search-field { gap: 10px; }
+  .search-field svg { width: 24px; height: 24px; }
+  .search-field span { font-size: 18px !important; }
+  .continue-card, .hint-card, .error-card, .progress-card { padding: 14px; }
+  .continue-card { gap: 10px; }
+  .map-status { padding: 10px 14px; gap: 8px; font-size: 15px; line-height: 20px; }
+
+  /* ---- navigation ---------------------------------------------------- */
+
+  /*
+   * The control band: one row of six discs along the bottom of the map.
+   *
+   * This is what Google Maps does in portrait, and it is worth 120px of map
+   * over the two fixed rows the narrow layout used to reserve — a 176px band
+   * holding 104px of buttons. It clears the credit, which lifts above the rail
+   * while navigating, with `--controls-h` deciding where the status line and
+   * the layers sheet land above it.
+   */
+  .nav-controls {
+    left: 12px;
+    right: 12px;
+    gap: 6px;
+    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 12px);
+  }
+  /* The status line is metadata — layer name and traffic state — and a 78px
+     card for two lines of it is the wrong trade on this screen. One line, one
+     36px pill, still named and still readable. */
+  .nav-status {
+    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 12px + var(--controls-h, 56px) + 8px);
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+  }
+  .nav-status > * {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* The spans carry inline `T.*` token styles, which beat any stylesheet rule
+     without the flag — the same reason the compact scale above uses it. */
+  .nav-status > span { font-size: 15px !important; line-height: 19px !important; }
+  .nav-panel {
+    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 12px + var(--controls-h, 56px) + 8px);
+    max-height: calc(100% - var(--eta-h, var(--app-bar, 72px)) - var(--nav-h, var(--navbot, 100px)) - var(--attrib-h, 30px) - var(--controls-h, 56px) - 32px);
+  }
+  .nav-bottom-btn { min-height: 48px; padding: 4px 2px; gap: 2px; }
+  .nav-bottom-btn span:last-child { font-size: 15px !important; line-height: 19px !important; }
+  .eta-bar { gap: 8px; padding: var(--inset-top) 10px 0 12px; }
+  .eta-sep { height: 28px; }
+
+  /* ---- attribution credit -------------------------------------------- */
+
+  /*
+   * Small, and honest about its own size.
+   *
+   * At 13px with 44px-tall link rows the credit measured 60px at 411dp and
+   * **91px** at 320dp — legal text taking a ninth of a phone screen from the
+   * map. 11px with 3px link rows is one line of 24px at 411dp, two of 39px at
+   * 320dp, and `--attrib-h` is set to the measurement rather than to the 30px
+   * the wide layout uses.
+   */
+  .maplibregl-ctrl-attrib { font: 400 11px/1.35 var(--roboto); padding: 3px 6px; }
+}
+
+/*
+ * Below 381dp the three-across tiles and the six-across band are at their
+ * tightest, and below 342dp the band cannot hold six 48dp discs on one row
+ * (318px of buttons in 304px). Both restate here rather than in the block
+ * above: these are the widths where the numbers change, and putting them in
+ * two places is how the 320px case came to be described in three different
+ * media queries the first time.
+ */
+@media (max-width: 380px) {
+  .home-search { left: 8px; right: 8px; }
+  .quick-grid { gap: 8px; }
+}
+@media (max-width: 341px) {
+  :root {
+    --tap: 44px;
+    /* Two rows of 44dp discs at 5px. */
+    --controls-h: 52px;
+  }
+  .nav-controls { left: 8px; right: 8px; gap: 5px; }
+  .quick-tile { padding: 8px 4px; }
+  .quick-label { font-size: 15px !important; line-height: 19px !important; }
+  .nav-bottom-btn span:last-child { font-size: 14px !important; line-height: 18px !important; }
+}

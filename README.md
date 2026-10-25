@@ -70,6 +70,42 @@ JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 npm run apk
 
 Output: `android/app/build/outputs/apk/debug/app-debug.apk`
 
+### A self-contained APK, and how to tell
+
+The APK needs no remote URL to boot or to draw its map. That is not a build flag — it is
+three things holding at once:
+
+1. **The web bundle is inside the APK.** `npm run sync` copies `dist/` into
+   `android/app/src/main/assets/public/`, and Capacitor's WebView serves it from
+   `https://localhost`, the package's own origin. `capacitor.config.ts` deliberately has
+   **no `server.url`**: adding one points the WebView at a host and makes the app depend
+   on it.
+2. **The offline basemap fetches nothing.** With no network the map adopts
+   `offlineStyleSpec` (`src/map/style.ts`): GeoJSON sources with inline data, no tiles, no
+   glyphs, no sprite. `test/offlinestyle.spec.ts` runs MapLibre's *own validator* over that
+   style and fails if any fetchable URL appears in it — a style with one validation error
+   is not "slightly wrong", it is refused in full and the map draws nothing.
+3. **Everything remote is optional.** OpenFreeMap (tiles, glyphs), Nominatim and Valhalla
+   are used when reachable and degrade to the offline engine and gazetteer when not.
+
+### Verifying the APK on a device
+
+With one device or emulator connected (`adb devices`):
+
+```bash
+npm run apk            # build + sync
+npm run apk:smoke      # install it, go offline, import a fixture, screenshot, scan logcat
+```
+
+`tools/offline-smoke.mjs` installs the APK, turns airplane mode on (and restores it after),
+imports `test/fixture.osm` through the app's **real import path** — the hidden file input is
+set over the WebView DevTools socket, so the parse, graph build and style swap all run —
+and leaves screenshots in `probe-shots/offline-smoke/`. It passes when the assets report
+`Handling local request` (read from the APK, not a host), the import lands, and logcat holds
+no errors. The one expected warning is `Tile style unavailable, using offline style`: the
+app honestly reporting the substitution. It needs Node >= 22 (built-in `WebSocket`) and a
+**debug** APK, since release builds do not expose the WebView DevTools socket.
+
 ## Usage
 
 1. Get an extract from [Geofabrik](https://download.geofabrik.de/). Both

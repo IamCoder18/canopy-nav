@@ -319,6 +319,16 @@ console.log('\ntext scaling the rendered text, root untouched');
 {
   const { ctx, page } = await newNavContext(browser, 'rendered text');
 
+  // What the ETA value's size was before the scaling, so "it grew" can be
+  // measured rather than assumed from an absolute number. The check below used
+  // to demand `> 40px`, which was the size 1.75x of the old 28px scale landed
+  // on; the compact scale sets the value to 21px on purpose (see the COMPACT
+  // SCALE block in `styles.css`), and 21 x 1.75 is 36.75 — grown, and under a
+  // threshold that no longer meant anything.
+  const beforePx = await page.evaluate(() => {
+    const v = document.querySelector('.eta-value');
+    return v ? parseFloat(getComputedStyle(v).fontSize) : 0;
+  });
   const scaled = await page.evaluate(SCALE_TEXT_ONLY(1.75));
   // The precondition this whole block exists for: the root really is still 16px, so
   // the root-only detector could not possibly have seen this.
@@ -326,12 +336,15 @@ console.log('\ntext scaling the rendered text, root untouched');
     navCheck('the root font size is genuinely untouched',
     Math.abs(await rootPx(page) - 16) < 0.01,
     `root is ${await rootPx(page)}px`);
-  navCheck('the rendered text really did grow', await page.evaluate(
-    () => {
-      const v = document.querySelector('.eta-value');
-      return v ? parseFloat(getComputedStyle(v).fontSize) > 40 : false;
-    },
-  ), `eta-value is ${await page.evaluate(() => document.querySelector('.eta-value') ? getComputedStyle(document.querySelector('.eta-value')).fontSize : '(none)')}`);
+  const afterPx = await page.evaluate(() => {
+    const v = document.querySelector('.eta-value');
+    return v ? parseFloat(getComputedStyle(v).fontSize) : 0;
+  });
+  navCheck(
+    'the rendered text really did grow',
+    beforePx > 0 && afterPx / beforePx >= 1.7,
+    `eta-value ${beforePx}px -> ${afterPx}px (x${beforePx ? (afterPx / beforePx).toFixed(2) : '?'}, expected x1.75)`,
+  );
 
   const sawText = await waitForVerdict('large')(page);
     navCheck('a platform that scales rendered text is detected', sawText,

@@ -10,6 +10,7 @@
     "sync": "npm run build && rm -rf android/app/src/main/assets/public && npx cap sync android",
     "apk": "npm run sync && cd android && JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64} ./gradlew assembleDebug",
     "apk:release": "npm run sync && cd android && JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64} ./gradlew assembleRelease",
+    "apk:smoke": "node tools/offline-smoke.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 27",
@@ -47,6 +48,7 @@
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",
     "@types/geojson": "^7946.0.16",
+    "@maplibre/maplibre-gl-style-spec": "^24.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
