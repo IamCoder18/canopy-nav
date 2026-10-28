@@ -207,6 +207,44 @@ for (const vp of VIEWPORTS) {
       await page.waitForTimeout(1500);
       await visit('navigating', 'navigating');
 
+      // Exercise the same live route at small phone sizes, including the 320px
+      // breakpoint. Check actual controls rather than the transparent stack's
+      // bounding box, which intentionally extends over the map.
+      if (vp.name === 'phone-portrait') {
+        for (const size of [{ width: 320, height: 568 }, { width: 360, height: 720 }, { width: 412, height: 915 }]) {
+          await page.setViewportSize(size);
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(300);
+          const layout = await page.evaluate(() => {
+            const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
+            const eta = rect('.eta-bar');
+            const stack = rect('.banner-stack');
+            const banner = rect('.maneuver-banner');
+            const controls = [...document.querySelectorAll('.nav-controls button')];
+            const boxes = controls.map((button) => button.getBoundingClientRect());
+            const status = rect('.nav-status');
+            const rail = rect('.nav-bottom');
+            const credit = rect('.maplibregl-ctrl-attrib');
+            return {
+              etaHeight: eta.height,
+              bannerGap: stack.top - eta.bottom,
+              mapHeight: status.top - banner.bottom,
+              statusWidth: status.width,
+              oneRow: controls.every((button) => button.offsetTop === controls[0].offsetTop),
+              targets: boxes.every((box) => box.width >= 44 && box.height >= 44 && box.left >= 0 && box.right <= innerWidth),
+              controlsClear: boxes.every((box) => box.top >= status.bottom && box.bottom <= credit.top),
+              railClear: credit.bottom <= rail.top,
+            };
+          });
+          const label = `${size.width}x${size.height} navigation`;
+          check(`${label} has compact guidance`, layout.etaHeight <= 56 && layout.bannerGap >= 0 && layout.bannerGap <= 8, JSON.stringify(layout));
+          check(`${label} keeps the map open`, layout.mapHeight >= 100 && layout.statusWidth < size.width - 24);
+          check(`${label} keeps controls in one reachable row`, layout.oneRow && layout.targets && layout.controlsClear && layout.railClear);
+        }
+        await page.setViewportSize({ width: vp.width, height: vp.height });
+        await page.waitForTimeout(300);
+      }
+
       // Open the layers panel and assert it is actually operable: reachable,
       // sized, and clicking a row does not fall through to the map.
       const layerBtn = await page.$('.nav-controls button[aria-label="Map layers"]');

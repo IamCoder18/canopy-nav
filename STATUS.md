@@ -1775,7 +1775,7 @@ src/
   geo.ts                  489  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt,
                                 + headingAlong and lookAheadMetres (camera geometry)
-  styles.css 3720  layout, insets, responsive rules
+  styles.css 3732  layout, insets, responsive rules
 
   osm/
     engine.worker.ts     1307  parse (whole + streaming) -> graph -> index -> gazetteer, + A*

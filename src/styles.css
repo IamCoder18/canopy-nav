@@ -3557,11 +3557,10 @@ ul.result-list > li { margin: 0; }
     /* The rail is a label-and-glyph row: 48dp of button plus its own padding,
        and a floor rather than a height so wrapped labels (large text) grow it
        and `--nav-h` carries the growth to everything anchored on it. */
-    --navbot: 64px;
-    /* One row of six 48dp discs at 6px gaps is 318px, which every phone from
-       342dp up has between the band's two 12px margins. Below that it wraps to
-       two rows and says so below. */
-    --controls-h: 56px;
+    --navbot: 56px;
+    /* Six 48dp discs and their gaps fit above 341px. The narrower breakpoint
+       below uses 44dp discs to keep the same single row. */
+    --controls-h: 48px;
     /* The credit is two lines of 11px legal text at this width (its sentence is
        ~420px long and the box is ~400px), plus padding: measured 42px. */
     --attrib-h: 44px;
@@ -3626,6 +3625,15 @@ ul.result-list > li { margin: 0; }
 
   /* ---- navigation ---------------------------------------------------- */
 
+  /* The measured bar height already includes the top inset. Keep the guidance
+     close to it rather than reserving another inset and a 24px gap. */
+  .eta-bar { min-height: calc(52px + var(--inset-top)); }
+  .banner-stack {
+    top: calc(var(--eta-h, var(--app-bar, 72px)) + 8px);
+    left: 12px;
+    width: calc(100% - 24px);
+  }
+
   /*
    * The maneuver banner the way Google Maps draws it: a small rounded arrow
    * tile, the distance in one bold number, the instruction beside it — a
@@ -3651,13 +3659,17 @@ ul.result-list > li { margin: 0; }
     left: 12px;
     right: 12px;
     gap: 6px;
-    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 12px);
+    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 6px);
   }
   /* The status line is metadata — layer name and traffic state — and a 78px
      card for two lines of it is the wrong trade on this screen. One line, one
      36px pill, still named and still readable. */
   .nav-status {
-    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 12px + var(--controls-h, 56px) + 6px);
+    left: auto;
+    right: 12px;
+    width: max-content;
+    max-width: calc(100% - 24px);
+    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 6px + var(--controls-h, 48px) + 6px);
     flex-direction: row;
     align-items: center;
     gap: 8px;
@@ -3673,8 +3685,8 @@ ul.result-list > li { margin: 0; }
      without the flag — the same reason the compact scale above uses it. */
   .nav-status > span { font-size: 15px !important; line-height: 1.267 !important; }
   .nav-panel {
-    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 12px + var(--controls-h, 56px) + 8px);
-    max-height: calc(100% - var(--eta-h, var(--app-bar, 72px)) - var(--nav-h, var(--navbot, 100px)) - var(--attrib-h, 30px) - var(--controls-h, 56px) - 32px);
+    bottom: calc(var(--nav-h, var(--navbot, 100px)) + var(--inset-bottom) + var(--attrib-h, 30px) + 6px + var(--controls-h, 48px) + 8px);
+    max-height: calc(100% - var(--eta-h, var(--app-bar, 72px)) - var(--nav-h, var(--navbot, 100px)) - var(--attrib-h, 30px) - var(--controls-h, 48px) - 32px);
   }
   .nav-bottom-btn { min-height: 48px; padding: 4px 2px; gap: 2px; }
   .nav-bottom-btn span:last-child { font-size: 15px !important; line-height: 1.267 !important; }
@@ -3697,8 +3709,8 @@ ul.result-list > li { margin: 0; }
 
 /*
  * Below 381dp the three-across tiles and the six-across band are at their
- * tightest, and below 342dp the band cannot hold six 48dp discs on one row
- * (318px of buttons in 304px). Both restate here rather than in the block
+ * tightest, and below 342dp the band needs smaller discs to fit on one row.
+ * Both restate here rather than in the block
  * above: these are the widths where the numbers change, and putting them in
  * two places is how the 320px case came to be described in three different
  * media queries the first time.
@@ -3710,8 +3722,8 @@ ul.result-list > li { margin: 0; }
 @media (max-width: 341px) {
   :root {
     --tap: 44px;
-    /* Two rows of 44dp discs at 5px. */
-    --controls-h: 52px;
+    /* Six 44dp discs and five 5px gaps fit in the 304px available. */
+    --controls-h: 44px;
   }
   .nav-controls { left: 8px; right: 8px; gap: 5px; }
   .quick-tile { padding: 8px 4px; }
