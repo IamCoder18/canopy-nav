@@ -137,6 +137,10 @@ evaluated, which a pass or fail result does not tell you.
     — [UI and UX polish](#154-ui-and-ux-polish)
     — [The drive simulator — a debug setting](#155-the-drive-simulator--a-debug-setting)
     — [Process, for whoever picks this up](#156-process-for-whoever-picks-this-up)
+16. [The audio pass: the sentence that was cut in half, and the key that swallowed it](#16-the-audio-pass-the-sentence-that-was-cut-in-half-and-the-key-that-swallowed-it)
+    — [the fix §12.5 recorded was made in the path that cannot fail](#161-the-fix-125-recorded-was-made-in-the-path-that-cannot-fail)
+    — [every 50 metres, the sentence being spoken was cut in half](#162-every-50-metres-the-sentence-being-spoken-was-cut-in-half)
+    — [what else this pass changed, and what it did not](#163-what-else-this-pass-changed-and-what-it-did-not)
 
 ---
 
@@ -163,7 +167,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1292 unit tests across 66 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1309 unit tests across 67 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -177,7 +181,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1292 passing**, 66 files |
+| Unit tests | `npm test` | **1309 passing**, 67 files |
 | End-to-end | `npm run e2e` | **81 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -256,7 +260,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **66 files, 1292 tests**. The previous
+retyped by hand. The table is the complete set: **67 files, 1309 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -267,8 +271,8 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1292 total double-counts contrast's 34 tests**: 1258 distinct test cases are
-declared across 66 files. Both figures are recorded rather than reconciled by lowering the
+that **the 1309 total double-counts contrast's 34 tests**: 1275 distinct test cases are
+declared across 67 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
 
@@ -323,6 +327,7 @@ reading it.
 | `shellcheck.spec.ts` | 18 | the service worker's shell predicate, and that the fetch handler consults it |
 | `import.spec.ts` | 24 | a bad file is refused and never replaces a working map, that the memory guard gates the import and `forceMemory` overrides it, and that the engine's stage names map onto the pipeline steps the import screen draws |
 | `navigation.spec.ts` | 17 | off-route detection, speed-scaled thresholds, traffic verdicts |
+| `voice.spec.ts` | 17 | spoken guidance against an engine that throws, errors late and lies about its voices: the key released on failure so an instruction is retried rather than swallowed, the one-deep queue that keeps a distance refresh from cutting a sentence in half, the rung banding, and an engine death that takes the claim away as well as the speech |
 | `serve.spec.ts` | 16 | test-server path containment and no side effects on import |
 | `renderzoom.spec.ts` | 14 | zoom LOD re-application and reduced motion |
 | `reroute-backoff.spec.ts` | 14 | backoff growth to its cap |
@@ -1763,7 +1768,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx 5004  screens, navigation state, focus + announcements,
+  App.tsx 5027  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            252  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
@@ -1803,7 +1808,9 @@ src/
     progress.ts           126  ETA policy: monotone, never zero, keep last good
     maneuver.ts            85  Valhalla maneuver codes -> icons
     traffic.ts            163  fastest-of-N-alternates traffic verdict
-    voice.ts              125  spoken guidance, deduped per meaning
+    voice.ts              376  spoken guidance: rung-banded, polite behind
+                                assertive, retried on failure, honestly
+                                unavailable when the engine is gone (§16)
 
   map/
     MapView.tsx 578  MapLibre view, follow/fit/flat camera, tile/offline style switch
@@ -1816,7 +1823,7 @@ src/
     persist.ts            650  IndexedDB caching of parsed datasets
     store.ts              444  RegionLibrary singleton, per-region workers, memory gate
 
-test/            1292 unit tests, 66 files
+test/            1309 unit tests, 67 files
 test/e2e.mjs           81 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
 tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
@@ -1839,7 +1846,7 @@ tools/status-audit.mjs   471 STATUS.md checked against the files it describes
 tools/diag-route.mjs     55 throwaway used to read a failing e2e check (§3.19)
 ```
 
-`App.tsx` at 3936 lines is the largest file in the project and is now the main obstacle to
+`App.tsx` at 5027 lines is the largest file in the project and is now the main obstacle to
 working on it: the guidance model, the routing orchestration, the reroute effect and every
 screen live in one component, so a change to any of them risks all of them, and the failure
 mode is a render-time throw that only a browser suite can see (§3.19). Splitting the
@@ -2274,7 +2281,7 @@ figures in §2 are from the fresh server.
 | **The banner said "In 0 m, turn left onto a road already turned onto"** for the whole final leg — `?? active` is a maneuver *behind* the driver, so the measured leg collapsed to a single point. | Falls back to the last leg, which measures to the destination vertex. §12.3 |
 | **A stored record missing `counts` crashed the app on launch**, in a `useState` initialiser during render, with no Settings screen to recover from | Validated on read like every sibling field. Verified to fail without the fix. §12.4 |
 | The GPS watch was never cleared — the receiver stayed hot for the life of the WebView | `clearWatch` on the captured id. §12.5 |
-| `speak()` latched its dedup key before calling the platform, so a WebView with no TTS engine swallowed every instruction once and never retried, while the button read "Mute" | The key is released on failure. §12.5 |
+| `speak()` latched its dedup key before calling the platform, so a WebView with no TTS engine swallowed every instruction once and never retried, while the button read "Mute" | The key is released on failure — **but §12.5's fix released it only where `speak()` throws, and the common case reports on `utter.onerror`, where it was still latched forever. §16.1 closes the path this fix missed.** §12.5 |
 | `DEFAULT_ENGINE_IDS` listed three ids that do not exist, so any caller relying on it silently reverted a saved hosted engine to `local` | The real ids. §12.5 |
 | A blank place label round-tripped as lowercase `"home"` | Capitalised fallback, matching `readPlaces`. §12.5 |
 | The platform's font setting did nothing, and the navigation screen overlapped itself when the text was large | **Half.** Detection ships; the banner-stack fix ships and is re-measured; the control column's does not, because it made that column worse. §12.7, §7 gap 11 |
@@ -2341,7 +2348,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1292 unit tests
+npm test             # 1309 unit tests
 npm run e2e          # 81 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -2939,7 +2946,10 @@ without end, and because the queue never drained, the next maneuver arrived late
 or not at all.
 
 The distance stays — a turn instruction without one is not an instruction — and
-is bucketed to the same 50 m step the speech path already used.
+is bucketed to the same 50 m step the speech path already used. **Both channels
+have since moved to the distance rungs §16.2 introduced** — this pass fixed the
+flood, and the rungs fixed what the 50 m step left: a re-announcement every
+50 m of approach.
 
 Progress updates had the mirror-image problem: the parser emits per segment and
 the downloader per stream chunk, so the live text was "1%. 2%. 2%…" for the
@@ -5785,6 +5795,104 @@ passed it.
 **44. Record a defect's *absence* as carefully as its presence.** Half this section is
 things that turned out not to be broken. The reasoning is what stops the next person
 redoing the work.
+
+---
+
+## 16. The audio pass: the sentence that was cut in half, and the key that swallowed it
+
+Spoken guidance was the tenth audit pass's proudest fix — the Mute button that
+muted nothing, now driving the real Web Speech API — and it shipped with **zero
+tests**. `src/nav/voice.ts` was 125 lines of the most safety-critical speech in
+the app and nothing in `test/` imported it, so every defect it was written to
+prevent could return with a one-line change and the suite would stay green. This
+pass gave it a second look against a fake engine that fails the way Android
+actually fails, and found that two of them already had.
+
+### 16.1 The fix §12.5 recorded was made in the path that cannot fail
+
+§12.5's table records the dedup-key latch: `speak()` set `lastKey` *before*
+calling the platform, so a WebView with no TTS engine swallowed every
+instruction exactly once and never retried. The fix recorded there is "the key
+is released on failure", and it is — but only in the `catch`, only when
+`speechSynthesis.speak()` **throws**. The common failure does not throw. The
+Android WebView that exposes `speechSynthesis` with no TTS engine installed —
+the Android-without-Google-TTS case §12.5 itself names — reports the refusal
+**asynchronously**, on `utter.onerror`, on a later task. There the key was
+latched, `speak()` had long since returned `'speaking'`, and each instruction
+was still swallowed exactly once and never retried while the button read "Mute
+voice guidance". The precise lie `voice.ts` says it exists to prevent, live in
+the fix that was written to prevent it, and green across 1292 tests.
+
+Now:
+
+- the key is released on **every** real refusal, in both paths; this module's
+  own cancels cannot reach that code — they replace `current` before the event
+  arrives, and the handler checks identity first;
+- a refusal strikes against an engine that is declared dead after **three
+  consecutive** failures (a phone call owns the audio path and hands it back;
+  `onstart` and `onend` reset the count), or immediately for
+  `synthesis-unavailable` and `not-allowed`, where retrying is wishful;
+- a dead engine is **visible**: `isVoiceAvailable()` turns false and
+  `onVoiceAvailabilityChange` notifies the UI, so the control becomes the
+  disabled, explaining one — "Voice guidance unavailable on this device" —
+  instead of a Mute button for speech that can never happen. The UI previously
+  computed availability once per mount, which is why the notification exists at
+  all: the engine dies *mid-session*, on the first real attempt.
+
+Seventeen tests in `test/voice.spec.ts` — the first this module ever had — drive
+the fake through the throw, the late error, the cancel, the fatal code and the
+empty voice list. Each of the failure tests was confirmed to fail against the
+code as this pass found it.
+
+### 16.2 Every 50 metres, the sentence being spoken was cut in half
+
+`speak()` cancelled whatever was in flight — always, on every call. The distance
+was bucketed to 50 m, and the driver approaches: a new dedup key every 50 m of
+road. At 50 km/h that is a new utterance every 3.6 s against utterances of about
+the same length, so what a driver heard was "In 250 m, turn lef—" cut to "In 200
+m, turn lef—" cut again — sentence fragments, never a complete prompt, on every
+approach to every turn. The `priority` field documented `assertive` and
+`polite` and did nothing at all: one comment promised "everything else waits its
+turn" in code where nothing could wait.
+
+Two changes, and the difference between them is the point:
+
+- **`polite` now waits its turn.** A distance refresh of the instruction already
+  being spoken queues behind it — a queue of one, newest wins, because a string
+  of driven-past numbers is worse than silence — and speaks when the sentence in
+  flight ends. `assertive` — a new instruction, an imminent turn, an arrival —
+  still cuts in, because a turn instruction must never be heard behind a stale
+  one. `App.tsx` decides which with a ref of the last instruction spoken: same
+  instruction, new number, `polite`; different instruction, `assertive`.
+- **Distance re-announces at rungs, not at 50 m.** 10, 25, 50, 100, 200, 500 m,
+  1, 2, 5, 10, 20, 30, 50 km — eleven prompts through a long approach instead of
+  one every fifty metres, at distances a driver can act on. The rung is the
+  smallest one at or above the distance, which makes the number **exact at the
+  crossing** — the crossing *is* the rung — and stale, never invented, between
+  crossings. Above the last rung the band thins to 10 km / 10 mi steps, so a
+  250 km leg says "In 250 km" and not "In 50 km".
+
+The assistive-technology region bands to the same rungs, which supersedes
+§11.3's "same 50 m step" for both channels at once.
+
+### 16.3 What else this pass changed, and what it did not
+
+**Arrival was announced more than once.** Its key was built from the distance,
+and the distance keeps shrinking after the trip is over — so "You have arrived
+at your destination" was re-announced at every band near zero. Keyed on the
+fact, it is said once.
+
+**English strings are spoken in English.** `utter.lang` is set, because on a
+French device the engine's default voice reads "turn left onto Main Street" with
+French phonetics. And a **local** voice is preferred when the engine lists one:
+this app routes, searches and navigates offline, and guidance that needs the
+network to *speak* is guidance that dies at the county line.
+
+**Not fixed: the duck.** §15.4 item 17 — voice guidance stepping aside for a
+driver already in a phone conversation — is still open. What this pass removed
+is its worst interaction: a call that takes the audio path used to be one of the
+refusals that could kill guidance outright; it is now a tolerated transient.
+Speech still does not lower itself for the call.
 
 ---
 

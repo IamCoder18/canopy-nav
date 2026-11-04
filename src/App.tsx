@@ -46,7 +46,7 @@ import {
 } from './settings';
 import { describeError } from './errors';
 import { useTextScale } from './textscale';
-import { isVoiceAvailable, speak, cancelSpeech, voiceKey } from './nav/voice';
+import { isVoiceAvailable, onVoiceAvailabilityChange, speak, cancelSpeech, voiceKey, announceBand } from './nav/voice';
 import {
   importRegionFile, localRegionId, localRegionName, regionLib, useRegions,
   restoreRegions,
@@ -2794,20 +2794,26 @@ function NavOverlay(props: {
   /**
    * Whether the platform can speak at all.
    *
-   * Computed once per mount rather than per render: `speechSynthesis` does not
-   * appear mid-session, and reading it on every position tick is pointless work
-   * several times a second.
+   * Subscribed rather than computed once per mount, because the answer can
+   * change mid-session: the Android WebView that exposes `speechSynthesis` with
+   * no TTS engine installed reports the API truthfully and only fails when
+   * something is actually said. `nav/voice` marks that engine dead, and this
+   * flips the control to its disabled, explaining form instead of leaving a
+   * Mute button for speech that can never happen — the exact lie the module
+   * exists to prevent.
    */
-  const voiceAvailable = useMemo(() => isVoiceAvailable(), []);
+  const [voiceAvailable, setVoiceAvailable] = useState(() => isVoiceAvailable());
+  useEffect(() => onVoiceAvailabilityChange(() => setVoiceAvailable(isVoiceAvailable())), []);
 
   /**
    * Speak the guidance as it changes.
    *
-   * `voiceKey` buckets the distance, so the position updates that arrive several
-   * times a second are silent and only a genuine new step is spoken. Unmounting
-   * cancels anything in flight — otherwise leaving the screen mid-sentence leaves
-   * the WebView talking over the home screen.
+   * `voiceKey` bands the distance, so the position updates that arrive several
+   * times a second are silent and only a rung crossing or a genuine new step is
+   * spoken. Unmounting cancels anything in flight — otherwise leaving the
+   * screen mid-sentence leaves the WebView talking over the home screen.
    */
+  const lastSaid = useRef<string | null>(null);
   useEffect(() => {
     if (muted || !voiceAvailable || !instructionText) return;
     // Every *change of instruction* is spoken, not only major maneuvers.
@@ -2818,16 +2824,33 @@ function NavOverlay(props: {
     // volume down and is listening, which is the entire point of the feature —
     // got no information at the exact moment the instruction changed.
     //
-    // `voiceKey` buckets the distance, so the several position updates per
+    // `voiceKey` bands the distance, so the several position updates per
     // second that would otherwise re-announce the same turn stay silent; only a
-    // genuine new step speaks. `imminent` steps interrupt (`assertive`) because
-    // the driver is about to act; everything else waits its turn.
+    // rung crossing or a genuine new step speaks.
+    //
+    // What interrupts what, which is the difference between a prompt heard and
+    // a prompt chopped in half: a *new* instruction, an `imminent` turn or an
+    // arrival is `assertive` and cuts off the sentence in flight, because the
+    // driver is about to act on it and must never hear it queued behind a stale
+    // one. A distance refresh of the instruction already being spoken is
+    // `polite` and waits its turn (`nav/voice` queues it and speaks the newest
+    // number when the current sentence ends). Before the two were
+    // distinguished, every rung crossing cancelled the sentence being spoken —
+    // so at driving speed the driver heard sentence fragments and never a
+    // complete prompt. `lastSaid` is what tells the two apart: the instruction
+    // text, remembered across the position ticks this effect also runs on.
+    const changed = lastSaid.current !== instructionText;
+    lastSaid.current = instructionText;
     speak({
       text: arriving
         ? 'You have arrived at your destination.'
         : `In ${formatDistance(laneDist, units)}, ${instructionText}`,
-      key: voiceKey(instructionText, laneDist, units),
-      priority: arriving || imminent ? 'assertive' : 'polite',
+      // Arrival is keyed on the fact, not on the distance: `laneDist` keeps
+      // shrinking after the trip is over, and a key built from it re-announced
+      // "You have arrived" at every band near zero. Keyed on `arrived` it is
+      // said once, which is one time more than enough.
+      key: arriving ? 'arrived' : voiceKey(instructionText, laneDist, units),
+      priority: arriving || imminent || changed ? 'assertive' : 'polite',
     });
     return () => { /* keep speaking across re-render; cancel only on unmute */ };
   }, [muted, voiceAvailable, instructionText, laneDist, units, arriving, imminent]);
@@ -2853,7 +2876,7 @@ function NavOverlay(props: {
   /**
    * What a screen reader is told about the trip.
    *
-   * ## The distance is in here, and that is deliberate — but it is bucketed
+   * ## The distance is in here, and that is deliberate — but it is banded
    *
    * The comment this replaces claimed "putting the remaining distance in here
    * would rewrite the region several times a second", which was false: the
@@ -2866,13 +2889,13 @@ function NavOverlay(props: {
    * maneuver was announced late or not at all.
    *
    * So the distance stays — a turn instruction without a distance is not an
-   * instruction — and is bucketed to the same 50 m / 0.2 mi step `voiceKey`
-   * already uses for speech. The banner's own text is not bucketed, because a
-   * sighted driver *does* want the count, and the two audiences are reading
-   * different channels.
+   * instruction — and is banded to the same rungs `voiceKey` uses for speech.
+   * The band is exact at the moment the text changes (a crossing *is* a rung)
+   * and stale — never invented — between changes. The banner's own text is not
+   * banded, because a sighted driver *does* want the count, and the two
+   * audiences are reading different channels.
    */
-  const announceDist =
-    units === 'metric' ? Math.round(laneDist / 50) * 50 : Math.round(laneDist / 322) * 322;
+  const announceDist = announceBand(laneDist, units);
   const announcement = arriving
     ? 'You have arrived at your destination.'
     : instructionText
@@ -2930,12 +2953,12 @@ function NavOverlay(props: {
         render empty on mount and fill in on the next commit, which is the
         smallest change that makes the first announcement real.
 
-        **It must not rewrite on every distance bucket.** `voiceKey` buckets
-        speech to 50 m; this region had no bucket, so a driver using assistive
+        **It must not rewrite on every distance change.** `voiceKey` bands
+        speech to the rungs; this region had no band, so a driver using assistive
         technology heard "In 340 metres, turn right. In 330 metres, turn right."
         queued without end through the whole approach — and because the queue is
         never cleared, the *next* maneuver was announced late or not at all. The
-        distance is bucketed below, using the same thresholds as speech.
+        distance is banded below, using the same rungs as speech.
       */}
       <div
         className="visually-hidden"
