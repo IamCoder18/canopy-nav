@@ -5,7 +5,8 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v0.11.3 (APK attached). Main is ahead by eight passes, each recorded below:
+**Latest release:** v1.2.0 (APK attached). The work in it — including the offline
+Valhalla engine (§17) — is recorded below, pass by pass:
 
 - **§3.17–3.18** — §3.17 closes the ETA gap this document once called the most dangerous
   readout in the app. **Requirement #10 is implemented**: cross-region routing merges the
@@ -190,9 +191,9 @@ stands. **Bold** = fully working and verified.
 | Reflow at large text | `npm run reflow` | **12 checks, all passing** — was 3 failing at the start of §14 |
 | Text-scale detection | `npm run textscale` | **13 checks** — the large-text layout switches on for every way a platform can scale text (§14.8). Was recorded as 14 and as passing; it failed **3 of 12 runs** (§2.3) |
 | Memory gate | `npm run memory` | **8 checks** — the boxed node map measured at **116–133 B/node** against the 229 B/node budget, plus four structural properties (§15.3 item 10) |
-| Bundle budget | `npm run bundle` | entry 119.2 kB / 130, initial 125.6 / 150, largest 282.1 / 300, total JS 426.7 / 460 (gzip) |
+| Bundle budget | `npm run bundle` | entry 128.0 kB / 130, initial 136.2 / 150, largest 278.0 / 300, total JS 483.7 / 490 (gzip) |
 | Offline cold start | verified in-browser | reload with the network off renders the app: 5 tiles, map sized, 0 console errors |
-| Release | v0.11.3 tag | **CI green, Release green**, APK attached |
+| Release | v1.2.0 tag | **CI green, Release green**, APK attached |
 | APK | `npm run apk` | debug APK, `com.canopy.nav`, minSdk 23, targetSdk 35 |
 | Device | Android 14 emulator, API 34, 2340×1080 | installs, runs, **zero console output**, real GPS confirmed |
 

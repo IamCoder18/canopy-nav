@@ -7,7 +7,7 @@ Built with **Capacitor + React 19 + TypeScript**. The entire UI is web
 technology wrapped in a native shell, so the same codebase runs in a browser —
 which is why most of it is verified in Chromium rather than on a device.
 
-Latest release: **v0.11.3**. See [STATUS.md](./STATUS.md) for the full design
+Latest release: **v1.2.0**. See [STATUS.md](./STATUS.md) for the full design
 record, including what is *not* finished.
 
 ---
