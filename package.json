@@ -20,6 +20,7 @@
     "verify": "node tools/verify.mjs",
     "bundle": "node tools/bundle-budget.mjs",
     "e2e": "node test/e2e.mjs",
+    "e2e:wasm": "node test/valhalla-wasm.e2e.mjs",
     "memory": "vitest run test/memory.spec.ts",
     "screens": "node test/screens.mjs",
     "uiaudit": "node tools/ui-audit.mjs",
@@ -43,7 +44,8 @@
     "@capacitor/filesystem": "^7.0.0",
     "maplibre-gl": "^5.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "valhalla-wasm": "^0.1.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",

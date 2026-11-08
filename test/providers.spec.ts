@@ -21,7 +21,8 @@ import {
   type Provider,
 } from '../src/nav/providers';
 import { parseOsmXml, buildDataset, type OsmDataset } from '../src/osm/engine.worker';
-import { RoutingError, VALHALLA_ENDPOINT } from '../src/nav/valhalla';
+import { RoutingError, VALHALLA_ENDPOINT, type Route } from '../src/nav/valhalla';
+import type { LocalValhallaClient } from '../src/nav/valhalla-local';
 import type { LatLng } from '../src/geo';
 
 /** A 3-node residential street: (0,0) -> (0.005, 0) -> (0.01, 0). */
@@ -93,23 +94,31 @@ afterEach(() => {
 });
 
 describe('PROVIDERS', () => {
-  it('describes the four providers in chain order', () => {
+  it('describes the five providers in chain order — offline sources first', () => {
     expect(PROVIDERS.map((p) => p.id)).toEqual([
-      'local', 'valhalla-fossgis', 'valhalla-simplerouting', 'valhalla-custom',
+      'local-valhalla', 'local', 'valhalla-fossgis', 'valhalla-simplerouting', 'valhalla-custom',
     ]);
     expect(PROVIDERS[0].online).toBe(false);
     expect(PROVIDERS[0].endpoint).toBe('');
-    expect(PROVIDERS[1].endpoint).toBe(VALHALLA_ENDPOINT);
-    expect(PROVIDERS[1].requiresKey).toBeUndefined();
+    expect(PROVIDERS[1].online).toBe(false);
+    expect(PROVIDERS[2].endpoint).toBe(VALHALLA_ENDPOINT);
+    expect(PROVIDERS[2].requiresKey).toBeUndefined();
   });
 
   it('marks simplerouting as key-gated and custom as endpoint-gated', () => {
-    const simple = PROVIDERS[2];
+    const simple = PROVIDERS[3];
     expect(simple.requiresKey).toBe(true);
     expect(simple.headers).toEqual({ Authorization: '' });
-    const custom = PROVIDERS[3];
+    const custom = PROVIDERS[4];
     expect(custom.endpoint).toBe('');
     expect(custom.requiresKey).toBeUndefined();
+  });
+
+  it('says which sources carry real turn-by-turn', () => {
+    // Valhalla generates maneuvers wherever it runs; the graph engine does not.
+    expect(PROVIDERS.find((p) => p.id === 'local-valhalla')!.maneuvers).toBe(true);
+    expect(PROVIDERS.find((p) => p.id === 'local')!.maneuvers).toBe(false);
+    expect(PROVIDERS.filter((p) => p.online).every((p) => p.maneuvers)).toBe(true);
   });
 
   it('gives every provider a label and a subtitle', () => {
@@ -561,5 +570,135 @@ describe('RoutingError interop', () => {
     const re = new RoutingError('x', 422);
     expect(re.status).toBe(422);
     expect(re instanceof Error).toBe(true);
+  });
+});
+/* ------------------- offline Valhalla (routing packs) ------------------- */
+
+/**
+ * The two offline sources: a Valhalla pack (real maneuvers) and the in-app
+ * graph, each its own provider and its own row in the plan (§17.7). These pin
+ * which of them answers, what the trace says about each, that a declined pack
+ * is a *failed row* the next source can recover from, and that a pack engine
+ * with no pack is skipped rather than asked.
+ */
+describe('resolveRoute — the two offline sources', () => {
+  function packRoute(): Route {
+    return {
+      geometry: [[0, 0], [0.005, 0], [0.01, 0]],
+      legs: [{
+        geometry: [[0, 0], [0.01, 0]],
+        maneuvers: [{ type: 1, instruction: 'Drive.', begin_shape_index: 0, end_shape_index: 2, length: 1, time: 60 }],
+        summary: { length: 1000, time: 120, min_lat: 0, min_lon: 0, max_lat: 0, max_lon: 0.01 },
+      }],
+      maneuvers: [{ type: 1, instruction: 'Drive.', begin_shape_index: 0, end_shape_index: 2, length: 1, time: 60 }],
+      summary: { length: 1000, time: 120, min_lat: 0, min_lon: 0, max_lat: 0, max_lon: 0.01 },
+      units: 'km',
+      engine: 'valhalla-local',
+    };
+  }
+
+  function stubLocal(opts: {
+    ready?: boolean;
+    route?: () => Promise<Route>;
+    calls?: string[];
+  } = {}): LocalValhallaClient {
+    return {
+      ready: () => opts.ready ?? true,
+      regions: () => ['fixture'],
+      mount: async () => { opts.calls?.push('mount'); },
+      unmount: () => { opts.calls?.push('unmount'); },
+      route: async () => {
+        opts.calls?.push('route');
+        return opts.route ? opts.route() : packRoute();
+      },
+      dispose: () => { opts.calls?.push('dispose'); },
+    };
+  }
+
+  it('answers from the pack engine, without touching the network or the graph', async () => {
+    const calls: string[] = [];
+    const out = await resolveRoute(
+      { from: FROM, to: TO, provider: 'local-valhalla', plan: ['local-valhalla'] }, dataset(), {}, undefined,
+      stubLocal({ calls }),
+    );
+    expect(out.used).toBe('local-valhalla');
+    expect(out.route.engine).toBe('valhalla-local');
+    expect(out.attempts).toEqual([
+      expect.objectContaining({ engine: 'local-valhalla', label: 'Offline Valhalla', outcome: 'served', reason: null }),
+    ]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(calls).toEqual(['route']);
+  });
+
+  it('walks from a declined pack to the graph engine — one row each', async () => {
+    const out = await resolveRoute(
+      { from: FROM, to: TO, provider: 'local-valhalla', plan: ['local-valhalla', 'local'] }, dataset(), {}, undefined,
+      stubLocal({ route: async () => { throw new RoutingError('No route found between those points on the offline map.'); } }),
+    );
+    expect(out.route.engine).toBe('osm-local');
+    expect(out.used).toBe('local');
+    // Each source has its own row: the pack's decline is a *failure with its
+    // reason*, not a note attached to somebody else's success.
+    expect(out.attempts.map((a) => [a.engine, a.outcome])).toEqual([
+      ['local-valhalla', 'failed'],
+      ['local', 'served'],
+    ]);
+    expect(out.attempts[0].reason).toMatch(/No route found/);
+    expect(out.attempts[1].reason).toBeNull();
+    expect(out.fellBack).toBe(true);
+  });
+
+  it('skips the pack engine with its reason when no pack is installed', async () => {
+    const calls: string[] = [];
+    const out = await resolveRoute(
+      { from: FROM, to: TO, provider: 'local-valhalla', plan: ['local-valhalla', 'local'] }, dataset(), {}, undefined,
+      stubLocal({ ready: false, calls }),
+    );
+    expect(out.route.engine).toBe('osm-local');
+    expect(out.attempts[0]).toEqual(
+      expect.objectContaining({ engine: 'local-valhalla', outcome: 'skipped', reason: 'No routing pack installed' }),
+    );
+    // A source that knows it cannot answer is never asked.
+    expect(calls).toEqual([]);
+  });
+
+  it('combines both offline reasons in the headline when nothing served', async () => {
+    const err = await resolveRoute(
+      { from: FROM, to: FAR_AWAY, provider: 'local-valhalla', plan: ['local-valhalla', 'local'] }, dataset(), {}, undefined,
+      stubLocal({ route: async () => { throw new RoutingError('The offline map has no road near the start or destination.'); } }),
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(NoRouteError);
+    // The message a driver reads blames both sources honestly.
+    expect(err.message).toMatch(/no road near/i);
+    expect(err.message).toMatch(/imported map had no route/i);
+  });
+
+  it('behaves exactly as before when no pack engine is passed at all', async () => {
+    const out = await resolveRoute({ from: FROM, to: TO, provider: 'local' }, dataset(), {});
+    expect(out.route.engine).toBe('osm-local');
+    expect(out.attempts[0].label).toBe('Offline (.osm)');
+  });
+
+  it('honours strict the same way: the plan is the whole world', async () => {
+    const out = await resolveRoute(
+      { from: FROM, to: TO, provider: 'local', plan: ['local'], strict: true },
+      dataset(), {}, undefined,
+      stubLocal({ route: async () => { throw new RoutingError('declined'); } }),
+    );
+    // `local` is the graph engine now, and the plan names it; it answers.
+    expect(out.route.engine).toBe('osm-local');
+    expect(out.attempts).toHaveLength(1);
+  });
+
+  it('a cancelled request is not an engine failure', async () => {
+    const ac = new AbortController();
+    ac.abort(new Error('superseded'));
+    const err = await resolveRoute(
+      { from: FROM, to: TO, provider: 'local-valhalla', plan: ['local-valhalla'] }, dataset(), {}, ac.signal,
+      stubLocal({ route: async () => { throw new RoutingError('The offline map has no road near the start or destination.'); } }),
+    ).catch((e) => e);
+    // The abort surfaces as the caller's own reason, not as a routing failure.
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('superseded');
   });
 });

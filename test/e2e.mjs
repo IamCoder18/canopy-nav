@@ -164,7 +164,7 @@ try {
 
   /* ---------------- import an .osm file ---------------- */
   console.log('\nimport');
-  await page.click('text=Import .osm file');
+  await page.click('text=Import .osm or routing pack');
   await page.waitForTimeout(600);
   const input = await page.$('input[type=file]');
   check('file input present', !!input);
@@ -1464,7 +1464,8 @@ console.log('\ndrive simulator');
       const rows = [...document.querySelectorAll('.provider-row')];
       return {
         title: /Engines/.test(text),
-        // "Any online engine" plus the four registry entries.
+        // "Any online engine" plus the five registry entries — the offline
+        // sources split into the pack engine and the map engine (§17.7).
         rows: rows.length,
         labels: rows.map((r) => r.textContent.trim()),
         // Every row must state availability either way -- a bare engine name
@@ -1475,7 +1476,7 @@ console.log('\ndrive simulator');
       };
     });
     check('engines screen opens', engineScreen.title);
-    check('every engine is listed and selectable', engineScreen.rows === 5,
+    check('every engine is listed and selectable', engineScreen.rows === 6,
       `${engineScreen.rows} rows: ${engineScreen.labels.map((l) => l.split('\n')[0]).join(', ')}`);
     check('each engine states whether it is usable', engineScreen.allExplained);
     check('fallback is an explicit choice', engineScreen.fallbackControl);

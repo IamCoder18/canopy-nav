@@ -24,6 +24,7 @@ import {
   createRerouteState, type RerouteState,
 } from './nav/reroute';
 import { RequestGate, isSuperseded } from './nav/requests';
+import { getLocalValhalla } from './nav/valhalla-local';
 import { stepsEmptyReason } from './nav/steps';
 import { inferSteps, summariseTrace, type GuidanceTraceEntry } from './nav/guidance';
 import {
@@ -48,7 +49,7 @@ import { describeError } from './errors';
 import { useTextScale } from './textscale';
 import { isVoiceAvailable, onVoiceAvailabilityChange, speak, cancelSpeech, voiceKey, announceBand } from './nav/voice';
 import {
-  importRegionFile, localRegionId, localRegionName, regionLib, useRegions,
+  importRegionFile, importPackFile, packRegionId, localRegionId, localRegionName, regionLib, useRegions,
   restoreRegions,
 } from './regions/store';
 import { searchAll } from './osm/regions';
@@ -1018,6 +1019,27 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   }, []);
 
   const onFile = useCallback(async (file: File) => {
+    // A routing pack is data for the offline Valhalla engine, not OSM to parse:
+    // it never becomes a graph, so it must not be pushed through the parse
+    // pipeline (or its memory guard). Same picker, different destination —
+    // `RegionsScreen` routes the same way.
+    if (/\.tar$/i.test(file.name ?? '')) {
+      const info = await importPackFile({
+        id: packRegionId(file),
+        file,
+        onError: setImportError,
+        onPersistError: (m) => setImportWarn(
+          m
+            ? `Installed, but it could not be saved for next time: ${m}. It will be gone when you close the app.`
+            : null,
+        ),
+      });
+      if (info) {
+        showToast(`Routing pack installed — ${info.tiles} tiles of offline Valhalla guidance.`);
+        go('home');
+      }
+      return;
+    }
     const ds = await build(file, localRegionId(file), localRegionName(file), 'local');
     if (ds) {
       // The map screen the driver lands on states the same fact in its status
@@ -1058,6 +1080,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
         dataset,
         { apiKey, endpoint },
         signal,
+        getLocalValhalla(),
       );
       // Throws `SupersededError` if a newer search has started, so none of the
       // writes below can happen for an answer nobody asked for any more.
@@ -1503,6 +1526,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
           dataset,
           { apiKey, endpoint },
           signal,
+          getLocalValhalla(),
         );
         // The trip can end while this is in flight — Exit, or a new destination.
         // Without this the abandoned response installs a route on whatever screen
@@ -1988,6 +2012,7 @@ const banner = rerouteNotice ?? routeError ?? null;
           setSelection={setSelection}
           online={online}
           hasMap={dataset !== null || regions.length > 0}
+          hasPacks={regionLib.packedIds.length > 0}
           apiKey={apiKey}
           setApiKey={setApiKey}
           endpoint={endpoint}
@@ -2323,9 +2348,9 @@ function HomeScreen(p: HomeProps) {
             {/*
               The launcher's call to action, laid out as one: an icon, one
               sentence of why, the one command that matters. The label is
-              exactly `Import .osm file` — the browser gates select it by that
-              text — and it is the only element on this screen whose text
-              contains it.
+              exactly `Import .osm or routing pack` — the browser gates select
+              it by that text — and it is the only element on this screen whose
+              text contains it.
             */}
             <div className="import-invite-head">
               <IconFile size={ICON.primary} color={accentNight} />
@@ -2334,9 +2359,10 @@ function HomeScreen(p: HomeProps) {
             <div style={{ ...T.sub3, color: ink.secondary, marginBottom: DP.P3 }}>
               Download an extract from Geofabrik —
               <code>.osm.pbf</code> directly, or convert with
-              <code> osmium cat region.osm.pbf -o region.osm</code>.
+              <code> osmium cat region.osm.pbf -o region.osm</code>. A Valhalla
+              routing pack (<code>.tar</code>) adds real turn-by-turn.
             </div>
-            <button className="text-btn" onClick={p.onImport}>Import .osm file</button>
+            <button className="text-btn" onClick={p.onImport}>Import .osm or routing pack</button>
           </div>
         )}
         {/*
@@ -3709,7 +3735,16 @@ function PreviewCard(props: {
             <div className="preview-rows" role="status">
               <PreviewRow label="Time" value={formatDuration(route.summary.time)} icon={<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>} />
               <PreviewRow label="Distance" value={formatDistance(route.summary.length, units)} />
-              <PreviewRow label="Engine" value={route.engine === 'valhalla' ? 'Valhalla' : 'Offline .osm'} />
+              <PreviewRow
+                label="Engine"
+                value={
+                  route.engine === 'valhalla'
+                    ? 'Valhalla'
+                    : route.engine === 'valhalla-local'
+                      ? 'Valhalla (offline)'
+                      : 'Offline .osm'
+                }
+              />
             </div>
             {/*
               * Saving a place is a secondary action, so it sits *below* the
@@ -4302,6 +4337,8 @@ function EnginesScreen(props: {
   setSelection: (s: EngineSelection) => void;
   online: boolean;
   hasMap: boolean;
+  /** At least one routing pack is installed — the pack engine's readiness fact. */
+  hasPacks: boolean;
   apiKey: string; setApiKey: (v: string) => void;
   endpoint: string; setEndpoint: (v: string) => void;
   provenance: RouteProvenance | null;
@@ -4321,6 +4358,7 @@ function EnginesScreen(props: {
   const statuses = engineStatuses(
     { endpoint: props.endpoint, apiKey: props.apiKey },
     props.hasMap,
+    props.hasPacks,
   );
   const [probes, setProbes] = useState<Record<string, EngineProbe>>({});
   const [probing, setProbing] = useState<string | null>(null);
@@ -4348,7 +4386,7 @@ function EnginesScreen(props: {
     try {
       // Probes are deliberately not cached: a stale "reachable" is worse than no
       // answer at all when the question is "is it up right now".
-      const r = await probeEngine(id, { endpoint: props.endpoint, apiKey: props.apiKey }, props.hasMap);
+      const r = await probeEngine(id, { endpoint: props.endpoint, apiKey: props.apiKey }, props.hasMap, props.hasPacks);
       setProbes((p) => ({ ...p, [id]: r }));
     } finally {
       setProbing(null);
@@ -5000,7 +5038,7 @@ function SettingsScreen(props: {
               : 'Import a .osm extract to enable offline routing and search.'}
           </div>
           <div className="region-actions">
-            <button className="text-btn" onClick={props.onImport}>Import .osm</button>
+            <button className="text-btn" onClick={props.onImport}>Import .osm or pack</button>
             <button className="pill-btn" onClick={props.onRegions}>
               Regions ({props.regionCount})
             </button>
@@ -5111,7 +5149,7 @@ function ImportScreen(props: {
         <input
           ref={fileRef}
           type="file"
-          accept=".osm,.pbf,.xml,application/octet-stream"
+          accept=".osm,.pbf,.xml,.tar,application/octet-stream"
           className="visually-hidden-input"
           tabIndex={-1}
           aria-hidden="true"

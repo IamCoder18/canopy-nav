@@ -93,8 +93,13 @@ afterEach(() => {
 /* ----------------------------- planRoute ----------------------------- */
 
 describe('planRoute — preference order', () => {
-  it('puts the offline engine first by default', () => {
-    expect(planRoute(DEFAULT_SELECTION)[0]).toBe('local');
+  it('puts the offline Valhalla pack engine first by default', () => {
+    // The two offline sources split (§17.7) and the pack engine is the better
+    // one: real maneuvers when a pack is installed, skipped when not.
+    expect(DEFAULT_SELECTION.preferred).toBe('local-valhalla');
+    expect(planRoute(DEFAULT_SELECTION)).toEqual([
+      'local-valhalla', 'local', 'valhalla-fossgis', 'valhalla-simplerouting', 'valhalla-custom',
+    ]);
   });
 
   it('keeps the online engines behind the offline one so local can answer first', () => {
@@ -117,9 +122,9 @@ describe('planRoute — preference order', () => {
     expect(plan[plan.length - 1]).toBe('local');
   });
 
-  it('appends the offline engine after a named online engine', () => {
+  it('appends both offline engines after a named online engine', () => {
     const plan = planRoute(sel({ preferred: 'valhalla-fossgis', allowFallback: true }));
-    expect(plan).toEqual(['valhalla-fossgis', 'local']);
+    expect(plan).toEqual(['valhalla-fossgis', 'local-valhalla', 'local']);
   });
 });
 
@@ -152,10 +157,13 @@ describe('planRoute — fallback disabled', () => {
 /* ----------------------------- readiness ----------------------------- */
 
 describe('engineStatuses', () => {
-  it('lists "any online" ahead of the four concrete engines', () => {
+  it('lists "any online" ahead of the five concrete engines', () => {
     const s = engineStatuses({}, false);
     expect(s[0].id).toBe(ANY_ONLINE);
-    expect(s).toHaveLength(5);
+    expect(s).toHaveLength(6);
+    expect(s.slice(1).map((x) => x.id)).toEqual([
+      'local-valhalla', 'local', 'valhalla-fossgis', 'valhalla-simplerouting', 'valhalla-custom',
+    ]);
   });
 
   it('names a concrete reason per unready engine rather than a generic one', () => {
@@ -443,5 +451,49 @@ describe('isOnlineEngine', () => {
   it('treats "any online" as online and the offline engine as not', () => {
     expect(isOnlineEngine(ANY_ONLINE)).toBe(true);
     expect(isOnlineEngine('local')).toBe(false);
+  });
+});
+/* --------------------- the two offline sources --------------------- */
+
+/**
+ * The offline sources are separate providers now (§17.7): a Valhalla pack
+ * (real maneuvers) and the imported-map graph (none). Each is selectable,
+ * ready on its own fact, and named truthfully wherever it is reported — the
+ * composite behind one id that needed an `engine` tag to explain itself is
+ * gone, and so is the tag.
+ */
+describe('the two offline sources', () => {
+  it('hasManeuvers is a property of the source, not of being online', () => {
+    expect(hasManeuvers('local-valhalla')).toBe(true);
+    expect(hasManeuvers('local')).toBe(false);
+    expect(hasManeuvers('valhalla-fossgis')).toBe(true);
+  });
+
+  it('describeProvenance names the offline source that answered', () => {
+    expect(describeProvenance('local-valhalla', false)).toBe('Offline Valhalla');
+    expect(describeProvenance('local-valhalla', true)).toBe('Offline Valhalla (fallback)');
+    expect(describeProvenance('local', false)).toBe('Offline (.osm)');
+  });
+
+  it('each offline source is ready on its own fact', () => {
+    const withPack = Object.fromEntries(engineStatuses({}, false, true).map((x) => [x.id, x]));
+    const withMap = Object.fromEntries(engineStatuses({}, true, false).map((x) => [x.id, x]));
+    expect(withPack['local-valhalla'].ready).toBe(true);
+    expect(withMap['local-valhalla'].ready).toBe(false);
+    expect(withMap['local-valhalla'].reason).toBe('No routing pack installed');
+    expect(withMap.local.ready).toBe(true);
+    expect(withPack.local.ready).toBe(false);
+    expect(withPack.local.reason).toBe('No offline map loaded');
+  });
+
+  it('probeEngine says which fact each offline source is missing', async () => {
+    expect(await probeEngine('local-valhalla', {}, false, false))
+      .toEqual({ ok: false, detail: 'No routing pack installed', ms: null });
+    expect(await probeEngine('local-valhalla', {}, false, true))
+      .toEqual({ ok: true, detail: 'Routing pack loaded', ms: null });
+    expect(await probeEngine('local', {}, true, false))
+      .toEqual({ ok: true, detail: 'Offline map loaded', ms: null });
+    expect(await probeEngine('local', {}, false, false))
+      .toEqual({ ok: false, detail: 'No offline map loaded', ms: null });
   });
 });

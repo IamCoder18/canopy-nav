@@ -308,6 +308,46 @@ export async function osmToPbf(xmlText, perBlock) {
   return { bytes: await encodeFromParsed(nodes, ways, perBlock), nodeCount: nodes.size, wayCount: ways.length };
 }
 
+export { parseOsmXml };
+
+/**
+ * Encode **type-sorted**: every node (by id) before every way (by id).
+ *
+ * `encodeFromParsed` interleaves ways into their first node's block, which is
+ * legal OSM PBF but not the *canonical* sorted order — and some consumers
+ * require that. `valhalla_build_tiles` is one: it refuses interleaved input
+ * with "Detected unsorted input data", because its graph builder wants the
+ * nodes phase complete before the first way arrives.
+ *
+ * Output is deliberately separate from `encodeFromParsed` so the committed
+ * `test/fixture.osm.pbf` (whose bytes `tools/verify.mjs` pins) never moves.
+ */
+export async function encodeSorted(nodes, ways, perBlock = 4000) {
+  const all = [...nodes.values()].sort((a, b) => a.id - b.id);
+  const sortedWays = [...ways].sort((a, b) => a.id - b.id);
+  const parts = [];
+
+  const xs = all.map((n) => n.lon);
+  const ys = all.map((n) => n.lat);
+  const bbox = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  parts.push(await blob('OSMHeader', encodeHeader(bbox)));
+
+  const t = new Table();
+  for (const n of all) for (const [k, v] of n.tags ?? []) { t.of(k); t.of(v); }
+  for (const w of sortedWays) for (const [k, v] of w.tags) { t.of(k); t.of(v); }
+
+  for (let i = 0; i < all.length; i += perBlock) {
+    const chunk = all.slice(i, i + perBlock);
+    parts.push(await blob('OSMData', encodeBlock([[[2, encodeDense(chunk, t)]]], t)));
+  }
+  for (let i = 0; i < sortedWays.length; i += perBlock) {
+    const chunk = sortedWays.slice(i, i + perBlock);
+    const group = chunk.map((w) => [3, encodeWay(w.id, w.refs, w.tags, t)]);
+    parts.push(await blob('OSMData', encodeBlock([group], t)));
+  }
+  return concat(parts);
+}
+
 // CLI
 if (import.meta.url === `file://${process.argv[1]}`) {
   const [, , input, output, perBlock] = process.argv;

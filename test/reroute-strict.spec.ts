@@ -263,7 +263,9 @@ describe('a pinned engine with fallback off', () => {
       { preferred: 'valhalla-custom', allowFallback: true },
       { dataset: offlineEngineThatCanRoute() },
     );
-    expect(loose.plan).toEqual(['valhalla-custom', 'local']);
+    // Both offline sources follow a hosted preference (§17.7): the pack engine
+    // first — skipped here, no pack — then the map engine.
+    expect(loose.plan).toEqual(['valhalla-custom', 'local-valhalla', 'local']);
     // FAR_OFF -> DESTINATION is not on the offline street graph, so this one
     // still fails; the point is that `local` was *tried*.
     expect(fetchMock).not.toHaveBeenCalled();

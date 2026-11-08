@@ -23,6 +23,7 @@
 import { validateEndpoint, isEndpointUsable } from '../settings';
 import {
   PROVIDERS,
+  LOCAL_ENGINES,
   isOnline,
   probeProvider,
   type Provider,
@@ -54,16 +55,21 @@ export interface EngineSelection {
 /**
  * Offline-first, but reachable.
  *
- * `local` first so an imported province keeps answering with the engine it was
- * built for, with the online engines behind it for the routes the extract does
- * not cover. This is strictly more capable than the previous fixed behaviour,
- * which was local-only with no fallback at all.
+ * `local-valhalla` first: when a routing pack is installed it is the best
+ * offline answer this app has (real turn-by-turn, Valhalla's costing), and the
+ * imported-map engine sits behind it for pairs the pack does not cover. With
+ * no pack, the pack engine is *skipped* — one honest row — and the map engine
+ * answers exactly as before. The hosted engines follow both.
  */
-export const DEFAULT_SELECTION: EngineSelection = { preferred: 'local', allowFallback: true };
+export const DEFAULT_SELECTION: EngineSelection = { preferred: 'local-valhalla', allowFallback: true };
 
 export function isOnlineEngine(id: EngineId): boolean {
   if (id === ANY_ONLINE) return true;
   return PROVIDERS.find((p) => p.id === id)?.online ?? false;
+}
+
+function isLocalEngine(id: EngineId): boolean {
+  return (LOCAL_ENGINES as readonly string[]).includes(id);
 }
 
 /**
@@ -71,6 +77,13 @@ export function isOnlineEngine(id: EngineId): boolean {
  *
  * `any-online` expands to every online engine in registry order rather than to
  * one, so "any" means genuinely any and the trace shows which one answered.
+ *
+ * The tail rule keeps the pre-split asymmetry, widened to both offline
+ * sources: a preference for *either* offline engine falls back to the other
+ * one and then to the hosted engines; a preference for a hosted engine falls
+ * back only to the offline engines — falling from one hosted engine to another
+ * was never the policy, and a rate-limited demo server is not a reason to try
+ * a paid one.
  */
 export function planRoute(
   selection: EngineSelection,
@@ -79,7 +92,9 @@ export function planRoute(
   const remote = PROVIDERS.filter((p) => p.online).map((p) => p.id);
   const head: ProviderId[] = selection.preferred === ANY_ONLINE ? remote : [selection.preferred];
   if (!selection.allowFallback) return head;
-  const tail: ProviderId[] = selection.preferred === 'local' ? remote : ['local'];
+  const tail: ProviderId[] = isLocalEngine(selection.preferred)
+    ? [...LOCAL_ENGINES.filter((id) => id !== selection.preferred), ...remote]
+    : LOCAL_ENGINES.filter((id) => id !== selection.preferred);
   return [...head, ...tail.filter((id) => !head.includes(id))];
 }
 
@@ -122,6 +137,7 @@ function statusFor(
   provider: Provider | undefined,
   state: { endpoint?: string; apiKey?: string },
   offlineMap: boolean,
+  packs: boolean,
 ): EngineStatus {
   const label = id === ANY_ONLINE ? ANY_ONLINE_LABEL : provider?.label ?? id;
   const subtitle =
@@ -164,6 +180,15 @@ function statusFor(
     return { ...base, ready: true, reason: null };
   }
 
+  // The two offline sources are ready on different facts: the pack engine
+  // needs a routing pack, the map engine an imported map. One boolean could
+  // not describe both, and "No offline map loaded" on a pack engine's row was
+  // a sentence about the wrong thing.
+  if (provider.id === 'local-valhalla') {
+    return packs
+      ? { ...base, ready: true, reason: null }
+      : { ...base, ready: false, reason: 'No routing pack installed' };
+  }
   return offlineMap
     ? { ...base, ready: true, reason: null }
     : { ...base, ready: false, reason: 'No offline map loaded' };
@@ -173,9 +198,10 @@ function statusFor(
 export function engineStatuses(
   state: { endpoint?: string; apiKey?: string } = {},
   offlineMap = false,
+  packs = false,
 ): EngineStatus[] {
   return [ANY_ONLINE, ...PROVIDERS.map((p) => p.id)].map((id) =>
-    statusFor(id, id === ANY_ONLINE ? undefined : PROVIDERS.find((p) => p.id === id), state, offlineMap),
+    statusFor(id, id === ANY_ONLINE ? undefined : PROVIDERS.find((p) => p.id === id), state, offlineMap, packs),
   );
 }
 
@@ -197,6 +223,7 @@ export async function probeEngine(
   id: EngineId,
   state: { endpoint?: string; apiKey?: string },
   offlineMap: boolean,
+  packs = false,
 ): Promise<EngineProbe> {
   if (id === ANY_ONLINE) {
     const t0 = Date.now();
@@ -209,6 +236,12 @@ export async function probeEngine(
   const provider = PROVIDERS.find((p) => p.id === id);
   if (!provider) return { ok: false, detail: 'Unknown engine', ms: null };
   if (!provider.online) {
+    // Each offline source is probed on the fact that makes it usable.
+    if (provider.id === 'local-valhalla') {
+      return packs
+        ? { ok: true, detail: 'Routing pack loaded', ms: null }
+        : { ok: false, detail: 'No routing pack installed', ms: null };
+    }
     return offlineMap
       ? { ok: true, detail: 'Offline map loaded', ms: null }
       : { ok: false, detail: 'No offline map loaded', ms: null };
@@ -226,17 +259,24 @@ export async function probeEngine(
  * The distinction that matters: the *selected* engine is a preference, the
  * *serving* engine is a fact. Reporting the preference as though it were the fact
  * is how an app ends up labelling a locally-computed route with a hosted
- * provider's name — and the local engine has no maneuvers, so the turn-by-turn
- * the label implies is simply not there.
+ * provider's name — and the in-app graph engine has no maneuvers, so the
+ * turn-by-turn such a label implies is simply not there.
  */
 export function describeProvenance(used: ProviderId, fellBack: boolean): string {
   const label = PROVIDERS.find((p) => p.id === used)?.label ?? used;
   return fellBack ? `${label} (fallback)` : label;
 }
 
-/** Whether the serving engine can produce real instructions, not just a line. */
+/**
+ * Whether the serving engine can produce real instructions, not just a line.
+ *
+ * A property of the provider table (`Provider.maneuvers`), not of whether the
+ * engine is online: Valhalla generates maneuvers wherever it runs — hosted or
+ * from a routing pack on the device — and the in-app graph engine generates a
+ * line and nothing else.
+ */
 export function hasManeuvers(used: ProviderId): boolean {
-  return PROVIDERS.find((p) => p.id === used)?.online ?? false;
+  return PROVIDERS.find((p) => p.id === used)?.maneuvers ?? false;
 }
 
 /** Compact one-liner per trace row, for the engine panel and the nav banner. */

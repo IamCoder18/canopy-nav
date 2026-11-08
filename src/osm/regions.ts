@@ -25,6 +25,24 @@ export interface RegionMeta {
   counts: OsmDataset['counts'];
   /** Index size, useful for the settings screen. */
   gazetteerSize: number;
+  /**
+   * The routing pack attached to this region, when one is installed.
+   *
+   * A live view of `regions/packstore`, refreshed at startup and on import —
+   * the pack store is the source of truth and this is what screens render.
+   * Deliberately not persisted with the meta row: a pack is stored (and can be
+   * lost) independently of the parsed map, and a stale "pack installed" flag on
+   * a region whose pack is gone is worse than none.
+   */
+  pack?: PackInfo;
+}
+
+/** What a region knows about its routing pack. Kept in `packstore`, shown here. */
+export interface PackInfo {
+  /** Pack size on disk. */
+  bytes: number;
+  /** `.gph` tiles in the pack. */
+  tiles: number;
 }
 
 export interface Region extends RegionMeta {
@@ -199,6 +217,8 @@ export class RegionLibrary {
    * stale merge answering routes.
    */
   private merges = new Map<string, MergeReport>();
+  /** Pack info by region id, for regions loaded or not. */
+  private packInfo = new Map<string, PackInfo>();
 
   get all(): Region[] { return [...this.regions.values()]; }
   get count() { return this.regions.size; }
@@ -223,10 +243,42 @@ export class RegionLibrary {
   remove(id: string) {
     // Only notify on a real change; a no-op delete would otherwise re-render
     // every subscribed screen for nothing.
+    const hadPack = this.packInfo.delete(id);
     if (this.regions.delete(id)) {
       this.merges.clear();
       this.emit();
+    } else if (hadPack) {
+      this.emit();
     }
+  }
+
+  /**
+   * Attach or detach a routing pack on a region.
+   *
+   * Attachable whether or not the region itself is loaded: a pack can be
+   * installed before (or without) its `.osm` extract, and the offline Valhalla
+   * engine routes from tiles alone. Only the map and search need the dataset.
+   */
+  setPack(id: string, pack: PackInfo | null) {
+    const region = this.regions.get(id);
+    if (region) {
+      if (pack) region.pack = pack;
+      else delete region.pack;
+      this.emit();
+    }
+    if (pack) this.packInfo.set(id, pack);
+    else this.packInfo.delete(id);
+    if (!region) this.emit();
+  }
+
+  /** Pack info for a region id, loaded or not. */
+  packFor(id: string): PackInfo | null {
+    return this.packInfo.get(id) ?? null;
+  }
+
+  /** Region ids that have a routing pack installed. */
+  get packedIds(): string[] {
+    return [...this.packInfo.entries()].filter(([, p]) => p).map(([id]) => id);
   }
 
   get(id: string) { return this.regions.get(id); }

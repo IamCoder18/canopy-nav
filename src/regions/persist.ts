@@ -513,15 +513,20 @@ export async function saveRegion(meta: RegionMeta, dataset: OsmDataset): Promise
 
   const storedBytes = estimateDatasetBytes(dataset);
   const savedAt = Date.now();
+  // `pack` is deliberately not persisted with the meta: the pack store is the
+  // source of truth for packs (see `packstore.ts`), and a saved flag would
+  // outlive a deleted pack. Stripped here and on read, so a record written by
+  // a build that did persist it still cannot resurrect one.
+  const { pack: _pack, ...metaNoPack } = meta;
   const record: StoredRegion = {
     id: meta.id,
     recordVersion: RECORD_VERSION,
     savedAt,
     storedBytes,
-    meta: { ...meta },
+    meta: { ...metaNoPack },
     dataset: serializeDataset(dataset),
   };
-  const row: StoredMetaRow = { ...meta, savedAt, storedBytes };
+  const row: StoredMetaRow = { ...metaNoPack, savedAt, storedBytes };
 
   try {
     // Both stores in one transaction: a region is either listed *and* loadable,

@@ -156,18 +156,18 @@ stands. **Bold** = fully working and verified.
 | 3 | Prefer TypeScript | **Done.** ~10,400 lines TS/TSX. Exactly one hand-written Java file on Android (`MainActivity.java`, immersive mode only) plus XML themes; everything else is TypeScript | `android/` |
 | 4 | Other libraries allowed (e.g. Ferrostar) | Considered and rejected — Ferrostar duplicates what the built-in engine does and adds no offline win here | §5.2 |
 | 5 | Support `.osm` files | **Done.** Both formats read natively: XML via a chunked scanner, `.osm.pbf` via a protobuf reader. The PBF coordinate bug (§4.1) meant this was *not* working for real extracts until this revision | `src/osm/engine.worker.ts`, `src/osm/pbf.ts` |
-| 6 | Use Valhalla for car navigation | **Done** as an optional provider; **not** the on-device default (§5.3) | `src/nav/valhalla.ts` |
+| 6 | Use Valhalla for car navigation | **Done**, twice over: as the hosted providers (row 12) and now **on the device** — the same engine over a routing pack, with real maneuvers (§17). The in-app A\* remains the fallback when no pack is installed | `src/nav/valhalla.ts`, `src/nav/valhalla-local/` |
 | 7 | Use Nominatim for geocoding start/destination | **Done** as an optional online provider | `src/nav/geocode.ts` |
 | 8 | 100% local, no WiFi | **Done.** Offline engine, offline gazetteer, offline map rendering, offline persistence | §3.2–3.4 |
 | 9 | Multi-region: download by city/province (Alberta, BC…), route between them | **Partly done.** Download, streaming, catalogue and cross-region *search* all work. **Cross-region routing does not route correctly** — it stitches at a bounding-box midpoint rather than merging; see row 10 and §7 gap 1. **And province-scale extracts no longer import at all** — Alberta is 334 MB with no smaller alternative, and the heap guard refuses it (§7 gap 13, §15.1) | §3.5 |
 | 10 | Merging the two regions rather than stitching | **Done.** `merge.ts` is now called. Cross-region routing is one A\* over a merged graph, cached per region set, behind a memory guard that refuses with a reason rather than returning a wrong line. Requirement was previously recorded as **NOT DONE**; §3.18 is the implementation and §3.5.2 is superseded | `src/osm/regions.ts`, `src/osm/mergeguard.ts` |
-| 11 | Is self-hosting Valhalla on Android unreasonable? | Answered: not unreasonable, but not achievable in the time available (§5.3) | — |
+| 11 | Is self-hosting Valhalla on Android unreasonable? | Answered twice. §5.3: not unreasonable, but not achievable in the time available as a native build. §17: achieved as a WASM engine over routing packs, resource profile measured (research/valhalla-local-feasibility.md) | §5.3, §17 |
 | 12 | Keep hosted Valhalla as an option | **Done.** Three hosted presets plus a custom endpoint — FOSSGIS, Simplerouting.io, and your own `valhalla_service` — each individually selectable and probeable, alongside the offline engine | §3.6, §3.6.1 |
 | 13 | Handle losing connectivity mid-trip | **Done.** Provider chain + snapshotted route + honest degradation | §3.7 |
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1309 unit tests across 67 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1368 unit tests across 72 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -181,7 +181,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1309 passing**, 67 files |
+| Unit tests | `npm test` | **1368 passing**, 72 files |
 | End-to-end | `npm run e2e` | **81 checks** against the built bundle |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -260,7 +260,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **67 files, 1309 tests**. The previous
+retyped by hand. The table is the complete set: **72 files, 1368 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -271,8 +271,8 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1309 total double-counts contrast's 34 tests**: 1275 distinct test cases are
-declared across 67 files. Both figures are recorded rather than reconciled by lowering the
+that **the 1368 total double-counts contrast's 34 tests**: 1334 distinct test cases are
+declared across 72 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
 
@@ -305,9 +305,14 @@ reading it.
 |---|---|---|
 | `geo.spec.ts` | 78 | polyline codec and every refusal case, haversine, bearing, formatting boundaries, `simplify`, `snapToPolyline`, and the camera geometry: windowed `headingAlong`, `lookAheadMetres` |
 | `regions.spec.ts` | 64 | `RegionLibrary`, bbox helpers, `catalogFor`, `searchAll` ranking, `bestFor`, cross-region routing |
-| `providers.spec.ts` | 46 | provider chain, fallback, `requiresKey`, 4xx handling, `localToRoute` bbox reduction |
+| `providers.spec.ts` | 54 | provider chain, fallback, `requiresKey`, 4xx handling, `localToRoute` bbox reduction, and the two offline sources as separate providers: the pack engine's own row, the skip when no pack is installed, the walk to the map engine, and the combined failure headline (§17.7) |
 | `valhalla.spec.ts` | 46 | request body, headers, response parsing, multi-leg, unit normalisation, a response missing what it needs |
-| `engines.spec.ts` | 38 | engine selection policy, plan ordering, per-engine readiness reasons, the attempt trace, strict mode |
+| `engines.spec.ts` | 42 | engine selection policy, plan ordering across both offline sources, per-source readiness and probe reasons, the attempt trace, strict mode |
+| `valhalla-local.spec.ts` | 13 | the offline Valhalla engine itself: the WASM engine over the committed fixture pack — real maneuvers, units, failure sentences, **parity with the in-app A\* on the same map**, packs partitioned from one build, one storage read per tile |
+| `valhalla-tar.spec.ts` | 10 | pack tar indexing against three independent shapes: GNU tar's real archive, a hand-rolled ustar writer, and PAX/prefix/truncation edge cases |
+| `valhalla-tilesource.spec.ts` | 10 | pack tile sources and the whole-tile cache: one source read per tile however much the search asks, LRU bounds, correctness across eviction |
+| `pack-import.spec.ts` | 8 | routing-pack import: naming ties a pack to its region, a non-pack changes nothing, persistence failure is non-fatal, removal takes the pack with it |
+| `packstore.spec.ts` | 6 | pack persistence: byte round-trip, listing without bytes, replacement, deletion, and no-IndexedDB degrading to session-only |
 | `merge.spec.ts` | 37 | node-ID union, direction permissions, dead-edge sweep, >2^21 node regression |
 | `download.spec.ts` | 37 | streaming, progress, abort, retry/resume, HTML-error detection, truncation, disk cache, poisoned part files |
 | `engine.spec.ts` | 35 | OSM parsing, graph construction, one-ways, A\* route quality, geometry continuity, index isolation and keying, and that `buildDataset` consumes its inputs |
@@ -376,6 +381,7 @@ Browser gates, measured the same way:
 | Suite | Checks | Command |
 |---|---|---|
 | `test/e2e.mjs` | 81 | `npm run e2e` |
+| `test/valhalla-wasm.e2e.mjs` | 15 | `npm run e2e:wasm` |
 | `test/screens.mjs` | 159 (53 × 3 viewports) | `npm run screens` |
 | `tools/focus.mjs` | 15 | `npm run focus` |
 | `tools/sw-shellcheck.mjs` | 1 (offline boot after a captive portal) | `npm run swshell` |
@@ -1768,13 +1774,13 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx 5184  screens, navigation state, focus + announcements,
+  App.tsx 5222  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            252  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
   sw.ts                   264  offline shell service worker
   errors.ts                54  describeError: a message for any thrown value
-  settings.ts             347  typed, validated, quota-safe persistence
+  settings.ts             354  typed, validated, quota-safe persistence
   theme.ts 423  AAOS design tokens (colour, type, layout, shape)
   icons.tsx               421  29 maneuver kinds + system icons, hand-drawn SVG
   geo.ts                  489  polyline codec, haversine, formatting, snapping,
@@ -1787,21 +1793,37 @@ src/
     pbf.ts               1007  .osm.pbf protobuf reader, whole-buffer and streaming
     engine.ts             461  worker client, format sniff, GeoJSON mirroring,
                               + buildStageStep (which pipeline phase a stage is)
-    regions.ts            465  RegionLibrary, catalogue, bbox helpers, merge cache
+    regions.ts            517  RegionLibrary, catalogue, bbox helpers, merge cache,
+                              + the routing-pack registry (pack? per region)
     merge.ts              318  union-find merge of adjacent extracts
     mergeguard.ts         201  can a merge be afforded here? three outcomes
     importguard.ts        351  can a parse be afforded here? three outcomes (§15.2)
     tags.ts                36  shared node-tag filter
 
   nav/
-    valhalla.ts 535  Valhalla /route client, response validation
+    valhalla.ts 583  Valhalla /route client, response validation,
+                              + the trip parser and request body shared with the
+                                offline engine (one route shape, one set of sentences)
+    valhalla-local/         the offline Valhalla engine: WASM over routing packs (§17)
+      runtime.ts           308  mounts packs as lazy tiles, runs tyr::actor, offline failure sentences
+      client.ts            197  worker and in-process transports behind one interface
+      tilesource.ts        134  pack sources + the whole-tile cache (the 5.3 s -> 206 ms fix)
+      config.ts            103  the engine's runtime config, adapted from ecc521/valhalla-wasm
+      tar.ts                93  pack tar indexing (MIT-adapted, attributed)
+      worker.ts             79  classic worker host: importScripts the UMD build, protocol glue
+      node.ts               39  Node host for the same UMD build (the test suite's loader)
+      index.ts              37  the app-wide engine singleton
+      protocol.ts           20  mount/route/dispose messages
     reroute.ts            415  reroute policy: when to act, backoff, banner,
                                         and why a refusal keeps saying why (§14.10)
-    providers.ts 441  provider chain, attempt trace, connectivity
+    providers.ts 554  provider chain, attempt trace, connectivity,
+                              + the two offline sources as separate providers (§17.7)
     requests.ts           107  RequestGate: one live route request at a time
     chrome.ts             121  the bottom sheet's measured height, as --nav-h
     steps.ts               66  why the turn list is empty: three causes, three answers
-    engines.ts 253  engine selection, readiness, provenance
+    engines.ts 293  engine selection, readiness, provenance,
+                              + per-source readiness (pack vs map) and the
+                                turn-by-turn capability on the provider table
     geocode.ts            235  Nominatim client, 1 req/s throttle
     location.ts           256  device/browser/simulated location
     offroute.ts           120  deviation detection primitives, reroute origin
@@ -1819,18 +1841,23 @@ src/
 
   regions/
     download.ts          1493  streaming downloader, resume, part-file handling
-    RegionsScreen.tsx    1247  manage, catalogue, cross-region route test
-    persist.ts            650  IndexedDB caching of parsed datasets
-    store.ts              444  RegionLibrary singleton, per-region workers, memory gate
+    RegionsScreen.tsx    1286  manage, catalogue, cross-region route test, pack import
+    persist.ts            655  IndexedDB caching of parsed datasets
+    packstore.ts          145  routing-pack persistence (its own database, its own failure policy)
+    store.ts              579  RegionLibrary singleton, per-region workers, memory gate,
+                              + pack import/restore and the engine mount lifecycle
 
-test/            1309 unit tests, 67 files
+test/            1368 unit tests, 72 files
 test/e2e.mjs           81 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total)
-tools/osm2pbf.mjs        322 XML -> PBF encoder (builds the test fixtures;
-                             extract slicing is done by osmium on a desktop)
+tools/osm2pbf.mjs        362 XML -> PBF encoder (builds the test fixtures;
+                             extract slicing is done by osmium on a desktop),
+                             + the type-sorted encoder Valhalla's tile builder needs
+tools/build-pack.mjs     130  extract -> Valhalla routing pack (.tar of .gph tiles),
+                             the supply chain's smallest instance (§17)
 tools/serve.mjs         306 LAN static server for on-device manual testing
 tools/offline-smoke.mjs 253 device smoke: install the APK, go offline, import a fixture through the WebView DevTools socket, and scan logcat
-tools/bundle-budget.mjs 173 gzip size budget per role (entry, map vendor, totals); fails on regression
+tools/bundle-budget.mjs 199 gzip size budget per role (entry, map vendor, engine, totals); fails on regression
 tools/verify.mjs 133 every gate in one command: local and CI run this same list
 tools/reflow.mjs        382 chrome overlap at 100/175/200% text (§13.8) — a
                              diagnostic, still not a gate: it needs a
@@ -1956,6 +1983,9 @@ or "gap 18" are to the *old* numbering and say so; the current numbers are 1–1
    seven real maneuvers, invented one and reversed one direction — so the app now
    *labels* inferred guidance as inferred (§10.5). The inference itself is still
    wrong often enough that it should not be relied on for navigation.
+   **Partly closed (§17):** a region with a routing pack gets real maneuvers
+   from the offline Valhalla engine. This gap now applies only to regions
+   imported as `.osm` without a pack, where it behaves exactly as described.
 7. **zstd PBF blobs are rejected by name.** Geofabrik still ships zlib, so this is
    future-proofing only. Worth recording why it is *not* fixed: no platform
    `DecompressionStream` format decodes zstd, and a hand-written decoder is a
@@ -1964,11 +1994,16 @@ or "gap 18" are to the *old* numbering and say so; the current numbers are 1–1
    plausible-looking partial implementation.
 8. **Emulator cutout band.** A black band remains where the emulator simulates a
    display cutout. Believed cosmetic and device-specific; not confirmed.
-9. **Optional: NDK cross-compile Valhalla** to replace the local engine with real
+9. ~~**Optional: NDK cross-compile Valhalla** to replace the local engine with real
    turn-by-turn. Gaps 6 and 9 share one dependency, and §5.3's objection is
    external rather than about effort: arm64 sysroot builds of boost, luajit,
    prime_server, GEOS and zlib either exist or they do not. Worth a bounded
-   feasibility spike before committing anything.
+   feasibility spike before committing anything.~~ **Closed** — the spike ran
+   (`research/valhalla-local-feasibility.md`) and the engine shipped as WASM
+   instead of an NDK build: the dependency list belongs to the services/data-
+   tools build, the WASM engine measured 1.4–1.7× native, and the NDK route was
+   left unstarted on purpose. §17 is the implementation; the on-device piece
+   that remains is the pack supply chain and a phone (§17.6).
 10. **Chrome still covers ~98% of the viewport** at phone portrait, and ~142% of
     its height in landscape. Every element is 76dp or larger because the design
     says so, and none of them is in the wrong place — but a driver looking at this
@@ -2348,7 +2383,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1309 unit tests
+npm test             # 1368 unit tests
 npm run e2e          # 81 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -5895,6 +5930,157 @@ refusals that could kill guidance outright; it is now a tolerated transient.
 Speech still does not lower itself for the call.
 
 ---
+
+## 17. The offline Valhalla engine: the routing graph is no longer the app's problem
+
+**What this section is.** The offline engine's pathing was replaced — behind the
+same `local` engine id — by Valhalla itself running on the device: the same
+engine the hosted providers run, compiled to WebAssembly, over routing packs
+built outside the app. The in-app A\* (`engine.worker.ts`) is **not deleted**;
+it is now the *second* offline engine, the safety net for regions that have a
+map but no pack (§17.4). The research that chose this, with every measurement,
+is in `research/valhalla-local-feasibility.md`; this section is what was built
+and what it means for this document.
+
+### 17.1 What was built
+
+- `src/nav/valhalla-local/` — the engine. `runtime.ts` mounts packs as lazy
+  virtual tiles and drives `tyr::actor_t` (the same actor `routeOnValhalla`
+  calls over HTTP, in-process); `worker.ts`/`client.ts` put it in a Web Worker
+  with an in-process transport for tests; `tilesource.ts` carries the
+  whole-tile cache (§17.3); `tar.ts` indexes packs. The engine build is
+  `ecc521/valhalla-wasm`'s Valhalla → WASM (MIT, attributed in-file).
+- `tools/build-pack.mjs` — extract in, routing pack (`.tar` of `.gph` tiles)
+  out. The supply chain's smallest instance: `valhalla_build_tiles` is native
+  machinery and deliberately not part of the app.
+- `test/fixture.valhalla.tar` — a pack built from the same `fixture.osm` the
+  A\* tests route, so the two engines can be pinned against each other on one
+  map (`test/valhalla-local.spec.ts`, "agrees with the in-app graph engine").
+- Pack import and persistence: `regions/packstore.ts` (its own database — a
+  pack is one opaque blob with a different life cycle from a parsed dataset),
+  `store.ts`'s `importPackFile`, and the Regions screen accepting `.tar`.
+- `Route['engine']` gained `'valhalla-local'`, and `describeProvenance` /
+  `hasManeuvers` take the served route's tag as the authority — `'local'` is
+  two engines and only the tag says which one has turn-by-turn.
+
+### 17.2 Why WASM, and what that does to §5.3
+
+§5.3 rejected on-device Valhalla as the default because a native arm64 build
+needs "protobuf, boost, luajit, prime_server, sqlite3, GEOS and zlib … measured
+in days with a real chance of ending in a linker error". That list is the
+*services and data-tools* build: a routing-only build (`ENABLE_SERVICES=OFF`,
+`ENABLE_TOOLS=OFF`, `ENABLE_DATA_TOOLS=OFF`) needs boost headers, protobuf and
+zlib — the Rust bindings' whole dependency set — and `valhalla_service` is not
+needed at all when `tyr::actor_t` is linked in-process. The WASM route
+sidesteps even that: the compiled engine is platform-neutral and runs in this
+app's WebView exactly as it runs in its browser build.
+
+Measured rather than argued (research §4.1): the WASM engine is **1.4–1.7×
+slower than native** warm on every case tried — a 739 km route across a 279 MB
+tile set in **75 ms** in Node and **79–86 ms** in a Chromium worker. That
+margin does not pay for a toolchain. §5.3's conclusion stands for the *native*
+route and is superseded for the app.
+
+### 17.3 The measurements that shaped the code
+
+| | Bremen (city) | Schleswig-Holstein | Alberta (the file the guard refuses) |
+|---|---|---|---|
+| `valhalla_build_tiles` wall / peak | 5.6 s / 444 MB | 26 s / 1.59 GB | 44.5 s / 2.4 GB |
+| Tiles on disk | 23.9 MB | 168.6 MB | 278.9 MB |
+| Longest route, WASM warm | 13 ms | 61 ms | 75 ms (739 km) |
+| Engine RAM over baseline | ~30 MB | ~70 MB | ~170 MB |
+
+Three findings are load-bearing:
+
+1. **The whole-tile cache is not an optimisation.** Valhalla reads a tile in
+   many small chunks; against a source where each chunk paid a storage hop, a
+   cold 164 km route took **5,346 ms**. One read per tile on first touch cut it
+   to **206 ms**. `tilesource.ts` exists for this and its test pins it.
+2. **Packs are partitions of one build.** Two separately-built packs assign
+   different internal ids to the same border tiles; mixing them breaks
+   cross-tile references. The fixture test ("packs partitioned from one build")
+   pins the model that works: one build, several tars, identical answers.
+3. **Tiles ≈ the extract you already download** (0.8–1.1× the compressed PBF),
+   and stay on disk. The runtime footprint is a bounded cache, not a resident
+   graph — which retires the 96 B/node + 229 B/node + 7.5× merge arithmetic
+   `importguard`/`mergeguard` exist to enforce, for regions that have packs.
+
+### 17.4 Two engines behind one id, and why the trace grew a `note`
+
+`local` answers from the pack engine first (real maneuvers, no network) and
+falls through to the A\* graph when the pack declines — a pack can legitimately
+fail on a pair its tiles do not cover while the imported map does. The attempt
+row names whichever answered (`Offline Valhalla` / `Offline (.osm)`), and when
+the pack engine was tried and declined its reason rides on the row's new
+`note` — a row that *served* has no `reason`, and a trace that hid the
+sibling's failure could not answer "why this engine". `Route.engine` is the
+capability authority: guidance reads maneuvers for `'valhalla'` and
+`'valhalla-local'`, the traffic overlay stays hosted-only, and the preview
+names the engine it shows.
+
+### 17.5 What the tests caught
+
+- **Unmounting a pack did not unmount it.** The registry entry was deleted
+  before the unlink pass looked it up, so the pass found nothing and
+  "unmounted" packs kept routing. Caught by `valhalla-local.spec.ts`'s "is
+  done with a region after unmount" — the test existed first and failed for
+  exactly the reason it was written.
+- **`Route['units']` has been `"kilometers"` since the first hosted route.**
+  Valhalla echoes its own vocabulary; the parser passed it through into a field
+  typed `'km' | 'miles'`. Normalised in the shared parser — the hosted path had
+  the same latent lie.
+- **A truncated pack advertised tiles it did not have.** The tar index now
+  refuses to index an entry whose body falls outside the file, so a corrupt
+  pack fails as a missing tile rather than as a corrupt one.
+
+### 17.6 What is not done
+
+- **The supply chain is a tool, not a service.** Nothing publishes packs yet;
+  the Regions screen imports them from files. A pack build server (one
+  `valhalla_build_tiles` run per region, tarred and served) is the missing
+  half, and `research/valhalla-local-feasibility.md` §6 is the design.
+- **No phone has run this.** The measurements are x86 and desktop Chromium;
+  `test/valhalla-wasm.e2e.mjs` verifies the worker transport in Chromium (same
+  engine, same fixture pack, same 5988 m as Node), but the WebView on a device
+  is the last unknown — exactly what the research's recommendation 1 measures.
+- **Gap 6 is closed only for pack-backed regions.** A region with a map and no
+  pack still gets inferred turn-by-turn, still labelled as inferred.
+- **Province packs cost their bytes in the worker** when mounted from a buffer
+  (the transfer keeps them off the main thread but not out of RAM). The
+  `PackSource` seam is where an OPFS-backed source drops in for packs too big
+  for that; the whole-tile cache already fronts it.
+
+### 17.7 The two offline sources, configured separately
+
+The `local` engine was one id over two engines (§17.4), with the pack engine
+first and the graph engine as its in-row fallback. That composite is gone:
+**`local-valhalla` (the routing-pack engine) and `local` (the imported-map
+graph) are separate providers**, separately selectable in Settings, separately
+readiness-reported ("No routing pack installed" vs "No offline map loaded"),
+and separately probed. What changed and why:
+
+- **The trace stopped needing an `engine` tag to tell the truth.** Each source
+  has its own row: a declined pack is a *failed row with its reason* and the
+  next source answers in its own row. `EngineAttempt.note` and
+  `RouteProvenance.engine` — both workarounds for the composite — are deleted,
+  and `hasManeuvers`/`describeProvenance` are plain lookups on the provider
+  table again. The capability moved onto `Provider.maneuvers`, where it was
+  always meant to live: Valhalla generates maneuvers wherever it runs, and
+  inferring that from `online` was true for hosted Valhalla and false for the
+  pack engine by accident.
+- **The plan rule widened symmetrically.** A preference for either offline
+  source falls back to the other and then to the hosted engines; a preference
+  for a hosted engine falls back to both offline sources and *not* to another
+  hosted engine — the pre-split asymmetry, preserved because falling from one
+  rate-limited demo server to a paid one was never the policy.
+- **The default preference is now `local-valhalla`.** With a pack installed it
+  is the best offline answer this app has; without one its row says so and the
+  map engine answers exactly as before. A *saved* preference of `'local'` is
+  untouched — the id still means the map engine — so no driver's choice is
+  rewritten by the split.
+- The closing failure sentence still combines both sources when both decline
+  ("… The imported map had no route for this pair either."), because the one-
+  line headline the driver reads is not the trace and cannot show two rows.
 
 ## Attribution
 

@@ -104,7 +104,17 @@ export interface Route {
   maneuvers: ValhallaManeuver[];
   summary: { length: number; time: number; min_lat: number; min_lon: number; max_lat: number; max_lon: number };
   units: 'km' | 'miles';
-  engine: 'valhalla' | 'osm-local';
+  /**
+   * What produced this route, and therefore what it can do.
+   *
+   * `'valhalla'` — a hosted Valhalla: real maneuvers, and live traffic may be
+   * asked for along it. `'valhalla-local'` — the same engine from a routing
+   * pack on the device: real maneuvers, no network anywhere near it.
+   * `'osm-local'` — the in-app graph engine: geometry and timing only, no
+   * maneuvers. Consumers branch on this, and on nothing else, to decide
+   * between real and inferred turn-by-turn.
+   */
+  engine: 'valhalla' | 'valhalla-local' | 'osm-local';
 }
 
 export type Costing = 'auto' | 'bicycle' | 'pedestrian';
@@ -243,7 +253,7 @@ function lengthToMetres(value: number, units: 'km' | 'miles'): number {
   return units === 'miles' ? value * 1609.344 : value * 1000;
 }
 
-function parseTrip(json: unknown, units: 'km' | 'miles'): Route {
+function parseTrip(json: unknown, units: 'km' | 'miles', engine: Route['engine'] = 'valhalla'): Route {
   const trip = (json as { trip?: { legs?: ValhallaLeg[]; summary?: ValhallaLeg['summary']; units?: string; language?: string } }).trip;
   if (!trip || !trip.legs?.length) throw new RoutingError('Route not found between the selected points');
 
@@ -292,7 +302,7 @@ function parseTrip(json: unknown, units: 'km' | 'miles'): Route {
   const root = json as { alternatives?: { trip?: { legs?: ValhallaLeg[] } }[] };
   for (const altTrip of root.alternatives ?? []) {
     if (!altTrip?.trip?.legs?.length) continue;
-    const alt = parseTrip({ trip: altTrip.trip }, units);
+    const alt = parseTrip({ trip: altTrip.trip }, units, engine);
     alternates.push(alt);
   }
 
@@ -318,22 +328,46 @@ function parseTrip(json: unknown, units: 'km' | 'miles'): Route {
     maneuvers: legs[0].maneuvers,
     summary,
     ...(alternates.length ? { alternates } : {}),
-    units: (trip.units as 'km' | 'miles') ?? units,
-    engine: 'valhalla',
+    // Valhalla echoes its own vocabulary — `trip.units: "kilometers"` — where
+    // this app's type is `'km' | 'miles'`. Normalised here rather than passed
+    // through: a field typed `'km' | 'miles'` that has actually held
+    // `"kilometers"` since the first hosted route is a type that has never
+    // described the code.
+    units: trip.units === 'miles' ? 'miles' : trip.units === 'kilometers' || trip.units === 'km' ? 'km' : units,
+    engine,
   };
 }
 
-/** Call a Valhalla `/route` endpoint. */
-export async function routeOnValhalla(
-  req: RouteRequest,
-  endpoint = VALHALLA_ENDPOINT,
-  extraHeaders?: Record<string, string>,
-  /** Caller-side cancellation, composed with the built-in timeout. */
-  signal?: AbortSignal,
-): Promise<Route> {
-  const costing = req.costing ?? 'auto';
-  const units = req.units ?? 'km';
+/**
+ * Parse a Valhalla trip response into the app's `Route`.
+ *
+ * Exported for the *local* engine (`nav/valhalla-local/`), which runs the same
+ * engine in-process over a routing pack and produces the same JSON: one parser,
+ * one set of failure sentences, whatever served the bytes. `engine` tags the
+ * answer so consumers know a local route carries real maneuvers but no live
+ * traffic.
+ */
+export function parseValhallaTrip(
+  json: unknown,
+  units: 'km' | 'miles',
+  engine: Route['engine'] = 'valhalla',
+): Route {
+  return parseTrip(json, units, engine);
+}
 
+/**
+ * The `/route` request body, shared by the hosted client and the local engine.
+ *
+ * One builder so "the same route" means the same costing, units and language
+ * whether a server or an on-device pack answers it — the alternative is two
+ * request shapes that drift until the same trip plans differently online and
+ * offline, which is exactly the divergence the engine fallback exists to hide.
+ */
+export function buildValhallaRequestBody(
+  req: RouteRequest,
+  units: 'km' | 'miles',
+): Record<string, unknown> {
+  const costing = req.costing ?? 'auto';
   const body: Record<string, unknown> = {
     locations: [
       { lat: req.from[1], lon: req.from[0], type: 'break' },
@@ -363,6 +397,20 @@ export async function routeOnValhalla(
   if (req.avoid?.length) {
     body.exclude_polygons = req.avoid.map((poly) => ({ type: 'polyline', shape: encodePolyline6(poly) }));
   }
+  return body;
+}
+
+/** Call a Valhalla `/route` endpoint. */
+export async function routeOnValhalla(
+  req: RouteRequest,
+  endpoint = VALHALLA_ENDPOINT,
+  extraHeaders?: Record<string, string>,
+  /** Caller-side cancellation, composed with the built-in timeout. */
+  signal?: AbortSignal,
+): Promise<Route> {
+  const units = req.units ?? 'km';
+
+  const body = buildValhallaRequestBody(req, units);
 
   let res: Response;
   try {

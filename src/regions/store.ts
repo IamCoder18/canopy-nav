@@ -30,8 +30,10 @@ import type { PbfCrop } from '../osm/pbf';
 
 import type { OsmDataset } from '../osm/engine.worker';
 import { describeError } from '../errors';
-import { RegionLibrary, type Region, type RegionMeta } from '../osm/regions';
+import { RegionLibrary, type Region, type RegionMeta, type PackInfo } from '../osm/regions';
 import { saveRegion, deleteRegion, loadAllRegions, probePersistence } from './persist';
+import { savePack, loadPack, listPacks, deletePack } from './packstore';
+import { getLocalValhalla, parseTarIndex } from '../nav/valhalla-local';
 
 /** The one library. Downloaded regions live here for the life of the session. */
 export const regionLib = new RegionLibrary();
@@ -324,10 +326,36 @@ export async function restoreRegions(): Promise<Region[]> {
     for (const { meta, dataset } of saved) {
       out.push(regionLib.add(meta, dataset));
     }
+    await restorePacks();
     return out;
   } catch {
     // Never block startup on a storage problem.
     return [];
+  }
+}
+
+/**
+ * Re-mount every stored routing pack into the offline Valhalla engine.
+ *
+ * Mounting is deliberately not awaited per pack: it loads the WASM engine
+ * (the pre-warm that keeps the first route off the driver's clock) and a slow
+ * or failing mount must not delay the map. Until a pack mounts, `local` simply
+ * means the in-app graph engine — which is why the fallback in
+ * `providers.ts` is a fallback rather than an error path.
+ */
+async function restorePacks(): Promise<void> {
+  try {
+    const packs = await listPacks();
+    for (const { id, info } of packs) {
+      regionLib.setPack(id, info);
+    }
+    for (const { id } of packs) {
+      void loadPack(id)
+        .then((p) => (p ? getLocalValhalla().mount(id, p.data) : undefined))
+        .catch((e) => console.warn(`Canopy: routing pack ${id} failed to mount`, e));
+    }
+  } catch (e) {
+    console.warn('Canopy: could not restore routing packs', e);
   }
 }
 
@@ -354,17 +382,124 @@ export async function removeRegion(id: string): Promise<string | null> {
   regionLib.remove(id);
   engines.get(id)?.dispose();
   engines.delete(id);
+  // The pack is the region's too: leaving it would keep routing (and keep
+  // spending its bytes) for a map the driver has deleted.
+  getLocalValhalla().unmount(id);
+  let problem: string | null = null;
   try {
     await deleteRegion(id);
-    return null;
   } catch (e) {
-    return e instanceof Error ? e.message : String(e);
+    problem = e instanceof Error ? e.message : String(e);
   }
+  try {
+    await deletePack(id);
+  } catch (e) {
+    problem ??= e instanceof Error ? e.message : String(e);
+  }
+  return problem;
 }
 
 /** Total bytes held by loaded extracts, for the manage screen. */
 export function regionBytes(): number {
   return regionLib.all.reduce((s, r) => s + r.bytes, 0);
+}
+
+/* --------------------------- routing packs --------------------------- */
+
+export interface ImportPackRequest {
+  /** Library id the pack belongs to. Derived from the filename when omitted. */
+  id?: string;
+  file: File;
+  onError?: (message: string | null) => void;
+  /** Non-fatal persistence problem — the pack works this session regardless. */
+  onPersistError?: (message: string | null) => void;
+}
+
+/**
+ * Import a Valhalla routing pack (`.tar` of `.gph` tiles) for the offline
+ * Valhalla engine.
+ *
+ * This is the *data* half of local Valhalla. The pack is built outside the app
+ * — `tools/build-pack.mjs`, or whatever produces packs for the region
+ * catalogue — because tile building is Valhalla's heaviest machinery and the
+ * research that chose this engine chose prebuilt packs with it (see
+ * `research/valhalla-local-feasibility.md` §6). What the app owes is honest
+ * validation: a file that is not a pack must say so before it displaces
+ * a working one.
+ *
+ * The pack is persisted first and mounted second: `mount` *transfers* the
+ * buffer to the engine's worker, which detaches it, and a pack that was
+ * mounted but not saved would vanish on the next launch with no trace.
+ */
+export async function importPackFile(req: ImportPackRequest): Promise<PackInfo | null> {
+  const { onError, onPersistError } = req;
+  onError?.(null);
+
+  try {
+    const data = await req.file.arrayBuffer();
+    const bytes = new Uint8Array(data);
+    const entries = parseTarIndex(
+      (into, at) => {
+        if (at >= bytes.length) return 0;
+        const n = Math.min(into.length, bytes.length - at);
+        into.set(bytes.subarray(at, at + n));
+        return n;
+      },
+      bytes.length,
+    );
+    const tiles = entries.filter((e) => e.name.endsWith('.gph')).length;
+    if (!tiles) {
+      throw new Error(
+        `${req.file.name} is not a routing pack: it contains no Valhalla .gph tiles. ` +
+        'A pack is a .tar of tiles built with tools/build-pack.mjs. Nothing was changed.',
+      );
+    }
+
+    const id = req.id ?? packRegionId(req.file);
+    const info: PackInfo = { bytes: bytes.length, tiles };
+    try {
+      await savePack(id, data, info);
+    } catch (e) {
+      // Persisted-or-not is not import-or-not: the engine routes from the pack
+      // for this session either way, and the driver is told what was lost.
+      onPersistError?.(describeError(e));
+    }
+
+    await getLocalValhalla().mount(id, data);
+    regionLib.setPack(id, info);
+    return info;
+  } catch (e) {
+    onError?.(describeError(e));
+    return null;
+  }
+}
+
+/**
+ * `british-columbia.valhalla.tar` -> `local-british-columbia`.
+ *
+ * The convention ties a pack to its region: same stem as the region's `.osm`
+ * import, with `.valhalla` (the pack suffix) dropped so `fixture.osm` and
+ * `fixture.valhalla.tar` land on the same id and the pack attaches to the map
+ * the driver already has.
+ */
+export function packRegionId(file: File): string {
+  const stem = (file.name ?? '')
+    .replace(/\.tar$/i, '')
+    .replace(/\.valhalla$/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return stem ? `local-${stem}` : 'local-pack';
+}
+
+/** `british-columbia.valhalla.tar` -> 'British Columbia'. */
+export function packRegionName(file: File): string {
+  const words = (file.name ?? '')
+    .replace(/\.tar$/i, '')
+    .replace(/\.valhalla$/i, '')
+    .replace(/[-_]+/g, ' ')
+    .trim();
+  return words ? words.replace(/\b[a-z]/g, (c) => c.toUpperCase()) : 'Routing pack';
 }
 
 /* ------------------------- React bindings ------------------------- */

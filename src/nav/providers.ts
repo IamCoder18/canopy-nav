@@ -22,8 +22,19 @@ import {
   type Route,
 } from './valhalla';
 import { routeOnGraph, type OsmDataset, type RouteResult } from '../osm/engine.worker';
+import type { LocalValhallaClient } from './valhalla-local';
 
-export type ProviderId = 'local' | 'valhalla-fossgis' | 'valhalla-simplerouting' | 'valhalla-custom';
+/**
+ * The two offline engines' labels, used as their provider labels too.
+ *
+ * One concept per label because the settings list now shows them as separate
+ * sources: the driver picks a Valhalla pack or the imported map *deliberately*,
+ * and the trace, the provenance line and the picker all name the same thing.
+ */
+export const OFFLINE_VALHALLA_LABEL = 'Offline Valhalla';
+export const OFFLINE_GRAPH_LABEL = 'Offline (.osm)';
+
+export type ProviderId = 'local-valhalla' | 'local' | 'valhalla-fossgis' | 'valhalla-simplerouting' | 'valhalla-custom';
 
 export interface Provider {
   id: ProviderId;
@@ -35,15 +46,34 @@ export interface Provider {
   /** Extra headers, e.g. the bearer token simplerouting.io requires. */
   headers?: Record<string, string>;
   requiresKey?: boolean;
+  /**
+   * Whether this source produces real turn-by-turn instructions.
+   *
+   * A property of the *engine*, not of the request: Valhalla (hosted or
+   * pack-backed) generates maneuvers; the in-app graph engine generates a line
+   * and nothing else. Before the offline sources split (§17.7) this was
+   * inferred from `online`, which was true of hosted Valhalla and false of the
+   * pack engine for entirely accidental reasons.
+   */
+  maneuvers: boolean;
 }
 
 export const PROVIDERS: readonly Provider[] = [
   {
+    id: 'local-valhalla',
+    label: OFFLINE_VALHALLA_LABEL,
+    subtitle: 'Real turn-by-turn from a Valhalla routing pack on this device. No network needed.',
+    online: false,
+    endpoint: '',
+    maneuvers: true,
+  },
+  {
     id: 'local',
-    label: 'Offline (.osm)',
+    label: OFFLINE_GRAPH_LABEL,
     subtitle: 'Routes from your imported map. No network needed.',
     online: false,
     endpoint: '',
+    maneuvers: false,
   },
   {
     id: 'valhalla-fossgis',
@@ -51,6 +81,7 @@ export const PROVIDERS: readonly Provider[] = [
     subtitle: 'Public community demo server. Best quality, rate-limited.',
     online: true,
     endpoint: 'https://valhalla1.openstreetmap.de',
+    maneuvers: true,
   },
   {
     id: 'valhalla-simplerouting',
@@ -60,6 +91,7 @@ export const PROVIDERS: readonly Provider[] = [
     endpoint: 'https://api.simplerouting.io/valhalla',
     requiresKey: true,
     headers: { Authorization: '' },
+    maneuvers: true,
   },
   {
     id: 'valhalla-custom',
@@ -67,8 +99,12 @@ export const PROVIDERS: readonly Provider[] = [
     subtitle: 'Point at your own valhalla_service instance.',
     online: true,
     endpoint: '',
+    maneuvers: true,
   },
 ];
+
+/** The offline sources, in preference order: the pack engine first. */
+export const LOCAL_ENGINES: readonly ProviderId[] = ['local-valhalla', 'local'];
 
 export interface RouteRequest {
   from: LatLng;
@@ -240,6 +276,17 @@ export async function resolveRoute(
    * part that costs something.
    */
   signal?: AbortSignal,
+  /**
+   * The offline Valhalla engine (routing pack on the device), when one is
+   * configured.
+   *
+   * Optional and explicit rather than a module singleton: `local` is *two*
+   * engines behind one id, and only the caller knows which offline engines it
+   * actually has. Tests pass a constructed client; the app passes its
+   * singleton. When absent, `local` means the in-app graph alone, exactly as
+   * before packs existed.
+   */
+  local?: LocalValhallaClient | null,
 ): Promise<RouteOutcome> {
   const units = req.units ?? 'km';
   const strict = req.strict ?? false;
@@ -267,7 +314,7 @@ export async function resolveRoute(
   const plan: ProviderId[] = (req.plan?.length
     ? req.plan
     : meta(req.provider)?.online && !strict
-      ? [req.provider, 'local' as ProviderId]
+      ? [req.provider, ...LOCAL_ENGINES]
       : [req.provider]
   ).map((id) => (meta(id) ? id : ('local' as ProviderId)));
 
@@ -280,6 +327,16 @@ export async function resolveRoute(
     ms: null,
   }));
   const degraded: { provider: ProviderId; reason: string }[] = [];
+  /**
+   * What the offline Valhalla engine said when it declined, kept for the
+   * closing sentence.
+   *
+   * Each source now has its own row, so the *trace* is complete; this is for
+   * the one-line headline the driver reads, where "no route found" after a pack
+   * engine failed for a *reason* would throw that reason away.
+   */
+  let packFailure: string | null = null;
+  let graphFailed = false;
   /**
    * `degraded` is what the UI banner shows, so it stays narrow: only the reasons
    * that actually cost something — a request we could not make because there was
@@ -353,7 +410,48 @@ export async function resolveRoute(
           if (fatal) throw new NoRouteError(withStop(reason));
         }
       }
+    } else if (id === 'local-valhalla') {
+      /**
+       * The offline Valhalla engine: a routing pack on the device.
+       *
+       * Same engine as the hosted providers — real maneuvers, no network — and
+       * its own source in the plan, so a declined pair is a failed row here and
+       * the *next* source (often the imported map) answers in its own row. The
+       * composite that used to hide this behind one id is gone (§17.7).
+       */
+      if (!local?.ready()) {
+        skip(row, 'No routing pack installed');
+      } else {
+        const t0 = Date.now();
+        try {
+          const route = await local.route({
+            from: req.from,
+            to: req.to,
+            costing: req.costing,
+            units,
+            avoid: req.avoid,
+          });
+          if (signal?.aborted) throw signal.reason;
+          row.outcome = 'served';
+          row.ms = Date.now() - t0;
+          return {
+            route,
+            used: id,
+            degraded,
+            attempts,
+            fellBack: degraded.length > 0 || i > 0,
+          };
+        } catch (err) {
+          // A cancellation is not an engine failure (see the hosted branch).
+          if (signal?.aborted) throw signal.reason;
+          packFailure = err instanceof Error ? err.message : String(err);
+          row.outcome = 'failed';
+          row.ms = Date.now() - t0;
+          row.reason = packFailure;
+        }
+      }
     } else {
+      // The in-app graph engine: geometry and timing, no maneuvers.
       const t0 = Date.now();
       const r = dataset ? routeOnGraph(dataset.graph, req.from, req.to) : null;
       if (r) {
@@ -372,20 +470,35 @@ export async function resolveRoute(
       row.reason = dataset
         ? 'No route in the offline map for this pair'
         : 'No offline map loaded';
+      graphFailed = true;
     }
   }
 
   // With fallback off the offline engine was never consulted, so the old closing
   // message ("no route found in the offline map") would blame a map that was
   // never asked. Say what actually happened instead.
+  //
+  // When the pack engine declined for a *reason*, that reason leads: "no route
+  // found" after "the map has no road near the start" would throw away the one
+  // sentence that says why. Both offline sources failing is the combined
+  // account; one failing is its own.
+  const offlineReason = packFailure
+    ? graphFailed && dataset
+      ? `${packFailure} The imported map had no route for this pair either.`
+      : packFailure
+    : null;
   throw new NoRouteError(
     strict
       ? degraded[0]?.reason
         ? `${withStop(degraded[0].reason)} Fallback is off, so no other engine was tried.`
-        : 'The selected engine could not route. Fallback is off, so no other engine was tried.'
+        : offlineReason
+          ? `${withStop(offlineReason)} Fallback is off, so no other engine was tried.`
+          : 'The selected engine could not route. Fallback is off, so no other engine was tried.'
       : degraded.length
         ? `${withStop(degraded[0].reason)} No route found in the offline map for this pair.`
-        : 'No route found. Import an .osm file covering this area, or connect to the network.',
+        : offlineReason
+          ? withStop(offlineReason)
+          : 'No route found. Import an .osm file covering this area, or connect to the network.',
   );
 }
 

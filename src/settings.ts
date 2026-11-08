@@ -43,7 +43,14 @@ export interface StoredSelection {
 
 /** Defaults, matching what the screens showed before persistence existed. */
 export const DEFAULT_UNITS = 'metric' as const;
-export const DEFAULT_SELECTION: StoredSelection = { engine: 'local', fallback: 'fallback' };
+/**
+ * The offline sources split in two (§17.7), and the pack engine is the default
+ * one: when a routing pack is installed it gives real turn-by-turn, and when it
+ * is not the plan falls through to the imported-map engine anyway. A saved
+ * selection of `'local'` keeps meaning exactly what it always did — the map
+ * engine — so nothing a driver chose is rewritten by this.
+ */
+export const DEFAULT_SELECTION: StoredSelection = { engine: 'local-valhalla', fallback: 'fallback' };
 
 /**
  * Engine ids accepted when the caller does not supply the live list.
@@ -63,7 +70,7 @@ export const DEFAULT_ENGINE_IDS: readonly string[] = [
   // and no way to tell why. `App` passes the live `ENGINE_IDS`, which is why
   // production was never affected; the default is the trap for the next call site,
   // and the doc comment above it asserted the ids matched when they did not.
-  'local', 'valhalla-fossgis', 'valhalla-simplerouting', 'valhalla-custom', 'any-online',
+  'local-valhalla', 'local', 'valhalla-fossgis', 'valhalla-simplerouting', 'valhalla-custom', 'any-online',
 ];
 
 /** Minimal slice of `Storage`, so tests can pass a stub. */

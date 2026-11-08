@@ -38,7 +38,8 @@ import {
   IconTrash, IconWarning, IconCheck,
 } from '../icons';
 import {
-  importRegionFile, localRegionId, localRegionName, regionLib, removeRegion, useRegions,
+  importRegionFile, importPackFile, packRegionId, localRegionId, localRegionName,
+  regionLib, removeRegion, useRegions,
 } from './store';
 
 export interface RegionsScreenProps {
@@ -559,6 +560,14 @@ export function RegionsScreen(props: RegionsScreenProps) {
     // Reset so re-picking the same file fires again.
     e.target.value = '';
     if (!file) return;
+    // A routing pack (`.tar` of Valhalla tiles) is not OSM data: it is never
+    // parsed into a graph, so the parse-memory guard has nothing to say about
+    // it and must not refuse it on the size of a file that costs a fraction of
+    // that to use.
+    if (/\.tar$/i.test(file.name ?? '')) {
+      void onPackPicked(file);
+      return;
+    }
     // Ask the guard before running the import, so the offer to override is
     // shown *instead of* a failure rather than after one. `importRegionFile`
     // checks this too; the point of asking here is that the file is still in
@@ -574,6 +583,35 @@ export function RegionsScreen(props: RegionsScreenProps) {
     }
     void onPicked(file);
   };
+
+  /**
+   * A routing pack for the offline Valhalla engine.
+   *
+   * Separate from `onPicked` because a pack's import is a *store* operation,
+   * not a parse: no worker, no memory guard, no progress stages — and a very
+   * different failure text when the file turns out not to be a pack.
+   */
+  const onPackPicked = useCallback(async (file: File) => {
+    const p = pending.current ?? { id: '', name: '', code: 'local' };
+    try {
+      const info = await importPackFile({
+        // Attaches to the region the picker was opened from when there is one,
+        // so a pack imported from a catalogue row lands on that region.
+        id: p.id || packRegionId(file),
+        file,
+        onError: setError,
+        onPersistError: (msg: string | null) => {
+          if (msg) setWarnings((w) => (w.includes(msg) ? w : [...w, msg]));
+        },
+      });
+      if (info) {
+        setError(null);
+        onActivated();
+      }
+    } finally {
+      setProgress(null);
+    }
+  }, [onActivated]);
 
   /**
  * A box around where the driver is, as large as this device can afford.
@@ -686,7 +724,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
         </span>
       </div>
 
-      <input type="file" accept=".osm,.pbf,.xml,application/octet-stream" hidden ref={fileRef} onChange={onFileChange} />
+      <input type="file" accept=".osm,.pbf,.xml,.tar,application/octet-stream" hidden ref={fileRef} onChange={onFileChange} />
 
       <div className="settings-body">
         {/* ---------------------- downloaded ---------------------- */}
@@ -698,7 +736,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
             <div style={{ ...T.body3, color: ink.secondary, margin: `${DP.P1}px 0 ${DP.P3}px` }}>
               Import an extract below to enable offline routing and search for that area.
             </div>
-            <button className="pill-btn" onClick={() => startPick()}>Import .osm file</button>
+            <button className="pill-btn" onClick={() => startPick()}>Import .osm or routing pack</button>
           </div>
         )}
 
@@ -727,6 +765,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
                   Bounds {r.bbox.map((v) => v.toFixed(3)).join(', ')}{SEP}
                   {formatBytes(r.bytes)}{SEP}
                   {r.code}
+                  {r.pack && <>{SEP}Routing pack · {r.pack.tiles} tiles · {formatBytes(r.pack.bytes)}</>}
                 </span>
               </span>
               <span className="region-actions">
@@ -1047,7 +1086,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
         <div className="section-head" style={T.body3m}>Other extracts</div>
         <button className="pill-btn" onClick={() => startPick()} style={{ alignSelf: 'flex-start' }}>
           <IconFile size={ICON.secondary} />
-          <span style={{ marginLeft: DP.P1 }}>Import any .osm file</span>
+          <span style={{ marginLeft: DP.P1 }}>Import any .osm file, or a Valhalla routing pack (.tar)</span>
           <IconChevronRight size={ICON.secondary} />
         </button>
 

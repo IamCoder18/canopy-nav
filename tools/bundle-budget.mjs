@@ -47,10 +47,27 @@ const BUDGET = {
    * here says "the vendor moved" rather than "something got big".
    */
   mapJs: 290,
+  /**
+   * The offline Valhalla engine's own JS (§17): the UMD glue `valhalla-*.js`
+   * the worker loads, and the engine's worker bundle `worker-*.js`. Arrived
+   * with the engine; its `.wasm` is not JS and is not counted here (7.3 MB,
+   * precached by the service worker because offline routing without it would
+   * be a lie). Bounded like the map vendor: this is a vendored engine whose
+   * growth is not this app's to absorb silently.
+   */
+  engineJs: 60,
   /** The largest single chunk — kept as the catch-all for anything unnamed. */
   largestChunk: 300,
-  /** Every JS byte the build emits, deferred included. */
-  totalJs: 460,
+  /**
+   * Every JS byte the build emits, deferred included.
+   *
+   * 460 -> 490 with the offline engine (§17): the measured floor moved by the
+   * engine's ~27 kB gzip (glue + worker + the engine modules in the app
+   * chunks). Moved openly, the way the MapLibre vendor floor moved — the
+   * number is a floor, and a floor that ignores a new tenant is one that will
+   * fail for the wrong reason.
+   */
+  totalJs: 490,
 };
 
 let failed = false;
@@ -161,6 +178,15 @@ if (mapVendor.length === 0) {
   // fails rather than warns.
   console.log('  FAIL  no MapLibre vendor chunk — is `manualChunks` still set in vite.config.ts?');
   failed = true;
+}
+const engineVendor = js.filter((f) => /^(valhalla|worker)-/.test(f.name));
+for (const f of engineVendor) {
+  check(f.gz, BUDGET.engineJs, `engine ${f.name.slice(0, 14)}…`);
+}
+if (engineVendor.length === 0) {
+  // Not a failure: an app that drops the offline engine legitimately drops
+  // these with it. Worth one line so the drop is a decision and not a hash.
+  console.log('  WARN  no offline-engine chunks — the engine assets are gone from the build');
 }
 check(Math.max(...js.map((f) => f.gz)), BUDGET.largestChunk, 'largest chunk');
 check(js.reduce((n, f) => n + f.gz, 0), BUDGET.totalJs, 'total js');
