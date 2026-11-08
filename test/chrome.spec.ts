@@ -1,21 +1,25 @@
 /**
- * `chrome.ts` — the bars' measured heights, as behaviour rather than as a source.
+ * `chrome.ts` — the bottom sheet's measured height, as behaviour rather than as a source.
  *
  * `test/textscale-layout.spec.ts` asserts the *invariants* that stop the old bug
  * coming back: leading is a multiplier, bars have floors, positions read the
  * measurements. Those are all things a future edit could break by accident, and none
  * of them would notice if the mechanism itself stopped working — that the observer
- * exists, that it publishes, that it stops cleanly, and that a bar growing actually
+ * exists, that it publishes, that it stops cleanly, and that the sheet growing actually
  * changes what it publishes.
  *
- * The last one is the point of the whole module. Everything else exists so that a bar
- * which grows by 52px pushes the banner out of its way; if the observer did not fire
- * on a resize, the stylesheet would read `--eta-h` from the first paint forever and
- * every fix in `styles.css` would be decoration.
+ * The last one is the point of the whole module. Everything else exists so that a sheet
+ * which grows by 52px pushes the right lane and the status sign out of its way; if the
+ * observer did not fire on a resize, the stylesheet would read `--nav-h` from the first
+ * paint forever and every fix in `styles.css` would be decoration.
+ *
+ * One bar since the Google-style layout: the sheet is the only chrome whose height is a
+ * function of its own content. The old module published the ETA strip too; that strip
+ * moved into this sheet, and with it its reason to be measured separately.
  *
  * ## Why a hand-built root rather than a DOM
  *
- * There is no `jsdom` or `happy-dom` in this project, and adding one to test eleven
+ * There is no `jsdom` or `happy-dom` in this project, and adding one to ten
  * assertions would be a worse trade than the thing it tests: it would put a
  * synthesised layout engine in the path of a module whose entire purpose is to measure
  * a *real* one. What `observeChromeHeights` needs from its argument is two things —
@@ -51,7 +55,7 @@ class FakeBar {
 }
 
 /**
- * A stand-in document root that resolves the two selectors.
+ * A stand-in document root that resolves the observed selector.
  *
  * Elements are cached per selector and returned by identity, because a real
  * `querySelector` does: the observer registers one, and the thing that later triggers
@@ -108,7 +112,7 @@ let bars: Map<string, FakeBar>;
 let root: FakeRoot;
 
 beforeEach(() => {
-  bars = new Map([['.eta-bar', new FakeBar()], ['.nav-bottom', new FakeBar()]]);
+  bars = new Map([['.nav-bottom', new FakeBar()]]);
   root = new FakeRoot(bars);
 });
 
@@ -119,105 +123,96 @@ afterEach(() => {
 const asRoot = () => root as unknown as HTMLElement;
 
 describe('observeChromeHeights', () => {
-  it('publishes both bars on the first pass', () => {
-    bars.get('.eta-bar')!.height = 128;
+  it('publishes the sheet\'s height on the first pass', () => {
     bars.get('.nav-bottom')!.height = 100;
     stubResizeObserver();
 
     observeChromeHeights(asRoot());
 
-    expect(root.style.getPropertyValue('--eta-h')).toBe('128px');
     expect(root.style.getPropertyValue('--nav-h')).toBe('100px');
   });
 
-  it('observes both bars, so a later resize is noticed', () => {
-    bars.get('.eta-bar')!.height = 76;
+  it('observes the sheet, so a later resize is noticed', () => {
     bars.get('.nav-bottom')!.height = 96;
     const ro = stubResizeObserver();
 
     observeChromeHeights(asRoot());
 
-    expect(ro.observed.size).toBe(2);
+    expect(ro.observed.size).toBe(1);
   });
 
-  it('republishes when a bar changes height', () => {
-    // The whole reason this module exists. A bar grows by 52px at 200% — measured —
-    // and the banner's bounds have to move with it.
-    bars.get('.eta-bar')!.height = 76;
+  it('republishes when the sheet changes height', () => {
+    // The whole reason this module exists. The sheet grows by 52px at 200% — measured —
+    // and everything anchored to it has to move with it.
     bars.get('.nav-bottom')!.height = 96;
     const ro = stubResizeObserver();
     observeChromeHeights(asRoot());
-    expect(root.style.getPropertyValue('--eta-h')).toBe('76px');
+    expect(root.style.getPropertyValue('--nav-h')).toBe('96px');
 
-    bars.get('.eta-bar')!.height = 128;
+    bars.get('.nav-bottom')!.height = 148;
     // Resizing the element itself, not "call the callback" — the observation has to be
     // what connects them.
-    ro.fire(root.querySelector('.eta-bar'));
+    ro.fire(root.querySelector('.nav-bottom'));
 
-    expect(root.style.getPropertyValue('--eta-h')).toBe('128px');
+    expect(root.style.getPropertyValue('--nav-h')).toBe('148px');
   });
 
   it('does not notice a bar it was never asked to watch', () => {
     // The negative of the above, and the case that would slip through a loose stub:
     // an unobserved element resizing must change nothing.
-    bars.get('.eta-bar')!.height = 76;
     bars.get('.nav-bottom')!.height = 96;
     const ro = stubResizeObserver();
     observeChromeHeights(asRoot());
-    root.querySelector = () => null;          // stop resolving, mid-flight
-    bars.get('.eta-bar')!.height = 999;
+    const stranger = { getBoundingClientRect: () => ({ height: 999 }) };
 
-    ro.fire(root.querySelector('.eta-bar'));
+    ro.fire(stranger);
 
-    expect(root.style.getPropertyValue('--eta-h')).toBe('76px');
+    expect(root.style.getPropertyValue('--nav-h')).toBe('96px');
   });
 
   it('rounds to whole pixels', () => {
     // Sub-pixel churn would push a custom property onto every inheriting element on
     // every frame of a zoom gesture, and the gain is invisible.
-    bars.get('.eta-bar')!.height = 127.984;
+    bars.get('.nav-bottom')!.height = 95.984;
     stubResizeObserver();
 
     observeChromeHeights(asRoot());
 
-    expect(root.style.getPropertyValue('--eta-h')).toBe('128px');
+    expect(root.style.getPropertyValue('--nav-h')).toBe('96px');
   });
 
-  it('keeps the previous value when a bar measures zero', () => {
-    // A hidden or not-yet-laid-out bar measures 0. Publishing that would collapse the
-    // banner's bounds to nothing — a worse failure than being briefly wrong.
-    bars.get('.eta-bar')!.height = 128;
+  it('keeps the previous value when the sheet measures zero', () => {
+    // A hidden or not-yet-laid-out sheet measures 0. Publishing that would collapse the
+    // anchored bounds to nothing — a worse failure than being briefly wrong.
+    bars.get('.nav-bottom')!.height = 96;
     const ro = stubResizeObserver();
     observeChromeHeights(asRoot());
 
-    const eta = root.querySelector('.eta-bar');
-    bars.get('.eta-bar')!.height = 0;
-    ro.fire(eta);
+    const sheet = root.querySelector('.nav-bottom');
+    bars.get('.nav-bottom')!.height = 0;
+    ro.fire(sheet);
 
-    expect(root.style.getPropertyValue('--eta-h')).toBe('128px');
+    expect(root.style.getPropertyValue('--nav-h')).toBe('96px');
   });
 
-  it('writes nothing when a bar is absent', () => {
+  it('writes nothing when the sheet is absent', () => {
     // Before navigation renders there is no `.nav-root` at all. Falling back to the
     // design tokens is correct; publishing 0 or throwing is not.
-    root = new FakeRoot(new Map([['.eta-bar', Object.assign(new FakeBar(), { height: 76 })]]));
+    root = new FakeRoot(new Map());
     stubResizeObserver();
 
     expect(() => observeChromeHeights(asRoot())).not.toThrow();
     expect(root.style.getPropertyValue('--nav-h')).toBe('');
-    expect(root.style.getPropertyValue('--eta-h')).toBe('76px');
   });
 
   it('removes what it wrote on stop, and disconnects', () => {
-    bars.get('.eta-bar')!.height = 128;
     bars.get('.nav-bottom')!.height = 100;
     const ro = stubResizeObserver();
     const handle = observeChromeHeights(asRoot());
-    expect(root.style.getPropertyValue('--eta-h')).toBe('128px');
+    expect(root.style.getPropertyValue('--nav-h')).toBe('100px');
 
     handle.stop();
 
-    expect(root.style.getPropertyValue('--eta-h')).toBe('');
     expect(root.style.getPropertyValue('--nav-h')).toBe('');
     expect(ro.observed.size).toBe(0);
   });
@@ -226,11 +221,11 @@ describe('observeChromeHeights', () => {
     // Graceful degradation, asserted rather than hoped for: the stylesheet falls back
     // to the design tokens either way, and a caller should not assume tracking.
     globalThis.ResizeObserver = undefined as unknown as typeof ResizeObserver;
-    bars.get('.eta-bar')!.height = 112;
+    bars.get('.nav-bottom')!.height = 112;
 
     const handle = observeChromeHeights(asRoot());
 
-    expect(root.style.getPropertyValue('--eta-h')).toBe('112px');
+    expect(root.style.getPropertyValue('--nav-h')).toBe('112px');
     expect(() => handle.stop()).not.toThrow();
   });
 

@@ -1768,7 +1768,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx 5027  screens, navigation state, focus + announcements,
+  App.tsx 5184  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            252  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
@@ -1780,7 +1780,7 @@ src/
   geo.ts                  489  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt,
                                 + headingAlong and lookAheadMetres (camera geometry)
-  styles.css 3732  layout, insets, responsive rules
+  styles.css 3623  layout, insets, responsive rules
 
   osm/
     engine.worker.ts     1307  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
@@ -1799,7 +1799,7 @@ src/
                                         and why a refusal keeps saying why (§14.10)
     providers.ts 441  provider chain, attempt trace, connectivity
     requests.ts           107  RequestGate: one live route request at a time
-    chrome.ts             117  the two bars' measured heights, as --eta-h and --nav-h
+    chrome.ts             121  the bottom sheet's measured height, as --nav-h
     steps.ts               66  why the turn list is empty: three causes, three answers
     engines.ts 253  engine selection, readiness, provenance
     geocode.ts            235  Nominatim client, 1 req/s throttle
@@ -1832,7 +1832,7 @@ tools/serve.mjs         306 LAN static server for on-device manual testing
 tools/offline-smoke.mjs 253 device smoke: install the APK, go offline, import a fixture through the WebView DevTools socket, and scan logcat
 tools/bundle-budget.mjs 173 gzip size budget per role (entry, map vendor, totals); fails on regression
 tools/verify.mjs 133 every gate in one command: local and CI run this same list
-tools/reflow.mjs        388 chrome overlap at 100/175/200% text (§13.8) — a
+tools/reflow.mjs        382 chrome overlap at 100/175/200% text (§13.8) — a
                              diagnostic, still not a gate: it needs a
                              browser and takes minutes, and one that
                              reports nothing stops being read (§12.7)
@@ -1840,13 +1840,13 @@ tools/textscale-check.mjs 423 does the app notice a text scale that leaves
                              the root font size alone (§14.8) — a gate;
                              was 3-in-12 flaky (§2.3)
 tools/focus.mjs         297 15 keyboard/focus checks in a real browser (§11)
-tools/shots.mjs         195 screenshot every screen + computed styles (§11)
+tools/shots.mjs         202 screenshot every screen + computed styles (§11)
 tools/sw-shellcheck.mjs  99 offline boot after a captive portal (§13.3) — a gate
 tools/status-audit.mjs   471 STATUS.md checked against the files it describes
 tools/diag-route.mjs     55 throwaway used to read a failing e2e check (§3.19)
 ```
 
-`App.tsx` at 5027 lines is the largest file in the project and is now the main obstacle to
+`App.tsx` at 5174 lines is the largest file in the project and is now the main obstacle to
 working on it: the guidance model, the routing orchestration, the reroute effect and every
 screen live in one component, so a change to any of them risks all of them, and the failure
 mode is a render-time throw that only a browser suite can see (§3.19). Splitting the

@@ -67,6 +67,17 @@ const check = (name, ok, detail = '') => {
   if (!ok) failures++;
 };
 
+/**
+ * Whether the navigation screen is up, read from the page's text.
+ *
+ * The marker used to be the rail's own words — "Steps" and "Exit" — and the
+ * rail is gone with the Google-style sheet: the exit circle is unlabelled and
+ * the turn list moved behind the trip-options button. What this screen always
+ * shows is the sheet's duration and the Report pill, so those are the words
+ * that say "navigating" now.
+ */
+const navUp = (txt) => /\d+\s*(min|hr)/.test(txt) && /Report/.test(txt);
+
 const browser = await chromium.launch({
   // Prefer a Playwright-managed Chromium so this works in CI, but fall back to
   // a system Chrome for local runs where nothing has been downloaded.
@@ -199,11 +210,13 @@ try {
     await page.click('button.primary-btn');
     await page.waitForTimeout(2000);
     const nav = await page.evaluate(() => document.body.innerText);
-    check('navigation screen active', /Steps/.test(nav) && /Exit/.test(nav));
-    check('ETA bar shows duration', /\d+\s*(min|hr)/.test(nav), nav.match(/\d+\s*(min|hr)[^\n]*/)?.[0] ?? '');
+    check('navigation screen active', navUp(nav));
+    check('the trip sheet shows duration', /\d+\s*(min|hr)/.test(nav), nav.match(/\d+\s*(min|hr)[^\n]*/)?.[0] ?? '');
     await page.screenshot({ path: join(SHOTS, '4-navigating.png') });
 
-    // steps list
+    // steps list — behind the trip-options button since the rail went away
+    const tripBtn = await page.$('button[aria-label="Trip options"]');
+    if (tripBtn) { await tripBtn.click(); await page.waitForTimeout(400); }
     const stepsBtn = await page.$('button:has-text("Steps")');
     if (stepsBtn) {
       await stepsBtn.click();
@@ -558,7 +571,7 @@ console.log('\ndrive simulator');
         await page.waitForTimeout(1500);
 
         const before = await page.evaluate(() => document.body.innerText);
-        check('navigation is live before the deviation', /Steps/.test(before) && /Exit/.test(before));
+        check('navigation is live before the deviation', navUp(before));
 
         // Well off the line, held there past the 6 s confirmation window.
         await context.setGeolocation({ latitude: 51.5400, longitude: -1.3990, accuracy: 8 });
@@ -574,7 +587,7 @@ console.log('\ndrive simulator');
           !/\d{4,}\s*m\b/.test(during),
           during.match(/\d{4,}\s*m\b/)?.[0] ?? '');
         check('guidance survives the reroute attempt',
-          /Steps/.test(during) && /Exit/.test(during));
+          navUp(during));
         await page.screenshot({ path: join(SHOTS, '11-offroute.png') });
 
         // Back on the line: the notice must clear rather than stick.
@@ -637,7 +650,7 @@ console.log('\ndrive simulator');
         await start.click();
         await page.waitForTimeout(1500);
         check('a routable trip starts before the device is driven off it',
-          /Steps/.test(await page.evaluate(() => document.body.innerText)));
+          navUp(await page.evaluate(() => document.body.innerText)));
 
         // Watch the notice while driving, so the transition is captured rather than
         // sampled once at the end -- the reroute wording exists for well under a
@@ -660,7 +673,7 @@ console.log('\ndrive simulator');
         // check above was passing without a reroute ever being attempted.
         check('a moving driver off the route is told, and kept their guidance',
           seen.some((s) => /left the route/i.test(s))
-          && /Steps/.test(await page.evaluate(() => document.body.innerText)),
+          && navUp(await page.evaluate(() => document.body.innerText)),
           seen.join(' -> ') || 'no notice seen');
         // The attempt reaches the backoff window: "settling" is the state between
         // confirming the deviation and the request going out. Asserting it *not* to
@@ -738,7 +751,7 @@ console.log('\ndrive simulator');
         await start.click();
         await page.waitForTimeout(1500);
         check('a trip is under way before the device is driven off it',
-          /Steps/.test(await page.evaluate(() => document.body.innerText)));
+          navUp(await page.evaluate(() => document.body.innerText)));
 
         // Every engine is taken away, and the reroute must still be answered — by the
         // map on the device, with no request leaving it.
@@ -768,7 +781,7 @@ console.log('\ndrive simulator');
         // Guidance survives: a lost driver is not also left without directions.
         const after = await page.evaluate(() => document.body.innerText);
         check('guidance survives the reroute',
-          /Steps/.test(after) && /Exit/.test(after));
+          navUp(after));
         await page.screenshot({ path: join(SHOTS, '13-reroute-offline.png') });
 
         await context.unroute('**://valhalla1.openstreetmap.de/**');

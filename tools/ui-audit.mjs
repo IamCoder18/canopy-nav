@@ -475,17 +475,19 @@ for (const [vpName, vp] of Object.entries(VIEWPORTS)) {
       await visit('preview');
       if (await click('button.primary-btn', 2400)) {
         await visit('navigating');
-        if (await click('button[aria-label="Map layers"]', 600)) {
+        // Steps and the layers sheet moved behind the trip-options button when
+        // the labelled rail became Google's bottom sheet. The menu closes
+        // itself when a row is picked, so it is opened again for the second one.
+        const menu = () => click('button[aria-label="Trip options"]', 500);
+        if (await menu() && await click('button[aria-label="Map layers"]', 600)) {
           await visit('layers');
           await page.keyboard.press('Escape');
           await page.waitForTimeout(400);
         }
-        if (await click('button:has-text("Steps")', 800)) {
+        if (await menu() && await click('button:has-text("Steps")', 800)) {
           await visit('steps');
-          await goHome();
-        } else {
-          await goHome();
         }
+        await goHome();
       } else {
         await goHome();
       }

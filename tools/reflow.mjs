@@ -70,20 +70,14 @@ const check = (name, ok, detail = '') => {
  * layout working.
  */
 const PIECES = [
-  ['.eta-bar', 'ETA bar'],
+  ['.nav-bottom', 'bottom sheet'],
   ['.banner-stack', 'banner stack'],
   ['.offroute-banner', 'off-route notice'],
-  ['.nav-controls', 'control column'],
-  ['.nav-bottom', 'bottom bar'],
-  // The credit too. It floats above the map like the rest of the chrome, and at
-  // large text it grew over the maneuver card while every check below stayed
-  // green — the credit was the one piece of chrome not in this list. It is
-  // checked like the rest now; overlap with the *map* is fine (it lives there),
-  // overlap with the instruction is not.
+  // The lane *includes* the Report pill at its foot — the pill is the lane's
+  // last child, so it is covered by this box rather than listed beside it.
+  ['.nav-controls', 'control lane'],
   ['.maplibregl-ctrl-attrib', 'attribution credit'],
-  // And the layer chip, for the same reason: at 200% it ran into the zoom
-  // buttons while the checks all passed, because it was not among them.
-  ['.nav-status', 'layer chip'],
+  ['.nav-status', 'status sign'],
 ];
 
 /** Runs in the page: find chrome that intersects other chrome, or leaves the viewport. */
@@ -172,7 +166,7 @@ const MEASURE = (pieces) => {
     }
     return false;
   };
-  const textPieces = [...document.querySelectorAll('.maneuver-instr, .maneuver-dist, .eta-value, .nav-bottom-btn span')]
+  const textPieces = [...document.querySelectorAll('.maneuver-instr, .maneuver-dist, .eta-value, .eta-label, .then-chip')]
     .filter((el) => el.scrollHeight > el.clientHeight + 2 || el.scrollWidth > el.clientWidth + 2);
   const clipped = textPieces.filter((el) => !hasScrollableAncestor(el))
     .map((el) => `"${(el.textContent || '').trim().slice(0, 24)}"`);

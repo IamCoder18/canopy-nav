@@ -15,8 +15,8 @@
  *      and `.nav-controls`' top, were `var(--app-bar)` and `var(--navbot)` — correct
  *      only while the bars really were that tall.
  *
- * `src/nav/chrome.ts` publishes the bars' *measured* heights as `--eta-h` and
- * `--nav-h`, and the type scale now emits leading as a multiplier of its own font, so
+ * `src/nav/chrome.ts` publishes the bottom sheet's *measured* height as `--nav-h`,
+ * and the type scale now emits leading as a multiplier of its own font, so
  * both follow the text.
  *
  * ## What these tests can and cannot do
@@ -105,9 +105,12 @@ describe('the type scale emits leading as a multiplier, not a length', () => {
 });
 
 describe('the bars are measured, not assumed', () => {
-  it('publishes both bars as separate properties', () => {
-    expect(chrome).toMatch(/selector: '\.eta-bar', property: '--eta-h'/);
+  it('publishes the sheet\'s measured height', () => {
+    // One bar since the Google-style layout: the sheet is the only chrome whose
+    // height is a function of its own content. `--eta-h` is gone with the ETA
+    // strip — its numbers live in the sheet now.
     expect(chrome).toMatch(/selector: '\.nav-bottom', property: '--nav-h'/);
+    expect(chrome).not.toMatch(/--eta-h/);
   });
 
   it('does not overwrite the design tokens with the measurements', () => {
@@ -118,25 +121,24 @@ describe('the bars are measured, not assumed', () => {
   });
 
   it('reads the measurements before the design tokens, everywhere it is anchored', () => {
-    // The order is the fix: `--eta-h` first so a measurement wins, the token as the
+    // The order is the fix: `--nav-h` first so a measurement wins, the token as the
     // fallback so the first paint — and any platform without a ResizeObserver — is
-    // still correct.
+    // still correct. The banner stack's *top* is anchored on the system inset alone:
+    // nothing sits above it since the ETA strip moved into the sheet.
     for (const pattern of [
-      /\.banner-stack \{[^}]*top: calc\(var\(--eta-h, var\(--app-bar/,
+      /\.banner-stack \{[^}]*top: calc\(var\(--inset-top/,
       /\.banner-stack \{[^}]*bottom: calc\(var\(--nav-h, var\(--navbot/,
-      /\.nav-controls \{[^}]*top: calc\(var\(--eta-h, var\(--app-bar/,
+      /\.nav-controls \{[^}]*bottom: calc\(var\(--nav-h, var\(--navbot/,
+      /\.nav-status \{[^}]*bottom: calc\(var\(--nav-h, var\(--navbot/,
     ]) {
       expect(css).toMatch(pattern);
     }
   });
 
-  it('gives every bar a floor rather than a height, so content can exceed it', () => {
+  it('gives the sheet a floor rather than a height, so content can exceed it', () => {
     // A `height` here is how the bottom bar ended up clipping its own labels by 4px
-    // at 200%, and the ETA bar 52px of glyphs in a 40dp box at 175%.
-    const eta = /\.eta-bar \{[^}]*\}/.exec(css)?.[0] ?? '';
+    // at 200%. The sheet wraps its centre block at large text and grows around it.
     const nav = /\.nav-bottom \{[^}]*\}/.exec(css)?.[0] ?? '';
-    expect(eta).not.toMatch(/^\s*height: var\(--app-bar/m);
-    expect(eta).toMatch(/min-height:/);
     expect(nav).not.toMatch(/^\s*height: var\(--navbot/m);
     expect(nav).toMatch(/min-height: var\(--navbot/);
   });
@@ -150,11 +152,14 @@ describe('the bars are measured, not assumed', () => {
     expect(base).toMatch(/overflow-y: auto/);
   });
 
-  it('bounds the control column by the same two measurements', () => {
-    // `max-height: none` in the short-screen block undid the base rule's bound, and
-    // the column met the bottom bar by 4px at 200%.
+  it('keeps the right lane a lane at short heights', () => {
+    // The lane is four discs and a pill, bottom-anchored on `--nav-h` — it has a
+    // fixed content and needs no `max-height` bound. What it must never do is go
+    // back to the wrapping grid: `flex-wrap: wrap` here is the old six-control
+    // row that made this screen read as a control panel, and `max-height: none`
+    // is how the old column met the bottom bar by 4px at 200%.
     const short = /@media \(max-height: 520px\) \{[\s\S]*?\n\}/.exec(css)?.[0] ?? '';
-    expect(short).toMatch(/\.nav-controls \{[\s\S]*max-height: calc\(/);
+    expect(short).not.toMatch(/\.nav-controls \{[\s\S]*?flex-wrap: wrap/);
     expect(short).not.toMatch(/\.nav-controls \{[\s\S]*?max-height: none/);
   });
 });

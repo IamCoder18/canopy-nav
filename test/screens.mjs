@@ -217,29 +217,34 @@ for (const vp of VIEWPORTS) {
           await page.waitForTimeout(300);
           const layout = await page.evaluate(() => {
             const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
-            const eta = rect('.eta-bar');
             const stack = rect('.banner-stack');
             const banner = rect('.maneuver-banner');
-            const controls = [...document.querySelectorAll('.nav-controls button')];
-            const boxes = controls.map((button) => button.getBoundingClientRect());
+            const discs = [...document.querySelectorAll('.nav-controls .round-btn')];
+            const boxes = discs.map((button) => button.getBoundingClientRect());
+            const pill = document.querySelector('.report-pill')?.getBoundingClientRect();
+            const lane = pill ? [...boxes, pill] : boxes;
             const status = rect('.nav-status');
-            const rail = rect('.nav-bottom');
+            const sheet = rect('.nav-bottom');
             const credit = rect('.maplibregl-ctrl-attrib');
+            const overlap = (a, b) =>
+              Math.min(a.right, b.right) > Math.max(a.left, b.left) + 1 &&
+              Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top) + 1;
             return {
-              etaHeight: eta.height,
-              bannerGap: stack.top - eta.bottom,
-              mapHeight: status.top - banner.bottom,
-              statusWidth: status.width,
-              oneRow: controls.every((button) => button.offsetTop === controls[0].offsetTop),
-              targets: boxes.every((box) => box.width >= 44 && box.height >= 44 && box.left >= 0 && box.right <= innerWidth),
-              controlsClear: boxes.every((box) => box.top >= status.bottom && box.bottom <= credit.top),
-              railClear: credit.bottom <= rail.top,
+              bannerTop: Math.round(stack.top),
+              bannerHeight: Math.round(banner.height),
+              mapHeight: Math.round(Math.min(status.top, sheet.top) - banner.bottom),
+              statusWidth: Math.round(status.width),
+              oneColumn: discs.every((button) => Math.abs(button.offsetLeft - discs[0].offsetLeft) < 2),
+              targets: lane.every((box) => box.width >= 44 && box.height >= 44 && box.left >= 0 && box.right <= innerWidth),
+              bannerClear: lane.every((box) => !overlap(box, banner)),
+              laneClear: lane.every((box) => box.bottom <= credit.top + 1),
+              railClear: credit.bottom <= sheet.top + 1,
             };
           });
           const label = `${size.width}x${size.height} navigation`;
-          check(`${label} has compact guidance`, layout.etaHeight <= 56 && layout.bannerGap >= 0 && layout.bannerGap <= 8, JSON.stringify(layout));
+          check(`${label} has compact guidance`, layout.bannerTop <= 20 && layout.bannerHeight <= 170, JSON.stringify(layout));
           check(`${label} keeps the map open`, layout.mapHeight >= 100 && layout.statusWidth < size.width - 24);
-          check(`${label} keeps controls in one reachable row`, layout.oneRow && layout.targets && layout.controlsClear && layout.railClear);
+          check(`${label} keeps controls in one reachable column`, layout.oneColumn && layout.targets && layout.bannerClear && layout.laneClear && layout.railClear);
         }
         await page.setViewportSize({ width: vp.width, height: vp.height });
         await page.waitForTimeout(300);
@@ -247,7 +252,12 @@ for (const vp of VIEWPORTS) {
 
       // Open the layers panel and assert it is actually operable: reachable,
       // sized, and clicking a row does not fall through to the map.
-      const layerBtn = await page.$('.nav-controls button[aria-label="Map layers"]');
+      // The layers sheet lives behind the trip-options menu now — the sheet's
+      // route-options button, where the turn list, the overview, the layers and
+      // the zoom stepper went when the right lane became Google's four discs.
+      const tripBtn = await page.$('button[aria-label="Trip options"]');
+      if (tripBtn) { await tripBtn.click(); await page.waitForTimeout(400); }
+      const layerBtn = await page.$('button[aria-label="Map layers"]');
       if (layerBtn) {
         await layerBtn.click();
         await page.waitForTimeout(800);
@@ -447,6 +457,8 @@ for (const vp of VIEWPORTS) {
       if (start) {
         await start.click();
         await visit('navigating', 'navigating');
+        const tripBtn = await page.$('button[aria-label="Trip options"]');
+        if (tripBtn) { await tripBtn.click(); await page.waitForTimeout(400); }
         const steps = await page.$('button:has-text("Steps")');
         if (steps) {
           await steps.click();

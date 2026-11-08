@@ -146,11 +146,15 @@ for (const vpName of vpNames) {
         await start.click();
         await page.waitForTimeout(2400);
         await shot('05-navigating', [
-          '.maneuver-icon', '.maneuver-instr', '.maneuver-dist',
-          '.eta-bar', '.nav-bottom', '.nav-bottom-btn', '.nav-status',
-          '.maplibregl-ctrl-attrib', '.control-column',
+          '.maneuver-icon', '.maneuver-instr', '.maneuver-dist', '.then-chip',
+          '.nav-bottom', '.sheet-eta', '.sheet-btn', '.nav-status',
+          '.maplibregl-ctrl-attrib', '.nav-controls', '.report-pill',
         ]);
 
+        // The turn list moved behind the trip-options button when the labelled
+        // rail became Google's sheet.
+        const tripBtn = await page.$('button[aria-label="Trip options"]');
+        if (tripBtn) { await tripBtn.click(); await page.waitForTimeout(350); }
         const steps = await page.$('button:has-text("Steps")');
         if (steps) {
           await steps.click();
@@ -159,6 +163,9 @@ for (const vpName of vpNames) {
           const back = await page.$('button[aria-label="Back"]');
           if (back) { await back.click(); await page.waitForTimeout(700); }
         }
+        // Same menu, one row deeper: the layers sheet lives behind it now.
+        const tripBtn2 = await page.$('button[aria-label="Trip options"]');
+        if (tripBtn2) { await tripBtn2.click(); await page.waitForTimeout(350); }
         const layers = await page.$('button[aria-label="Map layers"]');
         if (layers) {
           await layers.click();

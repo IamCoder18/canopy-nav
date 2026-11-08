@@ -158,7 +158,7 @@ const browser = await chromium.launch({ args: ['--no-sandbox'] });
  * §13.7's subject — a harness failure and a product failure must be distinguishable from
  * outside — and this file cites §13.7 while breaking it.
  */
-const ON_NAVIGATION = '.eta-bar, .eta-value';
+const ON_NAVIGATION = '.nav-bottom, .eta-value';
 
 async function waitForNavigationScreen(page, timeout = 20000) {
   try {
@@ -166,7 +166,7 @@ async function waitForNavigationScreen(page, timeout = 20000) {
     // Attached is not enough: both elements have to be laid out, or a computed style
     // read on a zero-size box is not the value the gate means to compare.
     await page.waitForFunction(
-      () => [...document.querySelectorAll('.eta-bar, .eta-value')]
+      () => [...document.querySelectorAll('.nav-bottom, .eta-value')]
         .some((el) => el.getBoundingClientRect().width > 0),
       undefined,
       { timeout, polling: 200 },
@@ -254,7 +254,7 @@ const rootPx = (page) => page.evaluate(
  * got to the screen — are exactly the distinction this file now enforces.
  */
 const largeLayoutApplied = (page) => page.evaluate(() => {
-  const bar = document.querySelector('.eta-bar');
+  const bar = document.querySelector('.nav-bottom');
   return bar ? getComputedStyle(bar).getPropertyValue('flex-wrap').trim() : '(absent)';
 });
 
@@ -321,7 +321,7 @@ console.log('\ntext scaling the root font size only');
     sawRoot ? '' : `data-textsize stayed "${await page.evaluate(() => document.documentElement.dataset.textsize)}"`);
     navCheck('and the large-text layout is applied',
       (await largeLayoutApplied(page)) === 'wrap',
-      `eta-bar flex-wrap: ${await largeLayoutApplied(page)}`);
+      `sheet flex-wrap: ${await largeLayoutApplied(page)}`);
   await page.screenshot({ path: join(SHOTS, 'textscale-root.png') });
   await ctx.close();
 }
@@ -363,7 +363,7 @@ console.log('\ntext scaling the rendered text, root untouched');
             : `the app never noticed 1.75x type: data-textsize stayed "${await page.evaluate(() => document.documentElement.dataset.textsize)}"`);
   navCheck('and the large-text layout is applied',
     (await largeLayoutApplied(page)) === 'wrap',
-    `eta-bar flex-wrap: ${await largeLayoutApplied(page)}`);
+    `sheet flex-wrap: ${await largeLayoutApplied(page)}`);
   await page.screenshot({ path: join(SHOTS, 'textscale-rendered.png') });
   await ctx.close();
 }

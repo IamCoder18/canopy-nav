@@ -393,6 +393,20 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   useEffect(() => { reportOpenRef.current = reportOpen; }, [reportOpen]);
 
   /**
+   * The trip-options menu — what the bottom sheet's route-options button opens.
+   *
+   * Lives here rather than inside `NavOverlay` for the same reason `reportOpen`
+   * does: Escape unwinds sheets one level at a time from the key handler, and
+   * that handler is registered once on mount. A menu that only the overlay knew
+   * about would be the one sheet Escape could not close — and Escape on the
+   * navigation screen deliberately does nothing else, so the menu would have
+   * been un-dismissable by keyboard except through its own close button.
+   */
+  const [tripMenuOpen, setTripMenuOpen] = useState(false);
+  const tripMenuOpenRef = useRef(false);
+  useEffect(() => { tripMenuOpenRef.current = tripMenuOpen; }, [tripMenuOpen]);
+
+  /**
    * What the driver has reported, and where.
    *
    * Marked on the map, because a report that only lives in a toast is a report
@@ -867,9 +881,10 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
           el?.blur();
           return;
         }
+        setTripMenuOpen(false);
         setLayersOpen(false);
         setReportOpen(false);
-        if (layersOpenRef.current || reportOpenRef.current) return;
+        if (tripMenuOpenRef.current || layersOpenRef.current || reportOpenRef.current) return;
         // The same `go`, so Escape gets the focus handling every other
         // transition has, rather than being the one path that loses it.
         const target = (() => {
@@ -1792,14 +1807,29 @@ const banner = rerouteNotice ?? routeError ?? null;
             });
           }}
           reportOpen={reportOpen}
-          onToggleReport={() => setReportOpen((o) => !o)}
+          onToggleReport={() => {
+            // One sheet at a time: a modal report sheet under a modal trip menu
+            // is two dialogs fighting over focus, and neither Escape nor a tap
+            // says which one closed.
+            setTripMenuOpen(false);
+            setReportOpen((o) => !o);
+          }}
           reports={reports.length}
           onReport={(kind) => {
             setReports((r) => [...r, { pos: location, kind }]);
             setReportOpen(false);
             showToast(`Reported ${kind.toLowerCase()} at your position.`);
           }}
-          onToggleLayers={() => setLayersOpen((o) => !o)}
+          tripMenuOpen={tripMenuOpen}
+          onToggleTripMenu={() => {
+            setReportOpen(false);
+            setLayersOpen(false);
+            setTripMenuOpen((o) => !o);
+          }}
+          onToggleLayers={() => {
+            setTripMenuOpen(false);
+            setLayersOpen((o) => !o);
+          }}
           onPickLayer={(id) => {
             setLayer(id);
             setLayersOpen(false);
@@ -2676,6 +2706,9 @@ function NavOverlay(props: {
   onReport: (kind: string) => void;
   /** How many reports the trip has collected so far. */
   reports: number;
+  /** The trip-options menu behind the sheet's route-options button. */
+  tripMenuOpen: boolean;
+  onToggleTripMenu: () => void;
   /** Map controls: the zoom stepper and the compass. */
   onZoom: (dir: 'in' | 'out') => void;
   onNorth: () => void;
@@ -2790,6 +2823,36 @@ function NavOverlay(props: {
   const instructionText = nextManeuver?.instruction
     ?? localTurn?.title
     ?? (arriving ? 'Arriving at your destination' : 'Continue');
+
+  /**
+   * The maneuver *after* next — Google Maps' "Then ←" chip under the banner.
+   *
+   * The chip is what tells a driver the next turn is followed by another one,
+   * which is the difference between "turn left" and "turn left, then get in the
+   * right lane". Both engines describe the whole trip as a `steps` list already
+   * (it is what the Steps screen renders), so this is the step after the one the
+   * banner is showing — found by identity against that same list rather than by
+   * a second index to keep in sync.
+   *
+   * The destination step is excluded: "Then arrive" is not a maneuver, and the
+   * arrival state has its own copy in the banner.
+   */
+  const thenStep: LegStep | null = (() => {
+    if (arriving) return null;
+    let i = -1;
+    if (g && nextManeuver) {
+      // For the Valhalla engine the banner shows a maneuver while the list is
+      // `LegStep`s — but `g.steps` is `route.maneuvers.map(...)`, so the two are
+      // parallel arrays over the same legs and the maneuver's index *is* the
+      // step's index.
+      i = route.maneuvers.indexOf(nextManeuver);
+    } else if (lg?.nextStep) {
+      i = lg.steps.indexOf(lg.nextStep);
+    }
+    const source = g ? g.steps : lg?.steps;
+    const nextOne = source && i >= 0 ? source[i + 1] : null;
+    return nextOne && nextOne.icon !== 'arrive' ? nextOne : null;
+  })();
 
   /**
    * Whether the platform can speak at all.
@@ -2918,6 +2981,14 @@ function NavOverlay(props: {
     return () => cancelAnimationFrame(id);
   }, []);
 
+  // One sheet at a time means the lane behind it goes away with the sign: a
+  // modal dialog that the controls visibly sit *under* is geometrically an
+  // overlap of the controls and the dialog's rows — measured as two CRITICAL
+  // findings by `tools/ui-audit.mjs` on the layers sheet — and functionally
+  // inert chrome the screen no longer has room to show. The sheet and its
+  // exit control stay: the trip must remain endable.
+  const sheetOpen = props.layersOpen || props.reportOpen || props.tripMenuOpen;
+
   return (
     <div className="nav-root">
       {/*
@@ -2968,72 +3039,14 @@ function NavOverlay(props: {
       >
         {announcementReady ? announcement : ''}
       </div>
-      {/* ETA bar — Android Auto's top strip */}
-      <div className="eta-bar">
-        {/*
-          The duration leads and never shrinks: it is the number a driver reads
-          first. The arrival clock is the one item dropped on a narrow screen,
-          because it is the same information expressed less directly, and losing
-          it costs less than losing "7 min".
-        */}
-        <div className="eta-block">
-          <div className="eta-value" style={T.body1m}>{formatDuration(remainingSec)}</div>
-          <div className="eta-label clock" style={T.sub3}>{formatClock(new Date(Date.now() + remainingSec * 1000))}</div>
-        </div>
-        <div className="eta-sep clock-sep" />
-        {/*
-          The distance, named.
-
-          It is the second of the two blocks and the one that goes first when the
-          row runs out of width, and `styles.css` has to be able to say so. It
-          could not before: the two blocks are not adjacent siblings — a separator
-          sits between them — so a structural selector for "the second block" did
-          not match anything, the 320px rule silently did nothing, and both values
-          stayed truncated to "14 …" on the narrowest screen the app supports.
-
-          A class is the honest way to say which of two similar things is which.
-        */}
-        <div className="eta-block eta-distance">
-          <div className="eta-value" style={T.body1m}>{formatDistance(remainingM, units)}</div>
-          <div className="eta-label" style={T.sub3}>to destination</div>
-        </div>
-        <div className="spacer" />
-        {!online && <div className="offline-chip">No signal</div>}
-        {online && degraded && <div className="offline-chip warn">Local route</div>}
-        {/*
-          The voice control, and it now controls something.
-
-          It previously toggled a boolean whose only consumers were the icon and
-          this label, so a driver tapped it, heard no change, and concluded voice
-          prompts were off — a lie with a safe-looking answer. It now drives real
-          spoken guidance (`nav/voice`).
-
-          Where the WebView has no speech engine at all the control stays
-          *visible but disabled*, with the reason in its accessible name. Hiding
-          it was the first attempt and it is the worse answer: a missing control
-          reads as a missing feature, while a disabled one explains itself.
-        */}
-        <button
-          className="icon-btn on-dark"
-          onClick={() => { if (voiceAvailable) props.onMute(); }}
-          // `aria-disabled`, not `disabled`. The whole reason this control exists
-          // in its unavailable form is so it "explains itself" — but a `disabled`
-          // button is removed from the tab order, so the explanation in its
-          // accessible name could never be reached. It had to stay focusable to
-          // do the one job it was designed for.
-          aria-disabled={!voiceAvailable}
-          aria-label={!voiceAvailable
-            ? 'Voice guidance unavailable on this device'
-            : muted ? 'Unmute voice guidance' : 'Mute voice guidance'}
-          aria-pressed={voiceAvailable ? muted : undefined}
-          title={!voiceAvailable ? 'Voice guidance unavailable on this device' : undefined}
-        >
-          {muted || !voiceAvailable ? <IconMute size={ICON.primary} /> : <IconSound size={ICON.primary} />}
-        </button>
-        <button className="icon-btn on-dark" onClick={props.onExit} aria-label="Exit navigation">
-          <IconClose size={ICON.primary} />
-        </button>
-      </div>
+      {/*
+        The ETA strip that used to live here is gone: in its place is Google
+        Maps' arrangement, where the trip's numbers sit in the bottom sheet
+        (`.nav-bottom` below) and the top of the screen is the maneuver card
+        alone. A driver glancing at a phone-shaped screen reads the sheet first
+        and the instruction above it; the old top strip duplicated the sheet's
+        numbers at the top and pushed the instruction down by a whole bar.
+      */}
 
       {/*
         The banner stack.
@@ -3080,7 +3093,7 @@ function NavOverlay(props: {
       {/* Maneuver banner — the big card Google Maps shows before each turn */}
       <div className="maneuver-banner">
         <div className={`maneuver-icon ${major || arriving ? 'major' : ''}`}>
-          <ManeuverIcon kind={arriving ? 'arrive' : icon} size={88} />
+          <ManeuverIcon kind={arriving ? 'arrive' : icon} size={64} />
         </div>
         <div className="maneuver-text">
           {/*
@@ -3091,31 +3104,57 @@ function NavOverlay(props: {
             meaningful content; the distance block has nothing left to add.
           */}
           {!arriving && (
-            <div className="maneuver-dist" style={T.display3}>{formatDistance(laneDist, units)}</div>
+            <div className="maneuver-dist" style={T.display2}>{formatDistance(laneDist, units)}</div>
           )}
           {!arriving && nextManeuver?.sign?.exit_number_elements?.length ? (
             <div className="shield">{nextManeuver.sign.exit_number_elements.map((e) => e.text).join('')}</div>
           ) : null}
-          <div className={`maneuver-instr ${imminent && !arriving ? 'is-imminent' : ''}`} style={T.body1}>
+          <div className={`maneuver-instr ${imminent && !arriving ? 'is-imminent' : ''}`} style={T.body1m}>
             {arriving ? 'You have arrived' : instructionText}
           </div>
         </div>
       </div>
+      {/*
+        The "Then" chip — the maneuver after next, as Google Maps draws it
+        under the banner ("Then ←"). It is what tells a driver the turn they
+        are making is followed by another one, which is the difference between
+        "turn left" and "turn left, then get in the right lane". Shown only
+        while there *is* a further turn; `thenStep` excludes the arrival.
+      */}
+      {thenStep && (
+        <div className="then-chip">
+          <span style={T.sub3}>Then</span>
+          <ManeuverIcon kind={thenStep.icon} size={ICON.tertiary} />
+        </div>
+      )}
       </div>
 
       {/*
-        Right-hand control stack — the *map* controls: re-centre, route
-        overview, layers, the zoom stepper and the compass. Search along the
-        route and Report went to the bottom rail with labels, which is where
-        Google Maps puts them and where the room is: measured at 892x412 this
-        column has exactly two rows of 76dp targets below the ETA bar, and six
-        cells is what two rows of three hold. Traffic is a *layer*, so it is
-        chosen in the layers sheet where its availability and its reason are
-        already spelled out — a second toggle here used to duplicate that radio
-        and, when the provider had no data, sit there disabled with no room to
-        say why.
+        Right-hand control lane — Google Maps' arrangement exactly: a single
+        column of round controls down the right edge with the Report pill under
+        them. Four discs, not six: the old column carried re-centre, overview,
+        layers and a zoom stepper as well, and at 892x412 six 76dp targets could
+        not fit one column, so they wrapped into the 2x3 grid that made this
+        screen read as a control panel rather than as a map. The turn list, the
+        route overview, the layers sheet and the zoom stepper moved to the trip
+        options menu behind the sheet's route-options button — same reachability,
+        one glanceable lane. Traffic is a *layer*, so it is chosen in the layers
+        sheet where its availability and its reason are already spelled out.
       */}
+      {!sheetOpen && (
       <div className="nav-controls">
+        {/*
+          The compass. It rotates with the map — the needle tracks real north —
+          and tapping it snaps the map back to north-up, which is the whole
+          affordance on every map that has one. The map is rotatable, so this is
+          a control with something to say rather than a decoration. Google Maps
+          puts it at the top of its column; so does this.
+        */}
+        <button className="round-btn" onClick={props.onNorth} aria-label={compassTitle} title={compassTitle}>
+          <span className="compass-needle" style={{ transform: `rotate(${-props.bearing}deg)` }}>
+            <IconCompass size={ICON.primary} />
+          </span>
+        </button>
         {/*
           Recentre shows the follow state, not just its action. `aria-pressed`
           makes the state readable to a screen reader, the `.on` disc to a
@@ -3131,66 +3170,80 @@ function NavOverlay(props: {
         >
           <IconLocate size={ICON.primary} />
         </button>
-        <button className="round-btn" onClick={props.onOverview} aria-label="Route overview">
-          <IconOverview size={ICON.primary} />
+        {/* Search along the route, without ending the trip — the magnifier in
+            Google Maps' own column. */}
+        <button className="round-btn" onClick={props.onSearch} aria-label="Search along the route">
+          <IconSearch size={ICON.primary} />
         </button>
         {/*
-          The label is exactly "Map layers", and the current layer moved to
-          `title`. It used to be `Map layers — Default` in `aria-label`, which no
-          automation could match — `button[aria-label="Map layers"]` is an exact
-          attribute selector, so `tools/ui-audit.mjs` and `tools/shots.mjs` have
-          been skipping the layers sheet without saying so. The layer's name is
-          still on screen: the status line under this column carries it.
+          The voice control, and it now controls something.
+
+          It previously toggled a boolean whose only consumers were the icon and
+          this label, so a driver tapped it, heard no change, and concluded voice
+          prompts were off — a lie with a safe-looking answer. It now drives real
+          spoken guidance (`nav/voice`).
+
+          Where the WebView has no speech engine at all the control stays
+          *visible but disabled*, with the reason in its accessible name. Hiding
+          it was the first attempt and it is the worse answer: a missing control
+          reads as a missing feature, while a disabled one explains itself.
         */}
         <button
-          className={`round-btn ${props.layersOpen ? 'on' : ''}`}
-          onClick={props.onToggleLayers}
-          aria-expanded={props.layersOpen}
-          aria-label="Map layers"
-          title={`Map layers — ${props.layerName}`}
+          className={`round-btn ${muted ? '' : 'on'}`}
+          onClick={() => { if (voiceAvailable) props.onMute(); }}
+          // `aria-disabled`, not `disabled`. The whole reason this control exists
+          // in its unavailable form is so it "explains itself" — but a `disabled`
+          // button is removed from the tab order, so the explanation in its
+          // accessible name could never be reached. It had to stay focusable to
+          // do the one job it was designed for.
+          aria-disabled={!voiceAvailable}
+          aria-label={!voiceAvailable
+            ? 'Voice guidance unavailable on this device'
+            : muted ? 'Unmute voice guidance' : 'Mute voice guidance'}
+          aria-pressed={voiceAvailable ? muted : undefined}
+          title={!voiceAvailable ? 'Voice guidance unavailable on this device' : undefined}
         >
-          <IconLayers size={ICON.primary} />
-        </button>
-        <button className="round-btn" onClick={() => props.onZoom('in')} aria-label="Zoom in">
-          <IconPlus size={ICON.primary} />
-        </button>
-        <button className="round-btn" onClick={() => props.onZoom('out')} aria-label="Zoom out">
-          <IconMinus size={ICON.primary} />
+          {muted || !voiceAvailable ? <IconMute size={ICON.primary} /> : <IconSound size={ICON.primary} />}
         </button>
         {/*
-          The compass. It rotates with the map — the needle tracks real north —
-          and tapping it snaps the map back to north-up, which is the whole
-          affordance on every map that has one. The map is rotatable, so this is
-          a control with something to say rather than a decoration.
+          The Report pill, at the foot of the lane — Google Maps' own floating
+          "Report" sits under its column of discs in exactly this spot, and it
+          is where a thumb rests on either hand. The amber warning glyph is
+          what the badge counts: reports the trip has collected so far.
         */}
-        <button className="round-btn" onClick={props.onNorth} aria-label={compassTitle} title={compassTitle}>
-          <span className="compass-needle" style={{ transform: `rotate(${-props.bearing}deg)` }}>
-            <IconCompass size={ICON.primary} />
-          </span>
+        <button
+          className={`report-pill ${props.reportOpen ? 'on' : ''}`}
+          onClick={props.onToggleReport}
+          aria-expanded={props.reportOpen}
+          aria-label={reportLabel}
+        >
+          <IconWarning size={ICON.secondary} />
+          <span style={T.body3}>Report</span>
+          {props.reports > 0 && <span className="btn-badge" aria-hidden="true">{props.reports}</span>}
         </button>
       </div>
+      )}
 
       {/*
-        Current layer name, so the map is never showing something unnamed.
-        Hidden while the panel is open: the panel names every layer, and two
-        copies of the same sentence on a phone-sized screen is noise.
+        One small sign at the bottom left, where Google Maps puts the speed
+        limit: the connectivity chip, the layer name and the traffic state. It
+        is the map's own metadata, and this is the slot a driver already reads
+        for "what is the state of the road I am on" — so "what is the state of
+        the map I am looking at" belongs beside it rather than in a card in the
+        instruction's lane.
 
-        A *sibling* of the control column, not a child of it.
+        Hidden while the layers panel is open: the panel names every layer, and
+        two copies of the same sentence on a phone-sized screen is noise.
 
-        It was the last child of `.nav-controls`, which is `position: absolute`
-        with `overflow: hidden` — so it was also `.nav-controls`' containing
-        block, and that `overflow` clipped it. Measured on the navigation screen
-        at 1280x720: the status line was missing from the layout entirely,
-        `scrollHeight - clientHeight` on the column was 108px, and the screen
-        showed four round buttons and no indication of which map was loaded.
-
-        The column's own `overflow: hidden` is load-bearing — it bounds the
-        column when it wraps into a second row on a short screen — so the fix is
-        to take this out of the column's clipping context rather than to remove
-        the bound. It is absolutely positioned against `.nav-root` instead.
+        A *sibling* of the control lane, not a child of it — the lane is
+        `position: absolute`, so a child would be clipped by it (measured at
+        1280x720 when the status line vanished entirely); this is positioned
+        against `.nav-root` like every other floating piece on this screen.
       */}
-      {!props.layersOpen && (
+      {!sheetOpen && (
         <div className="nav-status" role="status">
+          {!online && <span className="offline-chip">No signal</span>}
+          {online && degraded && <span className="offline-chip warn">Local route</span>}
           <span style={T.body3m}>{props.layerName}</span>
           {statusDetail && (
             <span style={{ ...T.body3, color: ink.secondary }}>{statusDetail}</span>
@@ -3218,35 +3271,50 @@ function NavOverlay(props: {
         />
       )}
 
+      {props.tripMenuOpen && (
+        <TripMenu
+          onSteps={() => { props.onToggleTripMenu(); props.onSteps(); }}
+          onOverview={() => { props.onToggleTripMenu(); props.onOverview(); }}
+          onLayers={props.onToggleLayers}
+          onZoom={props.onZoom}
+          onClose={props.onToggleTripMenu}
+        />
+      )}
+
       {/*
-        Bottom bar: the labelled trip actions — search along the route, the
-        turn list, reporting and exit. Google Maps' navigation sheet carries
-        exactly these, and this is where they fit: the map-control column on
-        the right has room for six discs and no more (measured at 892x412),
-        while four labelled buttons sit comfortably across any screen width.
+        The bottom sheet — Google Maps' navigation sheet: a grab handle, the
+        exit circle on the left, the trip's two numbers in the middle (the
+        duration in the accent, the distance and arrival clock under it), and
+        the route-options circle on the right. The labelled rail that used to
+        live here — Search, Steps, Report, Exit — is what made this screen read
+        as an app toolbar; every one of those actions still exists, on the lane
+        and in the trip options menu, in the places Google Maps puts them.
       */}
       <div className="nav-bottom">
-        <button className="nav-bottom-btn" onClick={props.onSearch} aria-label="Search along the route">
-          <IconSearch size={ICON.secondary} />
-          <span style={T.body3}>Search</span>
+        <div className="sheet-grab" aria-hidden="true" />
+        <button className="sheet-btn" onClick={props.onExit} aria-label="Exit navigation">
+          <IconClose size={ICON.primary} />
         </button>
-        <button className="nav-bottom-btn" onClick={props.onSteps}>
-          <ManeuverIcon kind="continue" size={ICON.secondary} />
-          <span style={T.body3}>Steps</span>
-        </button>
+        {/*
+          The duration leads and never shrinks: it is the number a driver reads
+          first. Under it, one line carrying the distance to the destination and
+          the arrival clock, as Google Maps writes it ("25 km • 10:06 AM") —
+          the two facts the old strip split into blocks and captions.
+        */}
+        <div className="sheet-eta">
+          <div className="eta-value" style={T.body1m}>{formatDuration(remainingSec)}</div>
+          <div className="eta-label" style={T.sub3}>
+            {formatDistance(remainingM, units)} • {formatClock(new Date(Date.now() + remainingSec * 1000))}
+          </div>
+        </div>
         <button
-          className={`nav-bottom-btn ${props.reportOpen ? 'on' : ''}`}
-          onClick={props.onToggleReport}
-          aria-expanded={props.reportOpen}
-          aria-label={reportLabel}
+          className={`sheet-btn ${props.tripMenuOpen ? 'on' : ''}`}
+          onClick={props.onToggleTripMenu}
+          aria-expanded={props.tripMenuOpen}
+          aria-label="Trip options"
+          title="Trip options — steps, overview, map layers, zoom"
         >
-          <IconMessage size={ICON.secondary} />
-          {props.reports > 0 && <span className="btn-badge" aria-hidden="true">{props.reports}</span>}
-          <span style={T.body3}>Report</span>
-        </button>
-        <button className="nav-bottom-btn" onClick={props.onExit}>
-          <IconClose size={ICON.secondary} />
-          <span style={T.body3}>Exit</span>
+          <IconOverview size={ICON.primary} />
         </button>
       </div>
     </div>
@@ -3463,6 +3531,95 @@ function ReportPanel(props: {
           {props.reports} report{props.reports === 1 ? '' : 's'} marked on the map.
         </div>
       )}
+    </div>
+  );
+}
+
+/* ----------------------------- TripMenu ---------------------------- */
+
+/**
+ * The trip options menu — what the bottom sheet's route-options button opens.
+ *
+ * Google Maps' sheet puts a fork button at the right of its ETA block, and what
+ * hangs off it is the route-options sheet. This is the same slot. The controls
+ * that no longer have room in the right lane — the turn list, the route
+ * overview, the layers sheet and the zoom stepper — are its rows, which keeps
+ * the lane as clean as Google's four discs while every action stays one tap
+ * deeper, not gone.
+ *
+ * A dialog like the two panels it sits beside: focus enters on open, Escape
+ * closes it (the key handler treats it as the topmost sheet), and picking a
+ * row either closes the menu or, for the zoom stepper, stays open so a driver
+ * can step twice.
+ */
+function TripMenu(props: {
+  onSteps: () => void;
+  onOverview: () => void;
+  onLayers: () => void;
+  onZoom: (dir: 'in' | 'out') => void;
+  onClose: () => void;
+}) {
+  // Only on the mount that follows the menu being opened, so a re-render does
+  // not yank focus back to the top of the list mid-interaction.
+  const sheetHadFocus = useRef(false);
+  return (
+    <div
+      className="nav-panel trip-menu"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Trip options"
+      ref={(el) => {
+        if (el && !sheetHadFocus.current) {
+          sheetHadFocus.current = true;
+          focusQuietly(el);
+        }
+      }}
+    >
+      <div className="panel-head">
+        <h2 className="panel-title" style={T.body3m}>Trip options</h2>
+        <button className="icon-btn" onClick={props.onClose} aria-label="Close trip options">
+          <IconClose size={ICON.secondary} />
+        </button>
+      </div>
+      <div className="layer-list">
+        <button className="report-row" onClick={props.onSteps} aria-label="Route steps">
+          <span className="report-icon" aria-hidden="true"><ManeuverIcon kind="continue" size={ICON.secondary} /></span>
+          <span className="layer-text">
+            <span style={T.body3m}>Steps</span>
+            <span style={{ ...T.body3, color: ink.secondary }}>The turn-by-turn list for this trip</span>
+          </span>
+        </button>
+        <button className="report-row" onClick={props.onOverview} aria-label="Route overview">
+          <span className="report-icon" aria-hidden="true"><IconOverview size={ICON.secondary} /></span>
+          <span className="layer-text">
+            <span style={T.body3m}>Route overview</span>
+            <span style={{ ...T.body3, color: ink.secondary }}>Frame the whole route on the map</span>
+          </span>
+        </button>
+        {/*
+          The label is exactly "Map layers" — `button[aria-label="Map layers"]`
+          is an exact attribute selector, and `tools/ui-audit.mjs`,
+          `tools/shots.mjs` and `test/screens.mjs` all reach the layers sheet
+          through it. The layer's own name stays on screen in the status sign.
+        */}
+        <button className="report-row" onClick={props.onLayers} aria-label="Map layers">
+          <span className="report-icon" aria-hidden="true"><IconLayers size={ICON.secondary} /></span>
+          <span className="layer-text">
+            <span style={T.body3m}>Map layers</span>
+            <span style={{ ...T.body3, color: ink.secondary }}>Map detail and traffic</span>
+          </span>
+        </button>
+        <div className="trip-zoom">
+          <button className="pill-btn" onClick={() => props.onZoom('in')} aria-label="Zoom in">
+            <IconPlus size={ICON.secondary} />
+            <span style={T.body3}>Zoom in</span>
+          </button>
+          <button className="pill-btn" onClick={() => props.onZoom('out')} aria-label="Zoom out">
+            <IconMinus size={ICON.secondary} />
+            <span style={T.body3}>Zoom out</span>
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

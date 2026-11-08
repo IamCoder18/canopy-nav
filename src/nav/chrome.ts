@@ -22,11 +22,11 @@
  *
  * ## The fix, and its limits
  *
- * `--eta-h` and `--nav-h` carry the bars' *measured* heights, so a bar that grows
- * pushes the banner out of its way instead of being overlapped by it. `ResizeObserver`
- * is the mechanism, because the thing being tracked is content: the ETA bar's height
- * is a function of how many lines its numbers wrap to, which nothing in CSS can
- * predict.
+ * `--nav-h` carries the bottom sheet's *measured* height, so a sheet that grows
+ * pushes everything anchored to it out of its way instead of being overlapped.
+ * `ResizeObserver` is the mechanism, because the thing being tracked is content:
+ * the sheet's height is a function of how many lines its numbers wrap to, which
+ * nothing in CSS can predict.
  *
  * Two properties are written to the document root rather than to an element, so that
  * `.banner-stack` can read them wherever it is. They are **not** written over the
@@ -43,9 +43,13 @@
  * invisible.
  */
 
-/** Bars whose height is published, and the property each one is published as. */
+/** Bars whose height is published, and the property each one is published as.
+ *
+ * One bar, since the Google-style layout: the bottom sheet is the only chrome
+ * whose height is a function of its own content (the numbers wrap at large
+ * text). The banner stack at the top is bounded by the system inset alone —
+ * nothing sits above it — so its top needs no measurement. */
 const BARS = [
-  { selector: '.eta-bar', property: '--eta-h' },
   { selector: '.nav-bottom', property: '--nav-h' },
 ] as const;
 
@@ -55,9 +59,9 @@ export interface ChromeHeights {
 }
 
 /**
- * Publish the measured heights of the navigation screen's two bars.
+ * Publish the measured heights of the navigation screen's chrome.
  *
- * Writes nothing until both elements exist and have been laid out, so the first
+ * Writes nothing until the bar exists and has been laid out, so the first
  * paint uses the design tokens and is corrected on the observer's first callback —
  * which arrives before the next paint.
  *

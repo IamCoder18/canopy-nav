@@ -1,8 +1,9 @@
 /**
- * Measures the ETA bar's two numbers and its two buttons at every viewport shape.
+ * Measures the bottom sheet's two numbers and its two circle buttons at every
+ * viewport shape.
  *
  * The question it answers is whether both numbers are legible *and* both buttons
- * are fully on screen — the two failure modes of this row are opposite, and
+ * are fully on screen — the two failure modes of the sheet are opposite, and
  * fixing one by shrinking the other is how a navigation screen loses the one
  * number a driver needs.
  *
@@ -63,17 +64,17 @@ for (const vp of VIEWPORTS) {
     if (await click('.result-row', 2300)) {
       if (await click('button.primary-btn', 2100)) {
         const r = await page.evaluate(() => {
-          const eta = document.querySelector('.eta-bar');
+          const eta = document.querySelector('.nav-bottom');
           if (!eta) return null;
-          const vals = [...document.querySelectorAll('.eta-value')].map((e) => ({
+          const vals = [...document.querySelectorAll('.eta-value, .eta-label')].map((e) => ({
             text: e.textContent,
             clipped: e.scrollWidth > e.clientWidth,
             need: e.scrollWidth,
             got: e.clientWidth,
           }));
-          const btns = [...eta.querySelectorAll('.icon-btn')].map((e) => {
+          const btns = [...eta.querySelectorAll('.sheet-btn')].map((e) => {
             const b = e.getBoundingClientRect();
-            return { label: e.getAttribute('aria-label'), right: Math.round(b.right) };
+            return { label: e.getAttribute('aria-label'), right: Math.round(b.right), left: Math.round(b.left) };
           });
           return { overflow: eta.scrollWidth - eta.clientWidth, vw: innerWidth, vals, btns };
         });
@@ -81,7 +82,7 @@ for (const vp of VIEWPORTS) {
           console.log(`${vp.n} ${vp.width}x${vp.height}  (not navigating)`);
         } else {
           const clipped = r.vals.filter((v) => v.clipped);
-          const offscreen = r.btns.filter((b) => b.right > r.vw + 1);
+          const offscreen = r.btns.filter((b) => b.right > r.vw + 1 || b.left < -1);
           const problems = [
             ...(r.overflow > 0 ? [`bar overflows by ${r.overflow}px`] : []),
             ...clipped.map((v) => `"${v.text}" clipped (${v.need} into ${v.got})`),
