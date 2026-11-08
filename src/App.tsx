@@ -35,7 +35,7 @@ import type { SimulatorState } from './nav/simulator';
 import { observeChromeHeights } from './nav/chrome';
 import {
   formatDistance, formatDuration, formatClock, lineLength, headingAlong,
-  snapToPolyline, vertexAt, type LatLng,
+  snapAlong, snapToPolyline, vertexAt, type LatLng,
 } from './geo';
 import { placeOnRoute, startPosition, type RoutePosition } from './nav/progress';
 import { ink, accentNight, semantic, applyThemeTokens, type as T, DP, ICON, SEP } from './theme';
@@ -1217,6 +1217,20 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   };
 
   /**
+   * Re-place the monotonic position on the live location. `beginRouteProgress`
+   * runs when the route is fetched (on the preview screen, where the
+   * position-driven effect is inactive), so movement in preview never syncs
+   * `along` and the first follow bearing can be a whole first leg behind the
+   * car. Called on Go so entry is placed from the current fix, not the
+   * fetch-time fix.
+   */
+  const resyncRoutePos = () => {
+    if (!route) return;
+    routePos.current = placeOnRoute(route.geometry, location, routePos.current, offRouteThreshold(fix.speed));
+    setProgressAlong((prev) => Math.max(prev, routeProgress(route.geometry, vertexAt(route.geometry, routePos.current.along))));
+  };
+
+  /**
    * Turn-by-turn guidance from the engine's own maneuvers.
    *
    * This is a **read-only derivation** of `route`, `progressAlong` and `units`. It
@@ -1419,24 +1433,30 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
    * `bearing` is the road's heading at the car's along-route position, read
    * across a ±45 m window (`headingAlong`) so a junction turns the camera the
    * way the road turns over a couple of fixes instead of snapping it at the
-   * vertex. `routePos` is the ref this render already trusts for the guidance
-   * model, advanced by the effect below before the next render reads it.
+   * vertex. The along value is a fresh `snapAlong` projection of *this* fix,
+   * not `routePos.current.along`: the monotonic placement (correct for ETA
+   * honesty) freezes when a fix exceeds `offRouteThreshold`, and reading a
+   * ref mutated in an effect after render lags one fix behind. The camera is
+   * allowed to be non-monotonic and to survive off-route fixes, so it uses
+   * its own fresh projection. `along` is also handed to `MapView` so the
+   * look-ahead can aim *along the polyline* rather than along a straight
+   * bearing from the car.
    */
   const followCam = useMemo(() => {
     if (!navActive || !follow || !route || route.geometry.length < 2) return null;
+    const cameraAlong = snapAlong(location, route.geometry).along;
     return {
       center: location,
-      bearing: headingAlong(route.geometry, routePos.current.along),
+      bearing: headingAlong(route.geometry, cameraAlong),
       // 55° is the navigation tilt: enough that the map reads as "the road
       // ahead" rather than "a diagram", shallow enough that the horizon stays
       // well inside the banner-free part of the viewport at 412px tall. Google's
       // own navigation camera sits in this range.
       pitch: 55,
+      route: route.geometry,
+      along: cameraAlong,
     };
-    // `routePos` is a ref: the same render's guidance model reads it the same
-    // way, and the values this depends on are the ones that move it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navActive, follow, route, progressAlong, location]);
+  }, [navActive, follow, route, location]);
 
   /**
    * Advance "already driven" from where the car actually is.
@@ -1880,6 +1900,7 @@ const banner = rerouteNotice ?? routeError ?? null;
           }}
           onGo={() => {
             // A trip begins with the camera on the driver's side.
+            resyncRoutePos();
             setFollow(true);
             go('navigating');
           }}
@@ -1910,6 +1931,7 @@ const banner = rerouteNotice ?? routeError ?? null;
           onSearch={() => { setSearchFrom('home'); go('search'); }}
           onContinue={() => {
             if (!route) return;
+            resyncRoutePos();
             setFollow(true);
             go('navigating');
           }}

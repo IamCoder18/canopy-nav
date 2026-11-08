@@ -304,11 +304,64 @@ export function vertexAt(line: LatLng[], along: number): number {
   return line.length - 1;
 }
 
+/** Cached total lengths, keyed by the (immutable) geometry array. */
+const lineLengthCache = new WeakMap<LatLng[], number>();
 /** Total length of a polyline in metres. */
 export function lineLength(line: LatLng[]): number {
+  const cached = lineLengthCache.get(line);
+  if (cached !== undefined) return cached;
   let t = 0;
   for (let i = 1; i < line.length; i++) t += haversine(line[i - 1], line[i]);
+  lineLengthCache.set(line, t);
   return t;
+}
+
+/** Normalise any bearing to 0..360 (keeping -0 as 0). */
+export function normalizeBearing(deg: number): number {
+  const n = ((deg % 360) + 360) % 360;
+  return n === 360 ? 0 : n;
+}
+
+/**
+ * Signed shortest turn from `from` to `to`, in (-180, 180].
+ * Used to take the short way round when a camera crosses the 0/360 seam.
+ */
+export function shortestAngleDelta(from: number, to: number): number {
+  let d = normalizeBearing(to) - normalizeBearing(from);
+  if (d > 180) d -= 360;
+  if (d <= -180) d += 360;
+  return d;
+}
+
+/**
+ * Smoothly approach `to` from `from`, taking the short way round.
+ * Exponential approach (`1 - exp(-dt/tau)`) capped at `maxRate` deg/s, so a
+ * 90° right turn cannot snap in one frame but a small correction reaches the
+ * target quickly. Used by the follow camera every animation frame.
+ */
+export function dampAngle(from: number, to: number, dtMs: number, tauMs = 450, maxRate = 45): number {
+  const delta = shortestAngleDelta(from, to);
+  if (dtMs <= 0 || tauMs <= 0 || delta === 0) return from;
+  let step = delta * (1 - Math.exp(-dtMs / tauMs));
+  const maxStep = maxRate * (dtMs / 1000);
+  if (step > maxStep) step = maxStep;
+  if (step < -maxStep) step = -maxStep;
+  return from + step;
+}
+
+/** Smooth positional approach, exponential with the same time constant. */
+export function dampPoint(from: LatLng, to: LatLng, dtMs: number, tauMs = 350): LatLng {
+  if (dtMs <= 0 || tauMs <= 0) return [...from];
+  const a = 1 - Math.exp(-dtMs / tauMs);
+  return [from[0] + (to[0] - from[0]) * a, from[1] + (to[1] - from[1]) * a];
+}
+
+/** Point at `along` metres into `line`, clamped to the line's extent. */
+export function pointAtDistance(line: LatLng[], along: number): LatLng {
+  const total = lineLength(line);
+  if (total <= 0) return line[0] ?? [0, 0];
+  const at = Math.max(0, Math.min(total, along));
+  return pointAtFraction(line, at / total);
 }
 
 /**
@@ -343,11 +396,33 @@ export function headingAlong(line: LatLng[], along: number, windowM = 45): numbe
   // the start produced a point hundreds of metres before the first vertex and a
   // heading to match — 270° where the road ran east.)
   const at = Math.max(0, Math.min(total, along));
+  // Entry bias: at the very start the window can only extend forward, so a
+  // 45 m forward chord averages across any turn inside those 45 m and the
+  // camera starts diagonal to the road. Read the first segment itself (capped
+  // at 5 m) for the first few metres so the trip opens facing forward.
+  if (at <= 5) {
+    const seg0 = haversine(line[0], line[1]);
+    const win = Math.min(5, seg0 > 0 ? seg0 : 5, total);
+    if (win > 0) {
+      const a = line[0];
+      const b = pointAtFraction(line, win / total);
+      if (a[0] !== b[0] || a[1] !== b[1]) return normalizeBearing(bearing(a, b));
+    }
+  }
+  if (total - at <= 5) {
+    const segN = haversine(line[line.length - 2], line[line.length - 1]);
+    const win = Math.min(5, segN > 0 ? segN : 5, total);
+    if (win > 0) {
+      const a = pointAtFraction(line, (total - win) / total);
+      const b = line[line.length - 1];
+      if (a[0] !== b[0] || a[1] !== b[1]) return normalizeBearing(bearing(a, b));
+    }
+  }
   const from = pointAtFraction(line, Math.max(0, at - windowM) / total);
   const to = pointAtFraction(line, Math.min(total, at + windowM) / total);
   if (from[0] === to[0] && from[1] === to[1]) return 0;
   // `bearing` answers −180..180; the camera and the compass both speak 0..360.
-  return (bearing(from, to) + 360) % 360;
+  return normalizeBearing(bearing(from, to));
 }
 
 /**
@@ -396,20 +471,9 @@ export function destinationPoint(pos: LatLng, bearingDeg: number, metres: number
  * of the move itself (the mapping this solves against is the one *before* the
  * camera pitched).
  */
-export function lookAheadMetres(
-  project: (p: LatLng) => { x: number; y: number },
-  centre: LatLng,
-  subject: LatLng,
-  bearingDeg: number,
-  offsetPx: number,
-): number {
-  const offsetY = (ahead: number): number => {
-    const aim = destinationPoint(subject, bearingDeg, ahead);
-    const shifted: LatLng = [subject[0] + centre[0] - aim[0], subject[1] + centre[1] - aim[1]];
-    return project(shifted).y - project(centre).y;
-  };
+/** Shared bracketing solver for a monotonic offset curve. */
+function solveLookAhead(offsetY: (ahead: number) => number, offsetPx: number): number {
   if (offsetY(0) >= offsetPx) return 0;
-
   // Grow a bracket until the target is passed — or the projection flips at
   // its pole, which is the far end of what can be aimed at.
   let lo = 0;
@@ -434,6 +498,43 @@ export function lookAheadMetres(
     else hi = mid;
   }
   return (lo + hi) / 2;
+}
+
+export function lookAheadMetres(
+  project: (p: LatLng) => { x: number; y: number },
+  centre: LatLng,
+  subject: LatLng,
+  bearingDeg: number,
+  offsetPx: number,
+): number {
+  return solveLookAhead((ahead) => {
+    const aim = destinationPoint(subject, bearingDeg, ahead);
+    const shifted: LatLng = [subject[0] + centre[0] - aim[0], subject[1] + centre[1] - aim[1]];
+    return project(shifted).y - project(centre).y;
+  }, offsetPx);
+}
+
+/**
+ * How far along the route the camera must aim for the subject to sit `offsetPx`
+ * below centre — the same lower-third solve, but the aim point is *on the
+ * polyline* (`along + ahead`), not the straight-line `destinationPoint`.
+ * Keeping the aim on the road means turns don't push the route off screen.
+ */
+export function lookAheadAlongRoute(
+  project: (p: LatLng) => { x: number; y: number },
+  centre: LatLng,
+  subject: LatLng,
+  route: LatLng[],
+  along: number,
+  offsetPx: number,
+): number {
+  const total = lineLength(route);
+  if (total <= 0 || route.length < 2) return 0;
+  return solveLookAhead((ahead) => {
+    const aim = pointAtDistance(route, along + ahead);
+    const shifted: LatLng = [subject[0] + centre[0] - aim[0], subject[1] + centre[1] - aim[1]];
+    return project(shifted).y - project(centre).y;
+  }, offsetPx);
 }
 
 /** Interpolate a position at `frac` (0..1) of the way along a polyline. */

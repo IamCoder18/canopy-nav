@@ -11,6 +11,8 @@ import { describe, it, expect } from 'vitest';
 import {
   decodePolyline,
   PolylineError,
+  dampAngle,
+  dampPoint,
   haversine,
   bearing,
   formatDistance,
@@ -18,12 +20,16 @@ import {
   formatClock,
   lineLength,
   pointAtFraction,
+  pointAtDistance,
   snapToPolyline,
   bboxOf,
   simplify,
   headingAlong,
   lookAheadMetres,
+  lookAheadAlongRoute,
   destinationPoint,
+  normalizeBearing,
+  shortestAngleDelta,
   R_EARTH,
   type LatLng,
 } from '../src/geo';
@@ -751,5 +757,101 @@ describe('lookAheadMetres — where a pitched camera aims', () => {
     expect(Number.isFinite(d)).toBe(true);
     expect(d).toBeGreaterThan(0);
     expect(d).toBeLessThanOrEqual(100_000);
+  });
+});
+
+describe('headingAlong entry bias', () => {
+  const SEG = DEG_LAT * 0.001;
+  /** East for 20 m, then north — the turn sits inside the 45 m forward chord. */
+  const shortFirst: LatLng[] = [
+    [0, 0],
+    [20 / DEG_LAT, 0],
+    [20 / DEG_LAT, 0.001],
+  ];
+
+  it('faces forward on the first leg at the start, not across the first turn', () => {
+    // At along=0 the old 45 m chord averaged towards the north leg (~66°).
+    // The entry window reads the first segment itself: due east.
+    expect(headingAlong(shortFirst, 0)).toBeCloseTo(90, 0);
+    // 5 m in (SEG is ~111 m, so this is still the first leg) it is east too.
+    expect(headingAlong(shortFirst, 5)).toBeCloseTo(90, 0);
+    // And it is no longer the bisector.
+    expect(headingAlong(shortFirst, 0)).toBeGreaterThan(85);
+  });
+
+  it('still averages across a corner once past the entry window', () => {
+    const corner: LatLng[] = [[0, 0], [0.001, 0], [0.001, 0.001]];
+    expect(headingAlong(corner, SEG)).toBeCloseTo(45, 6);
+  });
+});
+
+describe('bearing helpers', () => {
+  it('normalises to 0..360', () => {
+    expect(normalizeBearing(-10)).toBeCloseTo(350, 9);
+    expect(normalizeBearing(360)).toBe(0);
+    expect(normalizeBearing(370)).toBeCloseTo(10, 9);
+  });
+
+  it('takes the short way across the 0/360 seam', () => {
+    expect(shortestAngleDelta(350, 10)).toBeCloseTo(20, 9);
+    expect(shortestAngleDelta(10, 350)).toBeCloseTo(-20, 9);
+    expect(shortestAngleDelta(0, 180)).toBeCloseTo(180, 9);
+    expect(shortestAngleDelta(0, 90)).toBeCloseTo(90, 9);
+  });
+
+  it('dampAngle turns a right turn smoothly, never snapping 90° in one frame', () => {
+    // North -> east (right turn): one 16ms frame moves a few degrees.
+    const step16 = dampAngle(0, 90, 16, 500, 50);
+    expect(Math.abs(step16)).toBeGreaterThan(0);
+    expect(Math.abs(step16)).toBeLessThan(5);
+    // And it does arrive, monotonically, across the seam.
+    let b = 350;
+    for (let i = 0; i < 200; i++) b = dampAngle(b, 10, 16, 500, 50);
+    expect(shortestAngleDelta(10, b)).toBeCloseTo(0, 0);
+    // Rate cap: even with tau->0 the step is bounded by maxRate.
+    expect(Math.abs(dampAngle(0, 90, 16, 1, 50))).toBeLessThanOrEqual(50 * 0.016 + 1e-9);
+  });
+
+  it('dampPoint approaches exponentially', () => {
+    const p = dampPoint([0, 0], [1, 1], 350, 350);
+    expect(p[0]).toBeCloseTo(0.632, 3);
+    expect(p[1]).toBeCloseTo(0.632, 3);
+  });
+});
+
+describe('pointAtDistance / lookAheadAlongRoute', () => {
+  const east: LatLng[] = [[0, 0], [0.001, 0], [0.002, 0]];
+  const SEG = DEG_LAT * 0.001;
+
+  it('places by distance along the line', () => {
+    const mid = pointAtDistance(east, SEG);
+    expect(mid[0]).toBeCloseTo(0.001, 9);
+    expect(mid[1]).toBeCloseTo(0, 9);
+    expect(pointAtDistance(east, -10)).toEqual([0, 0]);
+    expect(pointAtDistance(east, 1e9)).toEqual([0.002, 0]);
+  });
+
+  it('solves the lower-third along the route, matching the flat solve', () => {
+    const flat = (p: LatLng) => ({ x: p[0] * 200, y: -p[1] * 200 });
+    // Long due-north route; pointAtDistance's haversine scale (111195 m/°)
+    // is what the aim uses, so the closed form is offset * 111195 / 200.
+    const north: LatLng[] = Array.from({ length: 20 }, (_, i) => [0, i * 0.01] as LatLng);
+    const d = lookAheadAlongRoute(flat, [0, 0], [0, 0], north, 0, 20);
+    expect(Math.abs(d - (20 * (6371008.8 * Math.PI / 180)) / 200)).toBeLessThan(0.25);
+  });
+
+  it('aims along the polyline, not the straight bearing, at a corner', () => {
+    const corner: LatLng[] = [[0, 0], [0.001, 0], [0.001, 0.001]];
+    // Place the car mid-east-leg; the aim must follow north after the corner,
+    // so the centre is the on-road point past the corner, not a diagonal.
+    const along = SEG * 0.5;
+    const car = pointAtDistance(corner, along);
+    const aim = pointAtDistance(corner, along + 100);
+    expect(aim[0]).toBeCloseTo(0.001, 9);
+    expect(aim[1]).toBeGreaterThan(0);
+    expect(car[0]).toBeLessThan(0.001);
+    // The route solver returns a finite, usable look-ahead here.
+    const flat = (p: LatLng) => ({ x: p[0] * 200, y: -p[1] * 200 });
+    expect(Number.isFinite(lookAheadAlongRoute(flat, car, car, corner, along, 20))).toBe(true);
   });
 });

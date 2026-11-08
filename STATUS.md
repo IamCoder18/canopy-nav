@@ -1775,7 +1775,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx 5222  screens, navigation state, focus + announcements,
+  App.tsx 5244  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            252  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
@@ -1784,7 +1784,7 @@ src/
   settings.ts             354  typed, validated, quota-safe persistence
   theme.ts 423  AAOS design tokens (colour, type, layout, shape)
   icons.tsx               421  29 maneuver kinds + system icons, hand-drawn SVG
-  geo.ts                  489  polyline codec, haversine, formatting, snapping,
+  geo.ts                  590  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt,
                                 + headingAlong and lookAheadMetres (camera geometry)
   styles.css 3623  layout, insets, responsive rules
@@ -1836,7 +1836,7 @@ src/
                                 unavailable when the engine is gone (§16)
 
   map/
-    MapView.tsx 578  MapLibre view, follow/fit/flat camera, tile/offline style switch
+    MapView.tsx 643  MapLibre view, follow/fit/flat camera, tile/offline style switch
     overlays.ts 301  overlay sources: change-detecting setData, basemap LRU
     style.ts 659  Google palette, tile remap, offline LOD style
 

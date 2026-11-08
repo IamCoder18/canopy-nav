@@ -9,10 +9,10 @@
  * modes and follow Google's visual conventions.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import maplibregl, { type Map as MLMap, type StyleSpecification } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { destinationPoint, lookAheadMetres, type LatLng } from '../geo';
+import { dampAngle, dampPoint, destinationPoint, lookAheadAlongRoute, lookAheadMetres, pointAtDistance, type LatLng } from '../geo';
 // The map's opening position is the app's no-fix position, not a hard-coded
 // London. They used to disagree by 7,000 km, which meant that with no GPS the
 // map showed one place, the position model used another, and routing asked for a
@@ -61,7 +61,7 @@ export interface MapViewProps {
    * `null` means the driver has the camera. Nothing here moves it without
    * being asked again — see `onUserCamera`.
    */
-  follow?: { center: LatLng; bearing: number; pitch: number } | null;
+  follow?: { center: LatLng; bearing: number; pitch: number; route?: LatLng[] | null; along?: number } | null;
   /**
    * The driver took the camera: a drag, a two-finger twist, a tilt.
    *
@@ -127,6 +127,18 @@ export function MapView(props: MapViewProps) {
   const map = useRef<MLMap | null>(null);
   const ready = useRef(false);
   const styleMode = useRef<'tiles' | 'offline'>('tiles');
+  /** Bumped when the map becomes usable or the zoom changes, to re-aim follow. */
+  const [zoomTick, setZoomTick] = useState(0);
+  const [readyTick, setReadyTick] = useState(0);
+  /** Token identifying the newest follow move; settles from older moves are ignored. */
+  const followToken = useRef(0);
+  /** Smooth follow target, animated every frame so turns don't snap on re-target. */
+  const followDesired = useRef<{ center: LatLng; bearing: number; pitch: number } | null>(null);
+  const followRaf = useRef(0);
+  const followLastTs = useRef(0);
+  // ponytail: centred follow was a per-fix 900ms easeTo that restarted every
+  // second, so a 90° turn arrived in one chunk. The rAF damp below is one
+  // continuous approach, so the turn completes over ~1.5-2s instead of snapping.
 
   /**
    * The basemap callback, held in a ref for the same reason as the tap handlers
@@ -203,6 +215,9 @@ export function MapView(props: MapViewProps) {
     });
     map.current = m;
     mapRef.current = m;
+    // Debug hook for e2e verification of the follow camera (bearing/pitch).
+    // Harmless in production: a single reference to the map the user sees.
+    (window as unknown as { __canopyMap?: MLMap }).__canopyMap = m;
 
     m.on('click', (e) => clickRef.current?.([e.lngLat.lng, e.lngLat.lat]));
     let pressTimer: ReturnType<typeof setTimeout> | null = null;
@@ -249,6 +264,9 @@ export function MapView(props: MapViewProps) {
     const onZoomEnd = () => {
       if (!ready.current) return;
       applyOverlays(m, overlayProps.current);
+      // A pinch changes the look-ahead the lower-third solve needs. Re-aim
+      // follow on zoomend rather than waiting for the next GPS fix.
+      setZoomTick((t) => t + 1);
     };
     m.on('zoomend', onZoomEnd);
 
@@ -265,6 +283,7 @@ export function MapView(props: MapViewProps) {
       m.remove();
       map.current = null;
       mapRef.current = null;
+      delete (window as unknown as { __canopyMap?: MLMap }).__canopyMap;
       ready.current = false;
     };
   }, []);
@@ -316,6 +335,9 @@ export function MapView(props: MapViewProps) {
       const onReady = () => {
         ready.current = true;
         applyOverlays(current, overlayProps.current);
+        // A follow move issued before the style loaded was dropped. Re-run
+        // it now, on the latest follow target, so entry doesn't need a fix.
+        setReadyTick((t) => t + 1);
       };
       current.once('styledata', onReady);
       current.once('idle', onReady);
@@ -400,45 +422,88 @@ export function MapView(props: MapViewProps) {
    * disengages following before its `moveend` arrives, so `cancelled` is
    * already set and the pass never fights the driver.
    */
+  // Continuous follow glide: each fix only updates the target; a rAF loop
+  // damps camera centre + bearing toward it. Kills the old easeTo-restart
+  // (pause between legs) and caps the turn rate, so a 90° right turn sweeps
+  // over ~2s instead of snapping in one chunk. Reduced motion stays a jump.
   useEffect(() => {
     const m = map.current;
     const f = props.follow;
-    if (!m || !f) return;
-    let cancelled = false;
-    let corrections = 0;
+    // Clear target when follow is off (driver took the camera / exit /
+    // overview). The loop below checks this and stops.
+    if (!f) { followDesired.current = null; return; }
+    if (!m) return;
+    const token = ++followToken.current;
     const offY = (m.getContainer().clientHeight || 412) * 0.16;
-
     const centreNow = (): LatLng => [m.getCenter().lng, m.getCenter().lat];
-    const move = () => {
+    const computeDesired = (): { center: LatLng; bearing: number; pitch: number } => {
       const centre = centreNow();
-      const ahead = lookAheadMetres((p) => m.project(p), centre, f.center, f.bearing, offY);
-      m.easeTo({
-        center: destinationPoint(f.center, f.bearing, ahead),
-        bearing: f.bearing,
-        pitch: f.pitch,
-        // Corrections are small and should feel like the camera settling, not
-        // setting off again.
-        duration: cameraDuration(corrections ? 400 : 900),
-        easing: (t) => t,
-      });
+      const project = (p: LatLng) => m.project(p);
+      const useRoute = !!(f.route && f.route.length >= 2 && f.along !== undefined);
+      const ahead = useRoute
+        ? lookAheadAlongRoute(project, centre, f.center, f.route!, f.along!, offY)
+        : lookAheadMetres(project, centre, f.center, f.bearing, offY);
+      const target: LatLng = useRoute
+        ? pointAtDistance(f.route!, (f.along ?? 0) + ahead)
+        : destinationPoint(f.center, f.bearing, ahead);
+      return { center: target, bearing: f.bearing, pitch: f.pitch };
     };
-    move();
-
+    followDesired.current = computeDesired();
+    if (reducedMotion()) {
+      m.jumpTo(followDesired.current);
+      return;
+    }
+    // Settle pass: if the lower-third is >6px off once the glide
+    // converges, recompute that one target and glide again. Token-guarded
+    // so only the newest fix may correct; stop after two corrections.
+    let corrections = 0;
     const settle = () => {
-      if (cancelled || corrections >= 2) return;
+      if (token !== followToken.current || corrections >= 2) return;
       const err = m.project(f.center).y - (m.project(centreNow()).y + offY);
       if (Math.abs(err) <= 6) return;
       corrections += 1;
-      move();
-      m.once('moveend', settle);
+      followDesired.current = computeDesired();
+      ensureLoop();
     };
-    m.once('moveend', settle);
-
-    return () => {
-      cancelled = true;
+    const ensureLoop = () => {
+      if (followRaf.current) return;
+      followLastTs.current = performance.now();
+      const step = (ts: number) => {
+        if (token !== followToken.current || !followDesired.current) { followRaf.current = 0; return; }
+        const dt = Math.min(50, Math.max(1, ts - followLastTs.current));
+        followLastTs.current = ts;
+        const desired = followDesired.current;
+        const centre = centreNow();
+        const bearing = m.getBearing();
+        const pitch = m.getPitch();
+        const nextCentre = dampPoint(centre, desired.center, dt, 350);
+        const nextBearing = dampAngle(bearing, desired.bearing, dt, 500, 50);
+        const nextPitch = pitch + (desired.pitch - pitch) * (1 - Math.exp(-dt / 350));
+        m.jumpTo({ center: nextCentre, bearing: nextBearing, pitch: nextPitch });
+        const centreDelta = Math.abs(nextCentre[0] - desired.center[0]) + Math.abs(nextCentre[1] - desired.center[1]);
+        const bearingDelta = Math.abs(desired.bearing - nextBearing) % 360;
+        const done = centreDelta < 1e-6 && Math.min(bearingDelta, 360 - bearingDelta) < 0.1 && Math.abs(nextPitch - desired.pitch) < 0.1;
+        if (done) {
+          followRaf.current = 0;
+          settle();
+          return;
+        }
+        followRaf.current = requestAnimationFrame(step);
+      };
+      followRaf.current = requestAnimationFrame(step);
     };
+    ensureLoop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.follow?.center?.[0], props.follow?.center?.[1], props.follow?.bearing, props.follow?.pitch]);
+  }, [props.follow?.center?.[0], props.follow?.center?.[1], props.follow?.bearing, props.follow?.pitch, props.follow?.along, props.follow?.route, readyTick, zoomTick]);
+
+  // Stop the glide when follow ends or the map unmounts.
+  useEffect(() => {
+    return () => {
+      if (followRaf.current) cancelAnimationFrame(followRaf.current);
+      followRaf.current = 0;
+      followDesired.current = null;
+    };
+  }, []);
 
   /**
    * One-shot camera commands from the navigation controls.
