@@ -32,6 +32,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -82,6 +83,21 @@ async function waitUntilServing(timeoutMs = 15000) {
     await new Promise((r) => setTimeout(r, 250));
   }
   return false;
+}
+
+// The browser gates serve the built app, and `serve.mjs` refuses to start with
+// no `dist/index.html`. On a fresh checkout `dist/` is gitignored and absent, so
+// the server used to exit immediately and every gate timed out — CI was red for
+// a reason that had nothing to do with the code under test. Build once up front
+// when there is nothing to serve; the `build` gate below still runs the
+// authoritative typecheck + build against the sources.
+if (!existsSync(join(root, 'dist', 'index.html'))) {
+  console.log('no dist/ yet — building before the browser gates can serve it');
+  const warm = spawnSync('npm', ['run', 'build'], { cwd: root, stdio: 'inherit' });
+  if (warm.status !== 0) {
+    console.error('initial build failed; cannot start the test server');
+    process.exit(warm.status ?? 2);
+  }
 }
 
 const started = [];
