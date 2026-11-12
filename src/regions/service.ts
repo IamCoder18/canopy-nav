@@ -11,9 +11,21 @@ export function serviceAddress(settings: PackServiceSettings): URL {
   try { url = new URL(settings.url.trim()); } catch { throw new Error('Provide a pack server address, for example https://packs.example.org'); }
   if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Pack server address must be an HTTP(S) URL without credentials, query or fragment');
   if (!settings.apiKey.trim()) throw new Error('Provide the pack server API key');
-  // Public servers must use TLS. HTTP is useful only for local development.
-  if (url.protocol !== 'https:' && !['localhost','127.0.0.1','[::1]'].includes(url.hostname)) throw new Error('Public pack servers require HTTPS (Caddy can terminate TLS over IPv6)');
+  // Self-hosted pack servers may sit on plain HTTP (a LAN box, or a host whose
+  // TLS is terminated elsewhere), and this app accepts that by explicit choice.
+  // `isInsecureTransport` lets the UI say so out loud rather than pretending a
+  // clear-text link is private.
   url.pathname = url.pathname.replace(/\/$/, ''); return url;
+}
+
+/**
+ * Whether this address sends the API key over clear text.
+ *
+ * Loopback is exempt: it never leaves the device. Everything else on `http:`
+ * crosses the network unencrypted, so the settings screen warns about it.
+ */
+export function isInsecureTransport(url: URL): boolean {
+  return url.protocol === 'http:' && !['localhost','127.0.0.1','[::1]'].includes(url.hostname);
 }
 function address(base: URL, path: string): string { return `${base.href.replace(/\/$/,'')}${path}`; }
 export class PackService {

@@ -74,6 +74,9 @@ export default defineConfig({
    * the thing to drop, not the flag.
    */
   test: {
+    // Node 20 (CI) has no `navigator` global; the specs that poke
+    // `navigator.deviceMemory` need one. See test/setup.ts.
+    setupFiles: ['./test/setup.ts'],
     pool: 'forks',
     poolOptions: {
       forks: { execArgv: ['--expose-gc'] },

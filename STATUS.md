@@ -5,7 +5,7 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v1.3.0 (APK attached). The work in it — including the offline
+**Latest release:** v1.3.1 (APK attached). The work in it — including the offline
 Valhalla engine (§17) and the packserver program (§19) — is recorded below, pass by pass:
 
 - **§3.17–3.18** — §3.17 closes the ETA gap this document once called the most dangerous
@@ -1833,6 +1833,7 @@ src/
                               + suggestName ("did you mean") for the zero-result path
     search/merge.ts     61  online and saved hits scored on the shared scale
     search/all.ts       48  the one matcher, looped over every region
+    search/types.ts      16  the Photon type vocabulary + admin-context rows (§19)
 
   nav/
     valhalla.ts 583  Valhalla /route client, response validation,
@@ -1872,6 +1873,7 @@ src/
     MapView.tsx 653  MapLibre view, follow/fit/flat camera, tile/offline style switch
     overlays.ts 301  overlay sources: change-detecting setData, basemap LRU
     style.ts 672  Google palette, tile remap, offline LOD style
+    pmtiles.ts           44  PMTiles source + whole-tile cache over stored artifacts (§19)
 
   regions/
     download.ts          1493  streaming downloader, resume, part-file handling
@@ -1880,6 +1882,11 @@ src/
     packstore.ts          155  routing-pack persistence (its own database, its own failure policy)
     store.ts              594  RegionLibrary singleton, per-region workers, memory gate,
                               + pack import/restore and the engine mount lifecycle
+    service.ts            76  packserver client: URL/key validation, poll, download (§19)
+    bundle.ts            138  verified bundle ingest: streaming tar, sha256, route stores (§19)
+    bundlestore.ts        22  bundle-manifest records (its own IDB database)
+    artifactstore.ts      56  random-access artifacts: OPFS / Android private files (§19)
+    PackServiceSettings.tsx 31  Settings -> Pack service: server address + API key (§19)
 
 test/            1458 unit tests, 76 files
 test/e2e.mjs           89 browser checks, built bundle
@@ -1892,7 +1899,7 @@ tools/build-pack.mjs     132  extract -> Valhalla routing pack (.tar of .gph til
 tools/serve.mjs         306 LAN static server for on-device manual testing
 tools/offline-smoke.mjs 253 device smoke: install the APK, go offline, import a fixture through the WebView DevTools socket, and scan logcat
 tools/bundle-budget.mjs 203 gzip size budget per role (entry, map vendor, engine, totals); fails on regression
-tools/verify.mjs 133 every gate in one command: local and CI run this same list
+tools/verify.mjs 149 every gate in one command: local and CI run this same list
 tools/reflow.mjs        382 chrome overlap at 100/175/200% text (§13.8) — a
                              diagnostic, still not a gate: it needs a
                              browser and takes minutes, and one that

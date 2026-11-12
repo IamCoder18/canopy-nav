@@ -5,7 +5,7 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import { PMTiles, zxyToTileId } from 'pmtiles';
 import { validateStyleMin } from '@maplibre/maplibre-gl-style-spec';
 import { unpackBundle, validateManifest, loadGazetteer, importBundle, diskGate } from '../src/regions/bundle';
-import { PackService, serviceAddress } from '../src/regions/service';
+import { PackService, serviceAddress, isInsecureTransport } from '../src/regions/service';
 import { readPackService, writePackService } from '../src/settings';
 import { scoreGazetteer } from '../src/search/gaz';
 import { searchContext, searchType } from '../src/search/types';
@@ -127,10 +127,17 @@ describe('Photon presentation and ranking inputs', () => {
 });
 
 describe('configured service client', () => {
-  it('requires both address and key; accepts HTTPS public IPv6, never public plaintext', () => {
+  it('requires both address and key; accepts HTTPS and self-hosted HTTP, flagging clear text', () => {
     expect(() => serviceAddress({url:'',apiKey:'key'})).toThrow();expect(() => serviceAddress({url:'https://[2001:db8::1]',apiKey:''})).toThrow();
     expect(serviceAddress({url:'https://[2001:db8::1]',apiKey:'key'}).hostname).toBe('[2001:db8::1]');
-    expect(() => serviceAddress({url:'http://[2001:db8::1]',apiKey:'key'})).toThrow('HTTPS');
+    // Self-hosted HTTP is allowed by explicit choice (LAN / TLS terminated
+    // elsewhere), but it sends the key in clear text and is flagged as such.
+    const clear = serviceAddress({url:'http://[2001:db8::1]',apiKey:'key'});
+    expect(clear.protocol).toBe('http:');
+    expect(isInsecureTransport(clear)).toBe(true);
+    expect(isInsecureTransport(serviceAddress({url:'https://[2001:db8::1]',apiKey:'key'}))).toBe(false);
+    expect(isInsecureTransport(serviceAddress({url:'http://[::1]:8787',apiKey:'key'}))).toBe(false);
+    expect(() => serviceAddress({url:'ftp://[2001:db8::1]',apiKey:'key'})).toThrow('HTTP(S)');
   });
   it('stores credentials device-locally, separately from routing credentials', () => {
     const data = new Map<string,string>();const store={getItem:(k:string) => data.get(k) ?? null,setItem:(k:string,v:string) => {data.set(k,v);},removeItem:(k:string) => {data.delete(k);}};
