@@ -413,7 +413,7 @@ describe('resolveRoute — strict (fallback off)', () => {
 
 describe('describeProvenance', () => {
   it('names the serving engine plainly when nothing was substituted', () => {
-    expect(describeProvenance('local', false)).toBe('Offline (.osm)');
+    expect(describeProvenance('local', false)).toBe('Offline (.osm) — deprecated');
   });
 
   it('marks a substituted engine, because its capabilities differ', () => {
@@ -472,7 +472,7 @@ describe('the two offline sources', () => {
   it('describeProvenance names the offline source that answered', () => {
     expect(describeProvenance('local-valhalla', false)).toBe('Offline Valhalla');
     expect(describeProvenance('local-valhalla', true)).toBe('Offline Valhalla (fallback)');
-    expect(describeProvenance('local', false)).toBe('Offline (.osm)');
+    expect(describeProvenance('local', false)).toBe('Offline (.osm) — deprecated');
   });
 
   it('each offline source is ready on its own fact', () => {

@@ -104,6 +104,8 @@ async function main() {
     mkdirSync(join(work, 'out'), { recursive: true });
     execFileSync('tar', [
       '--create',
+      '--format=ustar',
+      '--mode=644',
       '--file', join(work, 'out', 'pack.tar'),
       '--directory', tileDir,
       '--no-recursion',

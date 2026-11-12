@@ -33,6 +33,7 @@ export const SETTINGS_KEYS = {
   apiKey: `${PREFIX}apiKey`,
   endpoint: `${PREFIX}endpoint`,
   places: `${PREFIX}places`,
+  packService: `${PREFIX}packService`,
 } as const;
 
 /** The fallback policy is part of the engine selection object. */
@@ -352,4 +353,15 @@ export function validateEndpoint(raw: string): string | null {
 /** A custom endpoint is only "configured" if it is also well-formed. */
 export function isEndpointUsable(raw: string): boolean {
   return raw.trim().length > 0 && validateEndpoint(raw) === null;
+}
+
+export interface PackServiceSettings { url: string; apiKey: string; }
+export function readPackService(store: Store | null = defaultStore()): PackServiceSettings {
+  try {
+    const v = JSON.parse(safeGet(store, SETTINGS_KEYS.packService) ?? '{}') as Partial<PackServiceSettings>;
+    return { url: typeof v.url === 'string' ? v.url.trim() : '', apiKey: typeof v.apiKey === 'string' ? v.apiKey.trim() : '' };
+  } catch { return { url: '', apiKey: '' }; }
+}
+export function writePackService(value: PackServiceSettings, store: Store | null = defaultStore()): string | null {
+  return persist(store, SETTINGS_KEYS.packService, JSON.stringify({ url: value.url.trim(), apiKey: value.apiKey.trim() }));
 }

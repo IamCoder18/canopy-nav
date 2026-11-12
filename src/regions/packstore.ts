@@ -30,8 +30,9 @@ export type { PackInfo } from '../osm/regions';
 import type { PackInfo } from '../osm/regions';
 
 const DB_NAME = 'canopy-packs';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'packs';
+const META = 'pack-meta';
 
 interface PackRow {
   id: string;
@@ -59,6 +60,13 @@ function openDb(): Promise<IDBDatabase> {
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(META)) {
+        const meta = db.createObjectStore(META, { keyPath: 'id' });
+        // One-time, cursor-at-a-time migration. Future listings never clone
+        // every province's routing bytes into the main-thread heap.
+        const cursor = req.transaction!.objectStore(STORE).openCursor();
+        cursor.onsuccess = () => { const c = cursor.result; if (c) { const r = c.value as PackRow; meta.put({ id: r.id,info: r.info }); c.continue(); } };
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(storageError(req.error));
@@ -81,9 +89,10 @@ export async function savePack(id: string, data: ArrayBuffer, info: PackInfo): P
   const db = await openDb();
   try {
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readwrite');
+      const tx = db.transaction([STORE,META], 'readwrite');
       const row: PackRow = { id, info, savedAt: Date.now(), data };
       tx.objectStore(STORE).put(row);
+      tx.objectStore(META).put({ id,info });
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(storageError(tx.error));
       tx.onabort = () => reject(storageError(tx.error));
@@ -116,9 +125,9 @@ export async function listPacks(): Promise<{ id: string; info: PackInfo }[]> {
   if (!hasIndexedDb()) return [];
   const db = await openDb();
   try {
-    const rows = await new Promise<PackRow[]>((resolve, reject) => {
-      const req = db.transaction(STORE, 'readonly').objectStore(STORE).getAll();
-      req.onsuccess = () => resolve((req.result as PackRow[]) ?? []);
+    const rows = await new Promise<{ id: string; info: PackInfo }[]>((resolve, reject) => {
+      const req = db.transaction(META, 'readonly').objectStore(META).getAll();
+      req.onsuccess = () => resolve(req.result ?? []);
       req.onerror = () => reject(storageError(req.error));
     });
     return rows.map((r) => ({ id: r.id, info: r.info }));
@@ -134,8 +143,9 @@ export async function deletePack(id: string): Promise<void> {
   const db = await openDb();
   try {
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readwrite');
+      const tx = db.transaction([STORE,META], 'readwrite');
       tx.objectStore(STORE).delete(id);
+      tx.objectStore(META).delete(id);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(storageError(tx.error));
     });

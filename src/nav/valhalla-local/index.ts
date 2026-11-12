@@ -7,7 +7,7 @@
  * an app with no packs pays for none of this — not even the worker.
  */
 
-import { createLocalValhalla, type LocalValhallaClient } from './client';
+import { WorkerClient, type LocalValhallaClient } from './client';
 
 export { createLocalValhalla, InProcessClient, type LocalValhallaClient } from './client';
 export { ValhallaLocalRuntime, describeLocalFailure, type ValhallaModuleFactory } from './runtime';
@@ -26,7 +26,10 @@ let instance: LocalValhallaClient | null = null;
 
 /** The app's engine. Never loads WASM or starts a worker until used. */
 export function getLocalValhalla(): LocalValhallaClient {
-  if (!instance) instance = createLocalValhalla();
+  // The app always uses a worker. Keeping the Node/in-process factory out of
+  // this call graph avoids shipping a second copy of the WASM runtime host on
+  // the main thread. Node tests inject via setLocalValhalla or the factory.
+  if (!instance) instance = new WorkerClient();
   return instance;
 }
 

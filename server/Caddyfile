@@ -1,0 +1,57 @@
+# DNS-only AAAA record pointing directly to this host's PUBLIC IPv6 address.
+# No Cloudflare Tunnel (or other tunnel) is involved.
+{
+    # Reverse-proxy error logs can include request headers even with access
+    # logging disabled. Redact both accepted credential headers globally.
+    log default {
+        format filter {
+            wrap json
+            fields {
+                request>headers>Authorization delete
+                request>headers>X-Api-Key delete
+                request>headers>X-API-Key delete
+                request>headers>x-api-key delete
+            }
+        }
+    }
+}
+{$PACKSERVER_HOST:packs.example.org} {
+    bind [::]
+    @health {
+        method GET HEAD
+        path /healthz
+    }
+    @private {
+        not {
+            method GET HEAD
+            path /healthz
+        }
+    }
+    # A stock reverse_proxy may read the client body and emit 100 Continue
+    # before the upstream has answered. Authenticate via a bodyless GET first.
+    forward_auth @private [::1]:8787 {
+        uri /v1/auth-check
+        header_up X-Packserver-Upload-Length {http.request.header.Content-Length}
+        transport http {
+            dial_timeout 5s
+            response_header_timeout 30s
+        }
+    }
+    # Public liveness never forwards a client-supplied body.
+    reverse_proxy @health [::1]:8787 {
+        method GET
+    }
+    request_body {
+        # Match PACKSERVER_MAX_UPLOAD_MB. Caddy streams proxy requests; do NOT
+        # enable request_buffers (auth must reject before the body is consumed).
+        max_size 2048MiB
+    }
+    reverse_proxy [::1]:8787 {
+        transport http {
+            dial_timeout 5s
+            response_header_timeout 30s
+        }
+    }
+    # Access logging is off. Apply the same credential filter if adding an
+    # independently configured access logger.
+}

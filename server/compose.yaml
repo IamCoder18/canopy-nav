@@ -1,0 +1,16 @@
+services:
+  packserver:
+    build: .
+    restart: unless-stopped
+    # Direct public IPv6 TLS terminates at host Caddy; never publish this port
+    # on a public interface. Host must support IPv6 loopback for this binding.
+    ports:
+      - "[::1]:8787:8787"
+    environment:
+      PACKSERVER_MAX_CONCURRENT_BUILDS: "2"
+      PACKSERVER_THREADS: "2"
+    volumes:
+      - packs:/var/lib/packserver
+    stop_grace_period: 30s
+volumes:
+  packs:

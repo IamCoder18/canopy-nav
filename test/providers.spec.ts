@@ -676,7 +676,7 @@ describe('resolveRoute — the two offline sources', () => {
   it('behaves exactly as before when no pack engine is passed at all', async () => {
     const out = await resolveRoute({ from: FROM, to: TO, provider: 'local' }, dataset(), {});
     expect(out.route.engine).toBe('osm-local');
-    expect(out.attempts[0].label).toBe('Offline (.osm)');
+    expect(out.attempts[0].label).toBe('Offline (.osm) — deprecated');
   });
 
   it('honours strict the same way: the plan is the whole world', async () => {

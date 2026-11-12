@@ -17,6 +17,8 @@ import {
 } from './download';
 import { CATALOG, catalogByCountry, type CatalogEntry, type Region } from '../osm/regions';
 import type { RouteResult } from '../osm/engine.worker';
+import type { Route } from '../nav/valhalla';
+import { getLocalValhalla } from '../nav/valhalla-local';
 import type { BuildProgress } from '../osm/engine';
 import { canImport, affordableBoxAround, importBudgetBytes } from '../osm/importguard';
 import type { PbfCrop } from '../osm/pbf';
@@ -51,6 +53,7 @@ export interface RegionsScreenProps {
   onMapFocus: (center: LatLng, zoom: number) => void;
   /** Send a cross-region route to the normal preview / navigation flow. */
   onPreviewRoute: (result: RouteResult, to: LatLng, label: string, via: string[]) => void;
+  onPreviewPackRoute: (result: Route, to: LatLng, label: string) => void;
 }
 
 /** Where the next chosen file should land, if no file has been picked yet. */
@@ -500,6 +503,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
    * makes the dependency list honest.
    */
   const onActivated = props.onActivated;
+  const onMapFocus = props.onMapFocus;
 
   const onPicked = useCallback(async (
     file: File | undefined,
@@ -507,6 +511,11 @@ export function RegionsScreen(props: RegionsScreenProps) {
     crop?: PbfCrop,
   ) => {
     if (!file) return;
+    if (/\.tar\.gz$/i.test(file.name)) {
+      setProgress({ stage: 'Verifying bundle',pct: 0 }); setError(null);
+      void import('./bundle').then((b) => b.importBundle(file)).then((r) => { onActivated(); onMapFocus(centroid(r.bbox),12); }).catch((e) => setError(e instanceof Error ? e.message : String(e))).finally(() => setProgress(null));
+      return;
+    }
     const p = pending.current ?? { id: '', name: '', code: 'local' };
     try {
       const ds = await importRegionFile({
@@ -553,7 +562,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
     // every `App` render — and App re-renders at 1 Hz while navigating — so
     // depending on it makes this `useCallback` have a new identity every render
     // and memoise nothing, while costing a closure allocation each time.
-  }, [onActivated]);
+  }, [onActivated, onMapFocus]);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -564,6 +573,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
     // parsed into a graph, so the parse-memory guard has nothing to say about
     // it and must not refuse it on the size of a file that costs a fraction of
     // that to use.
+    if (/\.tar\.gz$/i.test(file.name)) { void onPicked(file); return; }
     if (/\.tar$/i.test(file.name ?? '')) {
       void onPackPicked(file);
       return;
@@ -677,7 +687,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [regions, props.location, fromKey, toKey]);
 
-  const preview = () => {
+  const preview = async () => {
     const a = pointFor(fromKey);
     const b = pointFor(toKey);
     if (!a || !b) {
@@ -685,6 +695,12 @@ export function RegionsScreen(props: RegionsScreenProps) {
       return;
     }
     try {
+      const involved = [regionLib.bestFor(a.pos),regionLib.bestFor(b.pos)].filter((r): r is Region => !!r);
+      if (involved.some((r) => r.pack || r.buildId)) {
+        const warning = regionLib.packWarning(a.pos,b.pos); if (warning) throw new Error(warning);
+        const route = await getLocalValhalla().route({ from: a.pos,to: b.pos,units: props.units === 'imperial' ? 'miles' : 'km' });
+        props.onPreviewPackRoute(route,b.pos,b.label); return;
+      }
       const r = regionLib.route(a.pos, b.pos);
       if (!r) {
         setOutcome({ error: 'No connected road path between those points in the downloaded regions.' });
@@ -724,9 +740,10 @@ export function RegionsScreen(props: RegionsScreenProps) {
         </span>
       </div>
 
-      <input type="file" accept=".osm,.pbf,.xml,.tar,application/octet-stream" hidden ref={fileRef} onChange={onFileChange} />
+      <input type="file" accept=".osm,.pbf,.xml,.tar,.gz,application/gzip,application/octet-stream" hidden ref={fileRef} onChange={onFileChange} />
 
       <div className="settings-body">
+        <div className="hint-card">Import a pack-service .tar.gz bundle for Valhalla turn-by-turn, full-resolution real search and offline map tiles. Raw .osm/.osm.pbf imports remain supported with deprecated graph routing.</div>
         {/* ---------------------- downloaded ---------------------- */}
         <div className="section-head" style={T.body3m}>Downloaded regions</div>
 
@@ -845,8 +862,7 @@ export function RegionsScreen(props: RegionsScreenProps) {
         <div className="section-head" style={T.body3m}>Route across regions</div>
         <div className="hint-card">
           <div style={{ ...T.body3, color: ink.secondary, marginBottom: DP.P3 }}>
-            With two or more regions downloaded the library routes on whichever region covers
-            each end and stitches the legs at the boundary.
+            Pack-backed regions use the Valhalla tile union. Build adjacent inputs together for connected border routing. Only legacy raw imports merge road graphs.
           </div>
 
           <div style={{ ...T.sub2, color: ink.secondary, marginBottom: DP.P1 }}>From</div>

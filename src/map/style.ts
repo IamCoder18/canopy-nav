@@ -540,8 +540,8 @@ export function arterialFilter(): unknown[] {
  * because those live with the map component that owns them, and importing the
  * component here would drag `maplibre-gl` into a pure module.
  */
-export function offlineStyleSpec(overlayLayerDefs: LayerDef[]): StyleSpecification {
-  return {
+export function offlineStyleSpec(overlayLayerDefs: LayerDef[], pmtilesUrl?: string): StyleSpecification {
+  const style = {
     version: 8,
     // No `glyphs` key at all — and the difference from `glyphs: undefined` is the
     // whole basemap. The validator reads a present key as a declaration and
@@ -616,6 +616,19 @@ export function offlineStyleSpec(overlayLayerDefs: LayerDef[]): StyleSpecificati
       ...overlayLayerDefs,
     ],
   } as StyleSpecification;
+  if (pmtilesUrl) {
+    delete style.sources['canopy-osm']; delete style.sources['canopy-osm-water']; delete style.sources['canopy-osm-green'];
+    style.sources['canopy-basemap'] = { type: 'vector', url: pmtilesUrl, attribution: OSM_ATTRIBUTION };
+    for (const layer of style.layers) {
+      if (!('source' in layer)) continue;
+      const sourceLayer = layer.source === 'canopy-osm' ? 'roads' : layer.source === 'canopy-osm-water' ? 'water' : layer.source === 'canopy-osm-green' ? 'green' : null;
+      if (sourceLayer) { layer.source = 'canopy-basemap'; layer['source-layer'] = sourceLayer; }
+    }
+    // Service water includes actual polygons, unlike the legacy outline-only
+    // source. Keep outlines and add a fill using the same portable style spec.
+    style.layers.splice(2,0,{ id: 'canopy-water-fill',type: 'fill',source: 'canopy-basemap','source-layer': 'water',filter: ['==',['geometry-type'],'Polygon'],paint: { 'fill-color': NIGHT.water } });
+  }
+  return style;
 }
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };

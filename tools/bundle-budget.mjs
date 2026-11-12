@@ -67,7 +67,10 @@ const BUDGET = {
    * number is a floor, and a floor that ignores a new tenant is one that will
    * fail for the wrong reason.
    */
-  totalJs: 490,
+  // Packserver stage 3: PMTiles reader + verified bundle ingest + service
+  // settings/client add a measured ~15 kB gzip. Entry/map budgets stay fixed;
+  // the runtime host is worker-only so none of this expands boot work.
+  totalJs: 510,
 };
 
 let failed = false;

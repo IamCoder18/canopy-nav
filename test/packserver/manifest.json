@@ -1,0 +1,68 @@
+{
+  "artifacts": [
+    {
+      "bytes": 30720,
+      "content-type": "application/x-tar",
+      "format": "valhalla-gph-tar/1",
+      "name": "routing.valhalla.tar",
+      "role": "routing",
+      "sha256": "5daebb12d097de3613bdb80f16310000d8e85450f485a8ddd67d5e73d5f01921",
+      "tiles": 3
+    },
+    {
+      "bytes": 611,
+      "content-type": "application/gzip",
+      "entries": 17,
+      "format": "canopy-gazetteer/1",
+      "name": "search.gazetteer.jsonl.gz",
+      "role": "search",
+      "sha256": "97c2bf1c63a5c710a21e64ed84c4e21368993ad2de556d7ebbe937160b07d1ab"
+    },
+    {
+      "bytes": 34361,
+      "content-type": "application/vnd.pmtiles",
+      "format": "pmtiles/3",
+      "layers": [
+        "roads",
+        "water",
+        "green"
+      ],
+      "maxzoom": 16,
+      "minzoom": 5,
+      "name": "map.pmtiles",
+      "role": "basemap",
+      "sha256": "fbece6e928bbcde556da28d48670f6d16fe16ffad612e9099d668ca552b701b7"
+    }
+  ],
+  "build": {
+    "created": "2026-11-12T00:00:00Z",
+    "id": "bld_fixture",
+    "packserver": "0.1.0",
+    "valhalla": "3.9.1-fixture"
+  },
+  "format": "canopy-bundle/1",
+  "inputs": [
+    {
+      "bytes": 1201,
+      "filename": "fixture.osm.pbf",
+      "resorted": false,
+      "sha256": "ae60ca6d9a39e4b31e8cab8d4b5f4d860d81e97f38e30e688be72b2b8eda7a22",
+      "sorted": true
+    }
+  ],
+  "region": {
+    "bbox": [
+      -1.4000000000000001,
+      51.5,
+      -1.3232000000000002,
+      51.548
+    ],
+    "counts": {
+      "nodes": 101,
+      "relations": 0,
+      "routable": 19,
+      "ways": 21
+    },
+    "name": "Fixture City"
+  }
+}

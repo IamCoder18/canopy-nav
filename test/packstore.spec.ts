@@ -7,10 +7,10 @@
  * session-only packs and sentences, never to broken navigation.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { IDBFactory } from 'fake-indexeddb';
+import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
 
 import { savePack, loadPack, listPacks, deletePack } from '../src/regions/packstore';
 
@@ -57,13 +57,29 @@ describe('packstore', () => {
   });
 
   it('lists ids and sizes without dragging bytes along', async () => {
+    // Upgrade a genuine v1 record without rewriting or losing its pack bytes.
+    const legacy = await new Promise<IDBDatabase>((resolve,reject) => {
+      const r = indexedDB.open('canopy-packs',1);
+      r.onupgradeneeded = () => r.result.createObjectStore('packs',{keyPath:'id'});
+      r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
+    });
+    await new Promise<void>((resolve,reject) => {
+      const tx = legacy.transaction('packs','readwrite');
+      tx.objectStore('packs').put({id:'legacy',info:{bytes:4,tiles:1},savedAt:1,data:new Uint8Array([1,2,3,4]).buffer});
+      tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error);
+    });
+    legacy.close();
     const buf = new Uint8Array(1024).buffer;
     await savePack('a', buf, { bytes: 1024, tiles: 1 });
     await savePack('b', buf, { bytes: 1024, tiles: 2 });
+    const getAll = vi.spyOn(IDBObjectStore.prototype,'getAll');
     const list = await listPacks();
-    expect(list.map((p) => p.id).sort()).toEqual(['a', 'b']);
+    expect(getAll.mock.instances.map((store) => store.name)).toEqual(['pack-meta']);
+    getAll.mockRestore();
+    expect(list.map((p) => p.id).sort()).toEqual(['a', 'b', 'legacy']);
     expect(list.every((p) => p.info.tiles > 0)).toBe(true);
     expect(list[0]).not.toHaveProperty('data');
+    expect(new Uint8Array((await loadPack('legacy'))!.data)).toEqual(new Uint8Array([1,2,3,4]));
   });
 
   it('reports an unknown pack as absent rather than failing', async () => {

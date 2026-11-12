@@ -375,7 +375,7 @@ export class OsmEngine {
 // Imported lazily so the A* implementation stays in one module.
 import { routeOnGraph } from './engine.worker';
 function routeSync(ds: OsmDataset, from: LatLng, to: LatLng): RouteResult | null {
-  return routeOnGraph(ds.graph, from, to);
+  return ds.graph ? routeOnGraph(ds.graph, from, to) : null;
 }
 
 /* ------------------------- GeoJSON for the map ------------------------- */

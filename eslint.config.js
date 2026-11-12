@@ -19,7 +19,7 @@ import tseslint from 'typescript-eslint';
  */
 export default tseslint.config(
   {
-    ignores: ['dist', 'node_modules', 'android', 'e2e-screenshots'],
+    ignores: ['dist', 'node_modules', 'android', 'e2e-screenshots', 'server/target'],
   },
 
   js.configs.recommended,
@@ -102,7 +102,7 @@ export default tseslint.config(
    * globals that are neither `browser` nor `worker`: `process`, `TextEncoder`,
    * `ReadableStream` and `CompressionStream` are all Node globals. */
   {
-    files: ['tools/**/*.mjs', 'test/**/*.mjs'],
+    files: ['tools/**/*.mjs', 'test/**/*.mjs', 'server/**/*.mjs'],
     languageOptions: { globals: { ...globals.node } },
     rules: { 'no-console': 'off', 'no-undef': 'off' },
   },

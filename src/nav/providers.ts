@@ -32,7 +32,7 @@ import type { LocalValhallaClient } from './valhalla-local';
  * and the trace, the provenance line and the picker all name the same thing.
  */
 export const OFFLINE_VALHALLA_LABEL = 'Offline Valhalla';
-export const OFFLINE_GRAPH_LABEL = 'Offline (.osm)';
+export const OFFLINE_GRAPH_LABEL = 'Offline (.osm) — deprecated';
 
 export type ProviderId = 'local-valhalla' | 'local' | 'valhalla-fossgis' | 'valhalla-simplerouting' | 'valhalla-custom';
 
@@ -70,7 +70,7 @@ export const PROVIDERS: readonly Provider[] = [
   {
     id: 'local',
     label: OFFLINE_GRAPH_LABEL,
-    subtitle: 'Routes from your imported map. No network needed.',
+    subtitle: 'Deprecated graph routing for raw .osm / .osm.pbf imports only. Service regions use Valhalla packs.',
     online: false,
     endpoint: '',
     maneuvers: false,
@@ -264,7 +264,7 @@ export function watchConnectivity(cb: ConnectivityListener): () => void {
 export async function resolveRoute(
   req: RouteRequest,
   dataset: OsmDataset | null,
-  providerState: { endpoint?: string; apiKey?: string },
+  providerState: { endpoint?: string; apiKey?: string; packWarning?: string; packBacked?: boolean },
   /**
    * Caller-side cancellation, composed with each provider's own timeout.
    *
@@ -311,7 +311,7 @@ export async function resolveRoute(
   // matching reason: `test/engines.spec.ts` notes that "a strict plan never contains
   // the offline engine", which is true of `planRoute`'s output and was being treated
   // as a property of `resolveRoute`.
-  const plan: ProviderId[] = (req.plan?.length
+  const plan: ProviderId[] = (req.plan !== undefined
     ? req.plan
     : meta(req.provider)?.online && !strict
       ? [req.provider, ...LOCAL_ENGINES]
@@ -411,6 +411,7 @@ export async function resolveRoute(
         }
       }
     } else if (id === 'local-valhalla') {
+      if (providerState.packWarning) { skip(row,providerState.packWarning,true); packFailure = providerState.packWarning; continue; }
       /**
        * The offline Valhalla engine: a routing pack on the device.
        *
@@ -451,9 +452,13 @@ export async function resolveRoute(
         }
       }
     } else {
+      if (providerState.packBacked || dataset?.buildId || dataset?.basemap) {
+        skip(row, 'Service regions route only with Valhalla packs; legacy A* is not permitted');
+        continue;
+      }
       // The in-app graph engine: geometry and timing, no maneuvers.
       const t0 = Date.now();
-      const r = dataset ? routeOnGraph(dataset.graph, req.from, req.to) : null;
+      const r = dataset?.graph ? routeOnGraph(dataset.graph, req.from, req.to) : null;
       if (r) {
         row.outcome = 'served';
         row.ms = Date.now() - t0;

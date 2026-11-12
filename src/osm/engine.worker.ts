@@ -69,7 +69,11 @@ export interface RenderLine { class: string; pts: LatLng[] }
 export interface RenderPoly { class: string; rings: LatLng[][] }
 
 export interface OsmDataset {
-  graph: RoadGraph;
+  /** Absent for service bundles: those route exclusively from Valhalla tiles. */
+  graph?: RoadGraph;
+  /** Stored PMTiles archive key; portable styles consume it as vector data. */
+  basemap?: string;
+  buildId?: string;
   gaz: GazEntry[];
   roads: RenderLine[];
   water: RenderPoly[];

@@ -11,6 +11,15 @@ interface P {
   className?: string;
 }
 
+export function SearchTypeIcon({ kind, ...props }: P & { kind?: 'city' | 'street' | 'address' | 'poi' | 'area' | 'water' }) {
+  if (kind === 'city') return <svg {...s(props.size,props.className)} fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 21V8h7V3h7v9h4v9H3zm4-9h1m-1 4h1m6-9h1m-1 4h1m-1 4h1" /></svg>;
+  if (kind === 'street') return <svg {...s(props.size,props.className)} fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 22 8 2m8 0 3 20M12 3v4m0 3v4m0 3v4" /></svg>;
+  if (kind === 'address') return <IconHome {...props} />;
+  if (kind === 'area') return <IconLayers {...props} />;
+  if (kind === 'water') return <svg {...s(props.size,props.className)} fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 9q3-4 6 0t6 0t6 0M2 15q3-4 6 0t6 0t6 0" /></svg>;
+  return <IconPin {...props} />;
+}
+
 /**
  * Every icon here is decorative.
  *

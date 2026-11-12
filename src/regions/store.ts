@@ -326,6 +326,8 @@ export async function restoreRegions(): Promise<Region[]> {
     for (const { meta, dataset } of saved) {
       out.push(regionLib.add(meta, dataset));
     }
+    try { out.push(...await (await import('./bundle')).restoreBundles()); }
+    catch (e) { console.warn('Canopy: could not restore service bundles', e); }
     await restorePacks();
     return out;
   } catch {
@@ -379,22 +381,35 @@ async function restorePacks(): Promise<void> {
  * report is about the bytes, not about the map.
  */
 export async function removeRegion(id: string): Promise<string | null> {
+  const service = !!regionLib.get(id)?.buildId;
   regionLib.remove(id);
   engines.get(id)?.dispose();
   engines.delete(id);
   // The pack is the region's too: leaving it would keep routing (and keep
   // spending its bytes) for a map the driver has deleted.
-  getLocalValhalla().unmount(id);
   let problem: string | null = null;
+  try {
+    await getLocalValhalla().unmount(id);
+  } catch (e) {
+    problem = describeError(e);
+  }
   try {
     await deleteRegion(id);
   } catch (e) {
-    problem = e instanceof Error ? e.message : String(e);
+    problem ??= e instanceof Error ? e.message : String(e);
   }
   try {
     await deletePack(id);
   } catch (e) {
     problem ??= e instanceof Error ? e.message : String(e);
+  }
+  if (service) {
+    try {
+      const { writeBundleRecord } = await import('./bundlestore');
+      const { deleteArtifacts } = await import('./artifactstore');
+      await writeBundleRecord(null,id); await deleteArtifacts(id);
+      (await import('../map/pmtiles')).detachStoredMap(id);
+    } catch (e) { problem ??= describeError(e); }
   }
   return problem;
 }

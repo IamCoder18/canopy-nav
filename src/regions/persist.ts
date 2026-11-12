@@ -331,6 +331,7 @@ function packNames(names: string[]): string[] {
 
 function serializeDataset(ds: OsmDataset): StoredDataset {
   const g = ds.graph;
+  if (!g) throw new Error('Service regions are persisted in the bundle store, not the raw-map store.');
   return {
     graph: {
       coords: pack(g.coords),
@@ -427,6 +428,7 @@ counts: isCounts(s.counts)
  */
 export function estimateDatasetBytes(ds: OsmDataset): number {
   const g = ds.graph;
+  if (!g) return ds.gaz.length * 160;
   let n =
     g.coords.byteLength + g.osmIds.byteLength + g.edgeStart.byteLength +
     g.edgeTo.byteLength + g.edgeCost.byteLength + g.edgeFlags.byteLength +

@@ -104,8 +104,9 @@ function copyGraph(g: RoadGraph): RoadGraph {
 
 export function mergeRegions(regions: Region[]): MergeReport {
   if (regions.length === 0) throw new Error('mergeRegions: no regions');
+  if (regions.some((r) => !r.dataset.graph || r.pack)) throw new Error('Graph merging is only supported for legacy raw imports without packs.');
   if (regions.length === 1) {
-    const g = copyGraph(regions[0].dataset.graph);
+    const g = copyGraph(regions[0].dataset.graph!);
     return {
       graph: g, nodes: g.nodeCount, sharedNodes: 0, sharedEdges: 0,
       components: countComponents(g), regionIds: [regions[0].id],
@@ -118,7 +119,7 @@ export function mergeRegions(regions: Region[]): MergeReport {
   let slotTotal = 0;
   for (const r of regions) {
     offsets.push(slotTotal);
-    slotTotal += r.dataset.graph.nodeCount;
+    slotTotal += r.dataset.graph!.nodeCount;
   }
 
   const dsu = makeDSU(slotTotal);
@@ -126,7 +127,7 @@ export function mergeRegions(regions: Region[]): MergeReport {
   let sharedNodes = 0;
 
   for (let ri = 0; ri < regions.length; ri++) {
-    const g = regions[ri].dataset.graph;
+    const g = regions[ri].dataset.graph!;
     const base = offsets[ri];
     for (let i = 0; i < g.nodeCount; i++) {
       const id = g.osmIds[i];
@@ -145,7 +146,7 @@ export function mergeRegions(regions: Region[]): MergeReport {
   const regionOf: number[] = [];
 
   for (let ri = 0; ri < regions.length; ri++) {
-    const g = regions[ri].dataset.graph;
+    const g = regions[ri].dataset.graph!;
     const base = offsets[ri];
     for (let i = 0; i < g.nodeCount; i++) {
       const root = dsu.find(base + i);
@@ -195,7 +196,7 @@ export function mergeRegions(regions: Region[]): MergeReport {
   let sharedEdges = 0;
 
   for (let ri = 0; ri < regions.length; ri++) {
-    const g = regions[ri].dataset.graph;
+    const g = regions[ri].dataset.graph!;
     const base = offsets[ri];
     for (let i = 0; i < g.nodeCount; i++) {
       const from = slotOf[base + i];

@@ -3,6 +3,7 @@ import type { TrafficOverlay } from './map/overlays';
 import { buildStageStep, type BuildProgress } from './osm/engine';
 import type { OsmDataset } from './osm/engine.worker';
 import type { GazEntry } from './search/gaz';
+import { searchContext, searchType } from './search/types';
 import {
   mergeHits, highlightRanges,
   type RankedHit, type HitSource,
@@ -61,7 +62,7 @@ import {
   IconLayers, IconTraffic, IconSettings, IconHome, IconGoto, IconChevronRight,
   IconFile, IconLocate, IconCar, IconRefresh,
   IconInfo, IconPin, IconCheck, IconCompass, IconPlus, IconMinus, IconMessage,
-  IconWarning, IconClock,
+  IconWarning, IconClock, SearchTypeIcon,
 } from './icons';
 
 const ENGINE_IDS: readonly string[] = [...PROVIDERS.map((p) => p.id as string), 'any-online'];
@@ -82,6 +83,7 @@ const ENGINE_IDS: readonly string[] = [...PROVIDERS.map((p) => p.id as string), 
  */
 const MapView = lazy(() => import('./map/MapView'));
 const RegionsScreen = lazy(() => import('./regions/RegionsScreen'));
+const PackServiceSettings = lazy(() => import('./regions/PackServiceSettings'));
 
 type Screen = 'home' | 'search' | 'preview' | 'navigating' | 'steps' | 'settings' | 'import' | 'regions' | 'engines';
 
@@ -299,11 +301,9 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   const [apiKey, setApiKey] = useState(() => readApiKey());
   const [endpoint, setEndpoint] = useState(() => readEndpoint());
 
-  /** The ordered engine plan implied by the current selection. */
-  const enginePlan = useMemo(
-    () => planRoute(selection, { endpoint, apiKey }),
-    [selection, endpoint, apiKey],
-  );
+  const [dataset, setDataset] = useState<OsmDataset | null>(null);
+  const regions = useRegions();
+  const [mapCenter,setMapCenter] = useState<LatLng | undefined>(undefined);
   /**
    * Who actually answered the current route, and what became of every other
    * engine on the plan.
@@ -315,7 +315,6 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
    */
   const [provenance, setProvenance] = useState<RouteProvenance | null>(null);
 
-  const [dataset, setDataset] = useState<OsmDataset | null>(null);
   const [progress, setProgress] = useState<BuildProgress | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   /**
@@ -328,7 +327,6 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
    */
   const [importWarn, setImportWarn] = useState<string | null>(null);
   // Subscribes to the library, so every screen re-renders when a region lands.
-  const regions = useRegions();
 
   const [destination, setDestination] = useState<{ pos: LatLng; label: string } | null>(null);
   const [origin, setOrigin] = useState<LatLng | null>(null);
@@ -982,6 +980,17 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   }, []);
 
   /* -------------------------- OSM import -------------------------- */
+  const installedIds = useRef(new Set<string>());
+  useEffect(() => {
+    const added = regions.filter((r) => !installedIds.current.has(r.id));
+    installedIds.current = new Set(regions.map((r) => r.id));
+    if (restoring) return;
+    const next = added[added.length - 1] ?? (!regions.some((r) => r.dataset === dataset) ? regions[0] : undefined);
+    if (next && next.dataset !== dataset) {
+      setDataset(next.dataset);
+      setFocus({ center: [(next.bbox[0]+next.bbox[2])/2,(next.bbox[1]+next.bbox[3])/2],zoom: 12 });
+    } else if (!regions.length && dataset) setDataset(null);
+  }, [regions,restoring,dataset]);
 
   /**
    * Parse an extract and hand back its dataset.
@@ -1022,6 +1031,13 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
   }, []);
 
   const onFile = useCallback(async (file: File) => {
+    if (/\.tar\.gz$/i.test(file.name)) {
+      setImportError(null); setProgress({ stage: 'Verifying bundle', pct: 0 });
+      try { const r = await (await import('./regions/bundle')).importBundle(file); setDataset(r.dataset); setFocus({ center: [(r.bbox[0]+r.bbox[2])/2,(r.bbox[1]+r.bbox[3])/2],zoom: 12 }); showToast(`${r.name} installed — Valhalla routing, real search and offline tiles.`); go('home'); }
+      catch (e) { setImportError(describeError(e)); }
+      finally { setProgress(null); }
+      return;
+    }
     // A routing pack is data for the offline Valhalla engine, not OSM to parse:
     // it never becomes a graph, so it must not be pushed through the parse
     // pipeline (or its memory guard). Same picker, different destination —
@@ -1062,6 +1078,8 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
     setRouting(true);
     setDegraded([]);
     const from = origin ?? location;
+    const packBacked = regionLib.packsCover(from,dest.pos);
+    const requestedPlan = planRoute(selection,{ endpoint,apiKey,packBacked });
     const t0 = Date.now();
     // Takes the gate before the first await, so a second search supersedes this
     // one from the moment it starts rather than from the moment it finishes.
@@ -1074,14 +1092,14 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
           to: dest.pos,
           // `provider` is only the head of the plan; it is kept in the request so
           // the shape stays valid for callers that predate plans.
-          provider: enginePlan[0] ?? 'local',
-          plan: enginePlan,
+          provider: requestedPlan[0] ?? 'local',
+          plan: requestedPlan,
           strict: !selection.allowFallback,
           units: valhallaUnits,
           avoid: [],
         },
-        dataset,
-        { apiKey, endpoint },
+        regionLib.bestFor(from)?.dataset ?? dataset,
+        { apiKey, endpoint, packBacked, packWarning: regionLib.packWarning(from,dest.pos) },
         signal,
         getLocalValhalla(),
       );
@@ -1109,7 +1127,8 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
       if (isSuperseded(e)) return;
       // Single-dataset routing can't span extracts. With several regions
       // downloaded the library merges them and routes across the seam.
-      const multi = regions.length > 1 ? regionLib.route(from, dest.pos) : null;
+      const rawOnly = !packBacked;
+      const multi = selection.allowFallback && rawOnly && regions.length > 1 ? regionLib.route(from, dest.pos) : null;
       if (multi) {
         const next = localToRoute(multi.result, valhallaUnits);
         setRoute(next);
@@ -1121,7 +1140,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
           used: 'local',
           fellBack: true,
           attempts: [
-            ...enginePlan.map((engine) => ({
+            ...requestedPlan.map((engine) => ({
               engine,
               label: PROVIDERS.find((p) => p.id === engine)?.label ?? engine,
               online: PROVIDERS.find((p) => p.id === engine)?.online ?? false,
@@ -1178,7 +1197,7 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
       // UI showed "ready" over an unanswered request.
       if (!gate.isStale(token)) setRouting(false);
     }
-  }, [dataset, origin, location, enginePlan, selection.allowFallback, valhallaUnits, apiKey, endpoint, regions.length, resetTraffic, go]);
+  }, [dataset, origin, location, selection, valhallaUnits, apiKey, endpoint, regions.length, resetTraffic, go]);
 
   /* ------------------------- guidance model ----------------------- */
 
@@ -1536,18 +1555,20 @@ const [selection, setSelection] = useState<EngineSelection>(() => {
       let ok = false;
       let reason: string | undefined;
       try {
+        const packBacked = regionLib.packsCover(origin,trip.pos);
+        const requestedPlan = planRoute(selection,{ endpoint,apiKey,packBacked });
         const outcome = await resolveRoute(
           {
             from: origin,
             to: trip.pos,
-            provider: enginePlan[0] ?? 'local',
-            plan: enginePlan,
+            provider: requestedPlan[0] ?? 'local',
+            plan: requestedPlan,
             strict: !selection.allowFallback,
             units: valhallaUnits,
             avoid: [],
           },
-          dataset,
-          { apiKey, endpoint },
+          regionLib.bestFor(origin)?.dataset ?? dataset,
+          { apiKey, endpoint, packBacked, packWarning: regionLib.packWarning(origin,trip.pos) },
           signal,
           getLocalValhalla(),
         );
@@ -1772,6 +1793,7 @@ const banner = rerouteNotice ?? routeError ?? null;
         reportPoints={reportPoints}
         viewCmd={mapCmd}
         onBearing={setMapBearing}
+        onCenter={setMapCenter}
         onUserCamera={() => setFollow(false)}
         follow={followCam}
         focus={focus}
@@ -1972,6 +1994,7 @@ const banner = rerouteNotice ?? routeError ?? null;
           location={location}
           units={units}
           places={places}
+          mapCenter={mapCenter}
           initialQuery={pendingInitialQuery}
           headingRef={headingRef}
           onInitialQueryConsumed={() => setPendingInitialQuery('')}
@@ -2038,7 +2061,7 @@ const banner = rerouteNotice ?? routeError ?? null;
           selection={selection}
           setSelection={setSelection}
           online={online}
-          hasMap={dataset !== null || regions.length > 0}
+          hasMap={regions.some((r) => !!r.dataset.graph && !r.pack)}
           hasPacks={regionLib.packedIds.length > 0}
           apiKey={apiKey}
           setApiKey={setApiKey}
@@ -2072,6 +2095,11 @@ const banner = rerouteNotice ?? routeError ?? null;
           onBack={() => go('home')}
           onActivated={() => { setImportError(null); setProgress(null); }}
           onMapFocus={(center, zoom) => setFocus({ center, zoom })}
+          onPreviewPackRoute={(next,to,label) => {
+            setDestination({ pos: to,label }); setRoute(next); setRouteError(null); setDegraded([]);
+            setProvenance({ used: 'local-valhalla', fellBack: false, attempts: [{ engine: 'local-valhalla', label: 'Offline Valhalla pack union', online: false, outcome: 'served', reason: null, ms: null }], totalMs: 0,when: Date.now() });
+            beginRouteProgress(next.geometry); resetTraffic({ from: location,to }); go('preview'); setFitNonce((n) => n+1);
+          }}
           onPreviewRoute={(result, to, label, via) => {
             setDestination({ pos: to, label });
             const next = localToRoute(result, valhallaUnits);
@@ -3909,6 +3937,7 @@ function SearchScreen(props: {
   onInitialQueryConsumed?: () => void;
   online: boolean;
   location: LatLng;
+  mapCenter?: LatLng;
   /** Unit system, for the distance shown on every row. */
   units: 'metric' | 'imperial';
   /** Saved Home/Work: a search source of its own, and listed before typing. */
@@ -3932,6 +3961,7 @@ function SearchScreen(props: {
     [props.regions, props.dataset],
   );
   const [q, setQ] = useState(props.initialQuery ?? '');
+  const [bias,setBias] = useState<'me' | 'map'>('me');
   // Adopt a keyboard-seeded query whenever the screen is reopened.
   //
   // `onInitialQueryConsumed` is read through a ref rather than listed as a
@@ -3964,9 +3994,10 @@ function SearchScreen(props: {
    * stopped car does not re-arm anything. The value itself is read from a ref so
    * the ranking uses the real current position rather than the rounded one.
    */
-  const locationRef = useRef(props.location);
-  locationRef.current = props.location;
-  const locationKey = `${props.location[0].toFixed(3)},${props.location[1].toFixed(3)}`;
+  const biasPoint = bias === 'map' ? props.mapCenter ?? props.location : props.location;
+  const locationRef = useRef(biasPoint);
+  locationRef.current = biasPoint;
+  const locationKey = `${biasPoint[0].toFixed(3)},${biasPoint[1].toFixed(3)}`;
   useEffect(() => {
     if (initialQuery) {
       setQ(initialQuery);
@@ -4076,7 +4107,9 @@ function SearchScreen(props: {
         .filter((g) => g.cat === cat)
         .map((g) => ({
           label: displayGazName(g),
-          sub: g.cat,
+          identity: g.id,
+          sub: searchContext(g),
+          typeIcon: searchType(g).icon,
           pos: [g.lon, g.lat] as LatLng,
           source: 'offline' as const,
           score: 0,
@@ -4135,16 +4168,18 @@ function SearchScreen(props: {
       const localHits: SearchHit[] = multi
         ? all.searchAll(regionLib, term, here, 20).map((h) => ({
             label: displayGazName(h.entry),
-            sub: h.regionName === 'Local map'
-              ? `${h.entry.cat}${SEP}${dist([h.entry.lon, h.entry.lat])}`
-              : `${h.entry.cat}${SEP}${h.regionName}${SEP}${dist([h.entry.lon, h.entry.lat])}`,
+            identity: h.entry.id,
+            sub: `${searchContext(h.entry,h.regionName)}${SEP}${dist([h.entry.lon,h.entry.lat])}`,
+            typeIcon: searchType(h.entry).icon,
             pos: [h.entry.lon, h.entry.lat] as LatLng,
             source: 'offline' as const,
             score: h.score,
           }))
         : gaz.scoreGazetteer(props.dataset?.gaz ?? [], term, here, 12).map((h) => ({
             label: displayGazName(h.entry),
-            sub: `${h.entry.cat}${SEP}${dist([h.entry.lon, h.entry.lat])}`,
+            identity: h.entry.id,
+            sub: `${searchContext(h.entry,props.regions[0]?.name)}${SEP}${dist([h.entry.lon, h.entry.lat])}`,
+            typeIcon: searchType(h.entry).icon,
             pos: [h.entry.lon, h.entry.lat] as LatLng,
             source: 'offline' as const,
             score: h.score,
@@ -4210,7 +4245,7 @@ function SearchScreen(props: {
     // `locationKey` above — and `test/audit-regressions.spec.ts` asserts the raw
     // array stays out of this dependency list. (The list is complete without a
     // lint suppression now, which is itself worth keeping true.)
-  }, [q, cat, props.dataset, props.online, locationKey, props.regions, props.places, props.units, locationRef]);
+  }, [q, cat, props.dataset, props.online, locationKey, props.regions, props.places, props.units, locationRef, bias]);
 
   return (
     <div className="search-root">
@@ -4288,6 +4323,10 @@ function SearchScreen(props: {
       </div>
 
       <div className="search-results">
+        <div className="seg" aria-label="Search location bias">
+          <button className={bias === 'me' ? 'on' : ''} aria-pressed={bias === 'me'} onClick={() => setBias('me')}>Search near me</button>
+          <button className={bias === 'map' ? 'on' : ''} aria-pressed={bias === 'map'} onClick={() => setBias('map')}>Near map</button>
+        </div>
         {err && <div className="hint-card" role="status">{err}</div>}
         {props.pickHint && (
           <div className="hint-card pick-hint" role="status">
@@ -4371,7 +4410,7 @@ function SearchScreen(props: {
         {results.map((r, i) => (
           <li key={`${r.source}-${r.label}-${i}`}>
           <button className="result-row" onClick={() => props.onPick(r.pos, r.label)}>
-            <span className="result-icon"><IconGoto size={ICON.secondary} /></span>
+            <span className="result-icon"><SearchTypeIcon kind={r.typeIcon} size={ICON.secondary} /></span>
             <span className="result-text">
               <span style={T.body3m}><HighlightedLabel label={r.label} q={searchedTerm} /></span>
               <span style={{ ...T.sub3, color: ink.secondary }}>{r.sub}</span>
@@ -4669,7 +4708,7 @@ function EnginesScreen(props: {
         <h1 ref={props.headingRef} tabIndex={-1} className="screen-title" style={{ ...T.body1m, marginLeft: DP.P2 }}>Engines</h1>
       </div>
 
-      <div className="settings-body">
+        <div className="settings-body">
         {/*
           What will actually happen, in one sentence, at the top.
 
@@ -5290,6 +5329,7 @@ function SettingsScreen(props: {
             </button>
           </div>
         </div>
+        <Suspense fallback={null}><PackServiceSettings /></Suspense>
       </div>
     </div>
   );
@@ -5383,9 +5423,8 @@ function ImportScreen(props: {
             <span className="dropzone-icon"><IconFile size={64} color={ink.secondary} /></span>
             <span style={{ ...T.body1m, marginTop: DP.P3 }}>Choose or drop an .osm file</span>
             <span style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1, textAlign: 'center' }}>
-              Accepts <code>.osm</code> (XML) and <code>.osm.pbf</code> (protobuf),<br />
-              which is what Geofabrik publishes. Smaller extracts can be converted
-              with <code>osmium cat region.osm.pbf -o region.osm</code>.
+              Prefer a pack-service <code>.tar.gz</code> bundle for turn-by-turn, real search and offline tiles.<br />
+              Raw <code>.osm</code> and <code>.osm.pbf</code> imports remain supported with deprecated graph routing.
             </span>
           </button>
         )}
@@ -5395,7 +5434,7 @@ function ImportScreen(props: {
         <input
           ref={fileRef}
           type="file"
-          accept=".osm,.pbf,.xml,.tar,application/octet-stream"
+          accept=".osm,.pbf,.xml,.tar,.gz,application/gzip,application/octet-stream"
           className="visually-hidden-input"
           tabIndex={-1}
           aria-hidden="true"

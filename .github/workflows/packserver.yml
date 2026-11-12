@@ -1,0 +1,65 @@
+name: Packserver
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - 'tools/osm2pbf.mjs'
+      - 'tools/build-bundle-fixture.mjs'
+      - 'test/packserver/**'
+      - 'test/fixture.osm*'
+      - '.github/workflows/packserver.yml'
+  pull_request:
+    paths:
+      - 'server/**'
+      - 'tools/osm2pbf.mjs'
+      - 'tools/build-bundle-fixture.mjs'
+      - 'test/packserver/**'
+      - 'test/fixture.osm*'
+      - '.github/workflows/packserver.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    name: Rust and native Docker smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            server/target
+          key: ${{ runner.os }}-packserver-${{ hashFiles('server/Cargo.lock') }}
+      - name: Rust gate (stub builder, no native binary required)
+        working-directory: server
+        run: |
+          cargo fmt --all -- --check
+          cargo test --locked
+      - name: Build the standalone image
+        run: docker build -t canopy-packserver-ci server
+      - name: Native smoke over IPv6 loopback
+        run: |
+          docker run -d --name canopy-packserver-ci -p '[::1]:18787:8787' canopy-packserver-ci
+          for attempt in $(seq 1 30); do
+            if curl --noproxy '*' -g -6 --fail --silent 'http://[::1]:18787/healthz'; then break; fi
+            sleep 1
+          done
+          key="$(docker exec canopy-packserver-ci packserver admin key create --name ci)"
+          echo "::add-mask::$key"
+          PACKSERVER_API_KEY="$key" PACKSERVER_URL='http://[::1]:18787' node server/smoke.mjs
+      - name: Clean up the test container
+        if: always()
+        run: docker rm --force --volumes canopy-packserver-ci || true

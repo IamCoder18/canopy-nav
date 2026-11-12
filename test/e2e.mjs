@@ -15,6 +15,7 @@ import { mkdirSync, unlinkSync, openSync, writeSync, closeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { bundleE2e } from './bundle-e2e.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright-core');
@@ -163,6 +164,9 @@ try {
 
 
   /* ---------------- import an .osm file ---------------- */
+  console.log('\npackserver bundle (offline vector map, search, WASM route)');
+  await bundleE2e(browser, BASE, __dirname, check);
+
   console.log('\nimport');
   await page.click('text=Import .osm or routing pack');
   await page.waitForTimeout(600);
@@ -516,7 +520,7 @@ console.log('\ndrive simulator');
       check('settings reports the engine that answered', /Last route answered by/.test(prov),
         prov.match(/Last route answered by[^\n]*/)?.[0] ?? '');
 
-      const enginesLink = await page.$('.hint-card');
+      const enginesLink = await page.$('button.settings-row');
       if (enginesLink) {
         await enginesLink.click();
         await page.waitForTimeout(600);
@@ -1454,7 +1458,7 @@ console.log('\ndrive simulator');
   if (settingsBtn) {
     await settingsBtn.click();
     await page.waitForTimeout(400);
-    const enginesLink = await page.$('.hint-card');
+    const enginesLink = await page.$('button.settings-row');
     check('settings offers an engine control', !!enginesLink);
     await enginesLink.click();
     await page.waitForTimeout(600);

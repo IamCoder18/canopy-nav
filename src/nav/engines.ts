@@ -87,15 +87,16 @@ function isLocalEngine(id: EngineId): boolean {
  */
 export function planRoute(
   selection: EngineSelection,
-  _state: { endpoint?: string; apiKey?: string } = {},
+  _state: { endpoint?: string; apiKey?: string; packBacked?: boolean } = {},
 ): ProviderId[] {
   const remote = PROVIDERS.filter((p) => p.online).map((p) => p.id);
   const head: ProviderId[] = selection.preferred === ANY_ONLINE ? remote : [selection.preferred];
-  if (!selection.allowFallback) return head;
+  const allowed = (id: ProviderId) => !(_state.packBacked && id === 'local');
+  if (!selection.allowFallback) return head.filter(allowed);
   const tail: ProviderId[] = isLocalEngine(selection.preferred)
     ? [...LOCAL_ENGINES.filter((id) => id !== selection.preferred), ...remote]
     : LOCAL_ENGINES.filter((id) => id !== selection.preferred);
-  return [...head, ...tail.filter((id) => !head.includes(id))];
+  return [...head, ...tail.filter((id) => !head.includes(id))].filter(allowed);
 }
 
 /* --------------------------- readiness --------------------------- */

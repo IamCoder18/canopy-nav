@@ -41,7 +41,7 @@ export interface LocalValhallaClient {
 
 /* ------------------------------- worker ---------------------------------- */
 
-class WorkerClient implements LocalValhallaClient {
+export class WorkerClient implements LocalValhallaClient {
   private worker: Worker | null = null;
   private seq = 0;
   private pending = new Map<number, { resolve: (r: WorkerResponse) => void; reject: (e: Error) => void }>();
@@ -87,6 +87,7 @@ class WorkerClient implements LocalValhallaClient {
   }
 
   async unmount(region: string): Promise<void> {
+    if (!this.mounted.has(region)) return;
     const res = await this.send({ type: 'unmount', seq: ++this.seq, region });
     if (res.type === 'error') throw new RoutingError(res.message, res.status, res.detail);
     this.syncRegions(res.regions);

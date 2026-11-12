@@ -45,14 +45,22 @@ import { fold, foldTokens, tokenForms } from './text';
 import { fuzzyTolerance, editDistance } from './fuzzy';
 
 export interface GazEntry {
+  id?: string;
+  type?: string;
+  osm?: string;
+  importance?: number;
+  city?: string;
+  state?: string;
+  country?: string;
+  alt?: string[];
   name: string;
   lat: number;
   lon: number;
   cat: string;
   rank: number;
-  /** street name this housenumber belongs to (house-number interpolation) */
+  /** Real address street (legacy datasets may still carry sampled rows). */
   street?: string;
-  house?: number;
+  house?: number | string;
   streetLat?: number;
   streetLon?: number;
 }
@@ -201,7 +209,7 @@ export function scoreText(q: string | ParsedQuery, text: string): number | null 
 function houseBoost(e: GazEntry, q: ParsedQuery, toks: string[]): number | null {
   if (e.house == null) return null;
   for (let i = 0; i < q.toks.length; i++) {
-    if (!isNumeric(q.toks[i]) || Number(q.toks[i]) !== e.house) continue;
+    if (q.toks[i] !== fold(String(e.house))) continue;
     const rest = q.toks.filter((_, j) => j !== i);
     if (!rest.length) return 900;
     // The street part must fit this entry's street; the right number on the
@@ -255,7 +263,7 @@ export function searchIndex(gaz: readonly GazEntry[]): SearchIndex {
     norm[i] = n;
     const t = n ? n.split(' ') : [];
     toks[i] = t;
-    for (const w of new Set(t)) {
+    for (const w of new Set([...t, ...(gaz[i].alt ?? []).flatMap(foldTokens)])) {
       let list = post.get(w);
       if (!list) {
         list = [];
@@ -334,12 +342,17 @@ export function scoreGazetteer<T extends GazEntry>(
   for (const i of candidates) {
     const e = gaz[i];
     let s = scoreName(query, idx.norm[i], idx.toks[i]);
+    for (const alt of e.alt ?? []) {
+      const n = fold(alt);
+      const candidate = scoreName(query,n,n.split(' '));
+      if (candidate != null) s = Math.max(s ?? -Infinity,candidate);
+    }
     const boost = houseBoost(e, query, idx.toks[i]);
     if (boost != null) s = Math.max(s ?? 0, boost);
     if (s == null) continue;
     // Rank first, then the distance bias: the order is part of the score's
     // arithmetic identity, and `test/regions.spec.ts` mirrors it to the ulp.
-    s += e.rank;
+    s += e.importance == null ? e.rank : Math.max(0, Math.min(1, e.importance)) * 100;
     if (near) s -= distanceBias(near, [e.lon, e.lat]);
     scored.push({ entry: e, score: s });
   }

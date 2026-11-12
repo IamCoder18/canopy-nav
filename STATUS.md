@@ -5,8 +5,8 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v1.2.1 (APK attached). The work in it — including the offline
-Valhalla engine (§17) — is recorded below, pass by pass:
+**Latest release:** v1.3.0 (APK attached). The work in it — including the offline
+Valhalla engine (§17) and the packserver program (§19) — is recorded below, pass by pass:
 
 - **§3.17–3.18** — §3.17 closes the ETA gap this document once called the most dangerous
   readout in the app. **Requirement #10 is implemented**: cross-region routing merges the
@@ -158,6 +158,7 @@ evaluated, which a pass or fail result does not tell you.
     — [what the driver sees now](#185-what-the-driver-sees-now)
     — [what this pass found wrong in itself](#186-what-this-pass-found-wrong-in-itself)
     — [what is not done](#187-what-is-not-done)
+19. [The packserver program](#19-the-packserver-program)
 
 ---
 
@@ -170,7 +171,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|---|
 | 1 | Android app using Expo **or** Capacitor — agent's choice | **Done.** Capacitor chosen (§5.1) | — |
 | 2 | Visually mimic an Android Auto screen as closely as possible | **Done.** AAOS design tokens taken from Google's published specs. App bar and grid cell are now real tokens rather than CSS literals (§3.14) | `src/theme.ts` |
-| 3 | Prefer TypeScript | **Done.** ~10,400 lines TS/TSX. Exactly one hand-written Java file on Android (`MainActivity.java`, immersive mode only) plus XML themes; everything else is TypeScript | `android/` |
+| 3 | Prefer TypeScript | **Done.** App logic is TypeScript; Android has the activity plus a bounded file-range bridge. The separate pack build service is Rust (§19) | `android/`, `server/` |
 | 4 | Other libraries allowed (e.g. Ferrostar) | Considered and rejected — Ferrostar duplicates what the built-in engine does and adds no offline win here | §5.2 |
 | 5 | Support `.osm` files | **Done.** Both formats read natively: XML via a chunked scanner, `.osm.pbf` via a protobuf reader. The PBF coordinate bug (§4.1) meant this was *not* working for real extracts until this revision | `src/osm/engine.worker.ts`, `src/osm/pbf.ts` |
 | 6 | Use Valhalla for car navigation | **Done**, twice over: as the hosted providers (row 12) and now **on the device** — the same engine over a routing pack, with real maneuvers (§17). The in-app A\* remains the fallback when no pack is installed | `src/nav/valhalla.ts`, `src/nav/valhalla-local/` |
@@ -184,7 +185,7 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1439 unit tests across 75 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1458 unit tests across 76 files, plus browser suites and the independent Rust server gate (§19) | `test/`, `tools/`, `server/tests/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 12 screens at 3 viewports (53 checks each, 159 total), plus nine compact-width checks (§14.25), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -197,9 +198,9 @@ stands. **Bold** = fully working and verified.
 | Gate | Command | Result |
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
-| Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1439 passing**, 75 files |
-| End-to-end | `npm run e2e` | **81 checks** against the built bundle |
+| Lint | `npm run lint` | **0 errors**, 13 warnings (27-warning ratchet — see §10.3) |
+| Unit tests | `npm test` | **1458 passing**, 76 files |
+| End-to-end | `npm run e2e` | **89 checks** against the built bundle, including the offline service-bundle workflow; §19 distinguishes current from historical runs |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720), plus nine compact-width checks (§14.25) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
 | Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
@@ -207,7 +208,7 @@ stands. **Bold** = fully working and verified.
 | Reflow at large text | `npm run reflow` | **12 checks, all passing** — was 3 failing at the start of §14 |
 | Text-scale detection | `npm run textscale` | **13 checks** — the large-text layout switches on for every way a platform can scale text (§14.8). Was recorded as 14 and as passing; it failed **3 of 12 runs** (§2.3) |
 | Memory gate | `npm run memory` | **8 checks** — the boxed node map measured at **116–133 B/node** against the 229 B/node budget, plus four structural properties (§15.3 item 10) |
-| Bundle budget | `npm run bundle` | entry 128.0 kB / 130, initial 136.2 / 150, largest 278.0 / 300, total JS 483.7 / 490 (gzip) |
+| Bundle budget | `npm run bundle` | entry 129.6 kB / 130, initial 137.8 / 150, largest 278.0 / 300, total JS 503.6 / 510 (gzip; §19) |
 | Offline cold start | verified in-browser | reload with the network off renders the app: 5 tiles, map sized, 0 console errors |
 | Release | v1.2.1 tag | **CI green, Release green**, APK attached |
 | APK | `npm run apk` | debug APK, `com.canopy.nav`, minSdk 23, targetSdk 35 |
@@ -277,7 +278,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **75 files, 1439 tests**. The previous
+retyped by hand. The table is the complete set: **76 files, 1458 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -288,8 +289,8 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1439 total double-counts contrast's 34 tests**: 1405 distinct test cases are
-declared across 75 files. Both figures are recorded rather than reconciled by lowering the
+that **the 1458 total double-counts contrast's 34 tests**: 1424 distinct test cases are
+declared across 76 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
 
@@ -330,6 +331,7 @@ reading it.
 | `valhalla-tilesource.spec.ts` | 10 | pack tile sources and the whole-tile cache: one source read per tile however much the search asks, LRU bounds, correctness across eviction |
 | `pack-import.spec.ts` | 8 | routing-pack import: naming ties a pack to its region, a non-pack changes nothing, persistence failure is non-fatal, removal takes the pack with it |
 | `packstore.spec.ts` | 6 | pack persistence: byte round-trip, listing without bytes, replacement, deletion, and no-IndexedDB degrading to session-only |
+| `packserver.spec.ts` | 19 | Rust/JS bundle, gazetteer, PMTiles and WASM contracts; verified ingestion, checksums, storage gate, real addresses and alts, service-only routing policy, IPv6 URL/key settings and authenticated client |
 | `merge.spec.ts` | 37 | node-ID union, direction permissions, dead-edge sweep, >2^21 node regression |
 | `download.spec.ts` | 37 | streaming, progress, abort, retry/resume, HTML-error detection, truncation, disk cache, poisoned part files |
 | `engine.spec.ts` | 35 | OSM parsing, graph construction, one-ways, A\* route quality, geometry continuity, index isolation and keying, and that `buildDataset` consumes its inputs |
@@ -400,7 +402,7 @@ Browser gates, measured the same way:
 
 | Suite | Checks | Command |
 |---|---|---|
-| `test/e2e.mjs` | 81 | `npm run e2e` |
+| `test/e2e.mjs` | 89 | `npm run e2e` |
 | `test/valhalla-wasm.e2e.mjs` | 15 | `npm run e2e:wasm` |
 | `test/screens.mjs` | 159 (53 × 3 viewports) | `npm run screens` |
 | `tools/focus.mjs` | 15 | `npm run focus` |
@@ -1794,40 +1796,40 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx 5468  screens, navigation state, focus + announcements,
+  App.tsx 5507  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            252  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
   sw.ts                   264  offline shell service worker
   errors.ts                54  describeError: a message for any thrown value
-  settings.ts             354  typed, validated, quota-safe persistence
+  settings.ts             367  typed, validated, quota-safe persistence
   theme.ts 423  AAOS design tokens (colour, type, layout, shape)
-  icons.tsx               421  29 maneuver kinds + system icons, hand-drawn SVG
+  icons.tsx               430  29 maneuver kinds + system icons, hand-drawn SVG
   geo.ts                  629  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt,
                                 + headingAlong and lookAheadMetres (camera geometry)
   styles.css 3657  layout, insets, responsive rules
 
   osm/
-    engine.worker.ts     1264  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
+    engine.worker.ts     1268  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
     pbf.ts               1007  .osm.pbf protobuf reader, whole-buffer and streaming
     engine.ts             461  worker client, format sniff, GeoJSON mirroring,
                               + buildStageStep (which pipeline phase a stage is)
-    regions.ts            474  RegionLibrary, catalogue, bbox helpers, merge cache,
+    regions.ts            498  RegionLibrary, catalogue, bbox helpers, merge cache,
                               + the routing-pack registry (pack? per region)
-    merge.ts              318  union-find merge of adjacent extracts
+    merge.ts              319  union-find merge of adjacent extracts
     mergeguard.ts         201  can a merge be afforded here? three outcomes
-    importguard.ts        351  can a parse be afforded here? three outcomes (§15.2)
+    importguard.ts        352  can a parse be afforded here? three outcomes (§15.2)
     tags.ts                36  shared node-tag filter
 
   search/              the search engine: one matcher for every source (§18).
                        text + results render and stay in the entry bundle;
                        fuzzy + gaz + merge + all load on the first search
     search/text.ts      104  fold, abbreviation equivalence classes
-    search/results.ts   138  the result row: types, cross-source merge, dedupe,
+    search/results.ts   143  the result row: types, cross-source merge, dedupe,
                               + highlight ranges (word-boundary, abbrev-aware)
     search/fuzzy.ts      57  tolerance policy and bounded OSA edit distance
-    search/gaz.ts       389  the token index + tiered ranking + house numbers,
+    search/gaz.ts       402  the token index + tiered ranking + house numbers,
                               + suggestName ("did you mean") for the zero-result path
     search/merge.ts     61  online and saved hits scored on the shared scale
     search/all.ts       48  the one matcher, looped over every region
@@ -1838,22 +1840,22 @@ src/
                                 offline engine (one route shape, one set of sentences)
     valhalla-local/         the offline Valhalla engine: WASM over routing packs (§17)
       runtime.ts           308  mounts packs as lazy tiles, runs tyr::actor, offline failure sentences
-      client.ts            197  worker and in-process transports behind one interface
+      client.ts            199  worker and in-process transports behind one interface
       tilesource.ts        134  pack sources + the whole-tile cache (the 5.3 s -> 206 ms fix)
       config.ts            103  the engine's runtime config, adapted from ecc521/valhalla-wasm
       tar.ts                93  pack tar indexing (MIT-adapted, attributed)
-      worker.ts             79  classic worker host: importScripts the UMD build, protocol glue
+      worker.ts             106  classic worker host: importScripts the UMD build, protocol glue
       node.ts               39  Node host for the same UMD build (the test suite's loader)
-      index.ts              37  the app-wide engine singleton
+      index.ts              40  the app-wide engine singleton
       protocol.ts           20  mount/route/dispose messages
     reroute.ts            415  reroute policy: when to act, backoff, banner,
                                         and why a refusal keeps saying why (§14.10)
-    providers.ts 554  provider chain, attempt trace, connectivity,
+    providers.ts 559  provider chain, attempt trace, connectivity,
                               + the two offline sources as separate providers (§17.7)
     requests.ts           107  RequestGate: one live route request at a time
     chrome.ts             121  the bottom sheet's measured height, as --nav-h
     steps.ts               66  why the turn list is empty: three causes, three answers
-    engines.ts 293  engine selection, readiness, provenance,
+    engines.ts 295  engine selection, readiness, provenance,
                               + per-source readiness (pack vs map) and the
                                 turn-by-turn capability on the provider table
     geocode.ts            277  Nominatim client, 1 req/s throttle, cancellable (§18.4)
@@ -1867,29 +1869,29 @@ src/
                                 unavailable when the engine is gone (§16)
 
   map/
-    MapView.tsx 643  MapLibre view, follow/fit/flat camera, tile/offline style switch
+    MapView.tsx 653  MapLibre view, follow/fit/flat camera, tile/offline style switch
     overlays.ts 301  overlay sources: change-detecting setData, basemap LRU
-    style.ts 659  Google palette, tile remap, offline LOD style
+    style.ts 672  Google palette, tile remap, offline LOD style
 
   regions/
     download.ts          1493  streaming downloader, resume, part-file handling
-    RegionsScreen.tsx    1286  manage, catalogue, cross-region route test, pack import
-    persist.ts            655  IndexedDB caching of parsed datasets
-    packstore.ts          145  routing-pack persistence (its own database, its own failure policy)
-    store.ts              579  RegionLibrary singleton, per-region workers, memory gate,
+    RegionsScreen.tsx    1303  manage, catalogue, cross-region route test, pack import
+    persist.ts            658  IndexedDB caching of parsed datasets
+    packstore.ts          155  routing-pack persistence (its own database, its own failure policy)
+    store.ts              594  RegionLibrary singleton, per-region workers, memory gate,
                               + pack import/restore and the engine mount lifecycle
 
-test/            1439 unit tests, 75 files
-test/e2e.mjs           81 browser checks, built bundle
+test/            1458 unit tests, 76 files
+test/e2e.mjs           89 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total), + nine compact-width checks
 tools/osm2pbf.mjs        362 XML -> PBF encoder (builds the test fixtures;
                              extract slicing is done by osmium on a desktop),
                              + the type-sorted encoder Valhalla's tile builder needs
-tools/build-pack.mjs     130  extract -> Valhalla routing pack (.tar of .gph tiles),
+tools/build-pack.mjs     132  extract -> Valhalla routing pack (.tar of .gph tiles),
                              the supply chain's smallest instance (§17)
 tools/serve.mjs         306 LAN static server for on-device manual testing
 tools/offline-smoke.mjs 253 device smoke: install the APK, go offline, import a fixture through the WebView DevTools socket, and scan logcat
-tools/bundle-budget.mjs 199 gzip size budget per role (entry, map vendor, engine, totals); fails on regression
+tools/bundle-budget.mjs 203 gzip size budget per role (entry, map vendor, engine, totals); fails on regression
 tools/verify.mjs 133 every gate in one command: local and CI run this same list
 tools/reflow.mjs        382 chrome overlap at 100/175/200% text (§13.8) — a
                              diagnostic, still not a gate: it needs a
@@ -1899,7 +1901,7 @@ tools/textscale-check.mjs 423 does the app notice a text scale that leaves
                              the root font size alone (§14.8) — a gate;
                              was 3-in-12 flaky (§2.3)
 tools/focus.mjs         297 15 keyboard/focus checks in a real browser (§11)
-tools/shots.mjs         202 screenshot every screen + computed styles (§11)
+tools/shots.mjs         203 screenshot every screen + computed styles (§11)
 tools/sw-shellcheck.mjs  99 offline boot after a captive portal (§13.3) — a gate
 tools/status-audit.mjs   471 STATUS.md checked against the files it describes
 tools/diag-route.mjs     55 throwaway used to read a failing e2e check (§3.19)
@@ -2415,8 +2417,8 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1439 unit tests
-npm run e2e          # 81 browser checks against the built bundle
+npm test             # 1458 unit tests
+npm run e2e          # 89 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
 npm run sync         # build, clear android assets, cap sync
@@ -6345,6 +6347,133 @@ still a defect worth naming:
 - Online hits that matched Nominatim on non-name fields rank at the floor; a richer
   online score (using `addresstype` and address detail) would order them among themselves
   better than importance alone.
+
+## 19. The packserver program
+
+Implemented 2026-11-12 from `research/packserver-plan.md`, stages 1–3. Stage 1
+is independently usable; the service and consumer wiring are now present too,
+not "stage 2/3 pending". Deployment instructions are in `server/README.md`.
+
+### 19.1 Decisions and the deprecation boundary
+
+- **D1–D2:** Rust, a separate Cargo crate/lockfile and non-root multi-stage
+  Docker image; stateless multi-input builds, not stateful regional projects.
+- **D3–D4:** API keys, CLI-only administration. Header authentication precedes
+  all body polling, including `100 Continue`; length and streaming caps,
+  per-key concurrency/hour limits and `Retry-After`. Caddy is the public edge.
+- **D5:** deterministic tar.gz transport, streamed on demand; unpack once,
+  verify manifest/artifact SHA-256, keep routing and PMTiles random-readable.
+- **D6–D7:** Photon-shaped real entries, admin polygon containment with a
+  spatial index, merged street fragments, continuous importance, multilingual
+  variants and string house numbers. **No synthetic house-number sampler and
+  no default cap in service artifacts.** Legacy raw datasets retain their old
+  builder; no fictional sampling is added to the service plan.
+- **D8:** MVT roads/water/green in PMTiles v3, zoom filtering, simplification,
+  clipping, polygon area rejection, gzip, Hilbert ids, content dedup and leaf
+  directories. MapLibre GL JS stays; `src/map/PORTABILITY.md` records the native
+  renderer seam. GeoJSON overlays and style-spec v8 remain portable.
+- **D9:** Valhalla WASM is the only offline service-region engine. These
+  regions contain **no RoadGraph**. A* is labelled **Offline (.osm) — deprecated**,
+  and graph merging is raw-import-only, never a fallback for pack-backed
+  endpoints. Independently built service regions refuse a border union and
+  prefer hosted routing; adjacent inputs should be submitted together.
+- **D10:** file-only, sorted deterministic ustar routing packs, unchanged tile
+  content. `tools/build-pack.mjs` now explicitly requests ustar/0644 rather
+  than relying on the host tar's default dialect. Rust matches GNU's checksum
+  spelling and record padding byte-for-byte; existing GNU/PAX packs still load.
+
+The A* admissibility, heap and merge tests stay as the regression net for raw
+imports. Guidance inference remains exclusive to `engine === 'osm-local'`;
+pack routes use real odin maneuvers. The fixture parity check is retained, not
+replaced by a mock route.
+
+### 19.2 Service and app surfaces
+
+`server/` implements authenticated submit/status/artifact/bundle endpoints,
+seven-stage jobs behind a semaphore, automatic osmium sorting with actionable
+failure details, bounded child lifetime, hashing, deterministic archives,
+key lifecycle CLI, jobs list/prune, doctor and TTL sweeping. File leases keep
+CLI pruning/sweeping from deleting a running build or download. Restart drops
+the registry; diagnostic job snapshots do not restore jobs.
+
+**Hosting is direct public IPv6 through Caddy, not Cloudflare Tunnels.** DNS-only
+AAAA points at the host, public TLS terminates in Caddy, and Docker exposes
+8787 only on IPv6 loopback. No tunnel agent/token exists. The app requires the
+user to provide **server address + API key** in Settings → Pack service;
+credentials remain device-local and redirects cannot forward the key elsewhere.
+Public service URLs require HTTPS; HTTP is allowed only on loopback for tests.
+
+The service is an artifact source, not a routing provider. Its client submits,
+polls with cancellation/backoff and checks disk before downloading. Users can
+submit with curl and retrieve a build by id in the app; no PBF upload UI is
+added. Both import pickers accept bundles before either raw-import guard runs.
+Search gzip persists compressed; maps use OPFS or Android app-private files
+with bounded range reads and a whole-tile cache. Pack metadata now has a small
+separate IDB store so listing does not clone every routing archive.
+
+Suggestions show a type icon, available region/admin context and distance;
+"Search near me / Near map" selects the bias point. Variant names share the
+matcher's index. Stable service OSM identities keep different same-named
+places from collapsing into one label. Raw search score constants remain
+compatible with the region ranking tests.
+
+### 19.3 Verification and honest remaining measurements
+
+Current implementation checks:
+
+- Final app gate: `npm run verify` — **11/11 gates passed** in 15.3 minutes:
+  typecheck/lint, all unit tests, production build, bundle budgets, fixture
+  reproducibility, both e2e formats (89 checks each), three-viewport screens,
+  reflow, text scaling and zero UI-audit findings. Per-file unit totals were
+  also checked against the final Vitest JSON report by the status audit.
+- Rust: `cd server && cargo test --locked` — 14 passing, one intentionally
+  ignored real-binary test. Includes panic-on-body-poll auth tests, actual TCP
+  `Expect` rejection, streaming cap, rate/revocation/lease checks, sort fallback,
+  stub pipeline, admin holes, missing-reference geometry, JSON rejections,
+  tar determinism, MVT commands, PMTiles leaf/dedup checks and
+  bundle round-trip. This is separate from the app-only npm gate.
+- Docker: clean multi-stage image built and its real pinned Valhalla 3.9.1
+  pipeline completed `server/smoke.mjs` over IPv6 loopback. The shipped Caddyfile
+  passed `server/edge-smoke.mjs`, including headers-first refusals and a forced
+  proxy-error log that redacts the API key. Its real native-built bundle was
+  ingested by the app and routed by the browser WASM worker: **5,988 m and three
+  real maneuvers**. The server has its own CI workflow, separate from npm verify.
+- JS contracts: real Rust-generated fixture files read by npm `pmtiles`, the
+  streaming gazetteer loader, tar parser and actual WASM engine, including real
+  maneuvers. `node tools/build-bundle-fixture.mjs` reproduces them. The fixture
+  normalises duplicate legacy way ids and omits far-away isolated place nodes;
+  otherwise union deduplication/bbox centring would hide its test road grid.
+- Browser bundle workflow: file-picker import → stored MVT roads actually
+  rendered → exact address/admin context → typo → map bias → offline Valhalla
+  route → reload/restore, with external requests blocked. Shared by `test/e2e.mjs`.
+- Android file-range bridge compiles with `:app:compileDebugJavaWithJavac`.
+- Initial JS remains below 130 kB gzip and MapLibre below its unchanged 290 kB
+  budget. The **total** deferred-JS budget moves from 490 to 510 kB for the
+  measured PMTiles reader, verified bundle loader and service client/settings;
+  it is not an increase to the initial-load or renderer-vendor budgets. The
+  app singleton now ships only the worker host, not a second in-process host.
+
+Verification caught three integration defects, rather than assuming old gates
+still worked: pack removal now tolerates synchronous adapters and reports
+unmount failures; browser engine navigation targets its actual button rather
+than the first Settings card; and the verify orchestrator passes its serving
+URL to reflow (which otherwise tried an unrelated, absent port 8080).
+
+The public-edge test also caught **stock Caddy sending `100 Continue` before a
+backend 401**. The shipped config now uses a bodyless `forward_auth` preflight
+for private requests. Its authenticated `/v1/auth-check` only verifies and checks
+declared length; it exposes no key metadata or admin capability. POST still
+rechecks authentication and all limits. Global Caddy logging redacts both key
+headers because proxy errors can log headers even with access logging off.
+
+Still **unmeasured, not claimed complete**: public DNS/ACME/firewall deployment
+on the owner's IPv6 host; province-scale artifact size/RSS and search-index
+latency on target hardware; phone WASM + MapLibre peak memory and native range
+read latency; and a real-query importance comparison corpus. The implementation
+is present, but a tiny fixture is not evidence for these resource envelopes.
+The service keeps the plan's upload cap and conservative build concurrency;
+importance remains an approximation without Wikipedia weights. MapLibre Native,
+planet uploads and stateful regional projects remain out of scope.
 
 ## Attribution
 

@@ -21,6 +21,7 @@ import { NO_FIX_POSITION } from '../nav/location';
 import { buildStyle, navOverlays, offlineStyleSpec, NIGHT } from './style';
 import { applyOverlays, type TrafficOverlay } from './overlays';
 import type { OsmDataset } from '../osm/engine.worker';
+import { attachStoredMap } from './pmtiles';
 
 export interface MapViewProps {
   dataset: OsmDataset | null;
@@ -99,6 +100,7 @@ export interface MapViewProps {
    * a compass that always draws north-up lies the moment the driver rotates.
    */
   onBearing?: (deg: number) => void;
+  onCenter?: (point: LatLng) => void;
   className?: string;
   /**
    * Called when the basemap's actual source changes.
@@ -127,6 +129,7 @@ export function MapView(props: MapViewProps) {
   const map = useRef<MLMap | null>(null);
   const ready = useRef(false);
   const styleMode = useRef<'tiles' | 'offline'>('tiles');
+  const styleArchive = useRef<string | undefined>(undefined);
   /** Bumped when the map becomes usable or the zoom changes, to re-aim follow. */
   const [zoomTick, setZoomTick] = useState(0);
   const [readyTick, setReadyTick] = useState(0);
@@ -167,6 +170,8 @@ export function MapView(props: MapViewProps) {
   /** Live bearing reporter, same ref treatment as the tap handlers. */
   const bearingRef = useRef(props.onBearing);
   bearingRef.current = props.onBearing;
+  const centerRef = useRef(props.onCenter);
+  centerRef.current = props.onCenter;
   /** Camera-takeover reporter, same ref treatment as the tap handlers. */
   const userCameraRef = useRef(props.onUserCamera);
   userCameraRef.current = props.onUserCamera;
@@ -249,6 +254,9 @@ export function MapView(props: MapViewProps) {
     // throttle on top of MapLibre's own coalescing.
     const onRotate = () => bearingRef.current?.(m.getBearing());
     m.on('rotate', onRotate);
+    // Camera reporting belongs to this adapter; native SDKs expose the same
+    // centre callback. No projection or renderer object escapes into search.
+    m.on('moveend', () => { const p = m.getCenter(); centerRef.current?.([p.lng,p.lat]); });
 
     // The offline basemap's detail level is a function of zoom (`roadsToGeoJSON`
     // is called with the zoom to decide which roads are worth sending), but
@@ -294,7 +302,7 @@ export function MapView(props: MapViewProps) {
     if (!m) return;
     // Tiles only help when there is a network; offline always uses .osm geometry.
     const want: 'tiles' | 'offline' = props.useTiles ? 'tiles' : 'offline';
-    if (styleMode.current === want && ready.current) return;
+    if (styleMode.current === want && styleArchive.current === props.dataset?.basemap && ready.current) return;
 
     // Captured now, not after the await. The map instance is created once by the
     // effect above, and that effect's cleanup nulls `map.current` before this
@@ -307,6 +315,7 @@ export function MapView(props: MapViewProps) {
     /** Removers for the `once` handlers this effect has attached so far. */
     const listeners: Array<() => void> = [];
     const boot = async () => {
+      const offline = () => offlineStyle(props.dataset?.basemap ? attachStoredMap(props.dataset.basemap, maplibregl.addProtocol) : undefined);
       let style: StyleSpecification;
       let mode: 'tiles' | 'offline' = want;
       if (want === 'tiles') {
@@ -314,11 +323,11 @@ export function MapView(props: MapViewProps) {
           style = await buildStyle();
         } catch (err) {
           console.warn('Tile style unavailable, using offline style', err);
-          style = offlineStyle();
+          style = offline();
           mode = 'offline';
         }
       } else {
-        style = offlineStyle();
+        style = offline();
       }
       // `buildStyle()` is a network round-trip. If the user loses connectivity
       // and regains it while it is in flight, or toggles the mode twice, two
@@ -330,6 +339,7 @@ export function MapView(props: MapViewProps) {
       // announce a source the map never adopted.
       onBasemapRef.current?.(mode);
       styleMode.current = mode;
+      styleArchive.current = props.dataset?.basemap;
       ready.current = false;
       current.setStyle(style);
       const onReady = () => {
@@ -359,7 +369,7 @@ export function MapView(props: MapViewProps) {
     // The suppressions this effect used to need are gone: `onReady` now reads
     // `overlayProps.current` rather than closing over `props`, so the only prop
     // this effect depends on is the one it is keyed on.
-  }, [props.useTiles]);
+  }, [props.useTiles, props.dataset?.basemap]);
 
   /* --------------------------- overlays ------------------------------ */
   useEffect(() => {
@@ -629,7 +639,7 @@ function fitPoints(m: MLMap, pts: LatLng[], padding = 72) {
 }
 
 /** Style used with no network: the night palette over our own .osm geometry. */
-function offlineStyle(): StyleSpecification {
+function offlineStyle(pmtilesUrl?: string): StyleSpecification {
   // The shared navigation set, not a copy of it: the offline road layers
   // (`canopy-osm-casing` / `-minor` / `-roads`) are owned by `offlineStyleSpec`
   // because they need a zoom ramp that starts well below 10, and a second
@@ -637,7 +647,7 @@ function offlineStyle(): StyleSpecification {
   // layer id, which MapLibre rejects outright. `navOverlays()` is exactly the
   // overlay set without those layers — which is what the hand-written copy
   // here was trying, and starting, to be.
-  return offlineStyleSpec(navOverlays());
+  return offlineStyleSpec(navOverlays(), pmtilesUrl);
 }
 
 export default MapView;

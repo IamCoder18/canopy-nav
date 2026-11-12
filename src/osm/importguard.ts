@@ -263,7 +263,8 @@ function refusal(bytes: number, memory: MemoryBudget): string {
     'Cut the extract down to the area you actually drive: with `osmium` on a desktop,\n' +
     '  osmium extract -b <west,south,east,north> province-latest.osm.pbf -o area.osm.pbf\n' +
     'A few hundred square kilometres is a few MB, imports in seconds, and routes ' +
-    'offline exactly the same. Most drivers only need one metro area at a time.'
+    'offline exactly the same. Most drivers only need one metro area at a time. ' +
+    'Alternatively, build the full extract with your pack service and import its .tar.gz bundle without parsing OSM on this device.'
   );
 }
 

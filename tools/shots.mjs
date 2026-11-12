@@ -186,7 +186,7 @@ for (const vpName of vpNames) {
     await gear.click();
     await page.waitForTimeout(700);
     await shot('08-settings', ['.seg', '.app-bar']);
-    const hint = await page.$('.hint-card');
+    const hint = await page.$('button.settings-row');
     if (hint) { await hint.click(); await page.waitForTimeout(700); await shot('09-engines', ['.provider-row']); }
   }
   const regionsLink = await page.$('button[aria-label="Regions"]') ?? await page.$('text=Regions');

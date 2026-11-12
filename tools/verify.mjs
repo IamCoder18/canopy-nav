@@ -60,7 +60,7 @@ const GATES = [
   { label: 'e2e (.osm)', cmd: 'node', args: ['test/e2e.mjs'] },
   { label: 'e2e (.osm.pbf)', cmd: 'node', args: ['test/e2e.mjs'], env: { E2E_FIXTURE: 'fixture.osm.pbf' } },
   { label: 'screens (3 viewports)', cmd: 'node', args: ['test/screens.mjs'] },
-  { label: 'reflow (100-200% text)', cmd: 'node', args: ['tools/reflow.mjs'] },
+  { label: 'reflow (100-200% text)', cmd: 'node', args: ['tools/reflow.mjs'], env: { REFLOW_BASE: BASE } },
   { label: 'textscale', cmd: 'node', args: ['tools/textscale-check.mjs'] },
   { label: 'ui audit', cmd: 'node', args: ['tools/ui-audit.mjs'], env: { PROBE_BASE: BASE } },
 ];

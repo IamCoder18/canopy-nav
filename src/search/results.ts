@@ -23,6 +23,10 @@ import { foldTokens, tokenForms } from './text';
 export type HitSource = 'offline' | 'online' | 'saved';
 
 export interface RankedHit {
+  /** Stable OSM identity for real service entries; don't collapse every
+   * same-named city/POI into one global label. Raw way dedupe stays legacy. */
+  identity?: string;
+  typeIcon?: 'city' | 'street' | 'address' | 'poi' | 'area' | 'water';
   label: string;
   sub: string;
   pos: LatLng;
@@ -67,7 +71,8 @@ export function mergeHits(...groups: RankedHit[][]): RankedHit[] {
   const byKey = new Set<string>();
   for (const h of all) {
     const key = labelKey(h.label);
-    if (byKey.has(key)) continue;
+    const identity = `${key}\0${h.identity ?? ''}`;
+    if (byKey.has(identity)) continue;
     let shadowed = false;
     for (const k of kept) {
       if (k.source === h.source) continue;
@@ -79,7 +84,7 @@ export function mergeHits(...groups: RankedHit[][]): RankedHit[] {
       }
     }
     if (shadowed) continue;
-    byKey.add(key);
+    byKey.add(identity);
     kept.push(h);
   }
   return kept;

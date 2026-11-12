@@ -53,3 +53,6 @@ test/*.pbf
 
 # UI audit output (tools/ui-audit.mjs)
 probe-shots/
+
+# Release APK staging (built locally or in CI, attached to a GitHub Release)
+dist-artifacts/

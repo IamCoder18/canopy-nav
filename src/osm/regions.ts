@@ -35,10 +35,15 @@ export interface RegionMeta {
    * a region whose pack is gone is worse than none.
    */
   pack?: PackInfo;
+  /** Service provenance, used to refuse cross-build border unions. */
+  buildId?: string;
+  inputHashes?: string[];
 }
 
 /** What a region knows about its routing pack. Kept in `packstore`, shown here. */
 export interface PackInfo {
+  buildId?: string;
+  inputHashes?: string[];
   /** Pack size on disk. */
   bytes: number;
   /** `.gph` tiles in the pack. */
@@ -232,6 +237,8 @@ export class RegionLibrary {
 
   add(meta: RegionMeta, dataset: OsmDataset): Region {
     const region: Region = { ...meta, dataset };
+    const pack = this.packInfo.get(meta.id);
+    if (pack) region.pack = pack;
     this.regions.set(meta.id, region);
     // A merge holds a copy of the old graph's nodes and edges; replacing a
     // region invalidates every merge that included it.
@@ -282,6 +289,21 @@ export class RegionLibrary {
   }
 
   get(id: string) { return this.regions.get(id); }
+
+  packsCover(from: LatLng, to: LatLng): boolean {
+    return [this.bestFor(from),this.bestFor(to)].some((r) => !!r && (!!r.pack || !!r.buildId));
+  }
+
+  /** Independently built border tiles may have dangling references. Prefer
+   * hosted routing across them; never silently try a legacy graph instead. */
+  packWarning(from: LatLng, to: LatLng): string | undefined {
+    const a = this.bestFor(from), b = this.bestFor(to);
+    if (!a || !b || a.id === b.id) return undefined;
+    if (a.buildId || b.buildId) {
+      if (!a.buildId || a.buildId !== b.buildId) return 'These regions came from separate builds. Build adjacent inputs together or use hosted routing.';
+    }
+    return undefined;
+  }
 
   /** Which loaded regions could contain this point? */
   regionsFor(p: LatLng): Region[] {
@@ -377,6 +399,7 @@ export class RegionLibrary {
 
   /** Route within one region. */
   routeIn(region: Region, from: LatLng, to: LatLng): RouteResult | null {
+    if (region.pack || !region.dataset.graph) return null;
     return routeOnGraph(region.dataset.graph, from, to);
   }
 
@@ -389,13 +412,14 @@ export class RegionLibrary {
    * graph spanning all of them.
    */
   private merged(parts: Region[]): { report: MergeReport } | { refusal: string } {
+    if (parts.some((r) => r.pack || !r.dataset.graph)) return { refusal: 'Pack-backed regions use the Valhalla pack union, never a merged legacy graph.' };
     // Keyed on the sorted ids, so the same pair merges once regardless of the
     // order `plan()` happened to hand them over in.
     const key = parts.map((r) => r.id).sort().join(' ');
     const hit = this.merges.get(key);
     if (hit) return { report: hit };
 
-    const verdict = canMerge(parts.map((p) => p.dataset.graph));
+    const verdict = canMerge(parts.map((p) => p.dataset.graph!));
     if (!verdict.ok) return { refusal: verdict.reason };
 
     const report = mergeRegions(parts);
