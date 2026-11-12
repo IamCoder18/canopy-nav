@@ -15,13 +15,14 @@
  *   osmium cat region.osm.pbf -o region.osm
  */
 
-import type { LatLng } from '../geo';
+import { haversineM, type LatLng } from '../geo';
+import type { GazEntry } from '../search/gaz';
 
 /* ----------------------------- types ----------------------------- */
 
 export interface OsmNodeRec { id: number; lat: number; lon: number; tags: Record<string, string> }
 
-export interface RawNode { id: number; lat: number; lon: number }
+export interface RawNode { id: number; lat: number; lon: number; }
 export interface RawWay { id: number; refs: number[]; tags: Record<string, string> }
 
 /** Compact in-memory graph, built once and shared by all queries. */
@@ -53,18 +54,16 @@ export interface RoadGraph {
 export const FLAG_ONEWAY_F = 1; // may travel source -> target
 export const FLAG_ONEWAY_B = 2; // may travel target -> source
 
-export interface GazEntry {
-  name: string;
-  lat: number;
-  lon: number;
-  cat: string;
-  rank: number;
-  /** street name this housenumber belongs to (house-number interpolation) */
-  street?: string;
-  house?: number;
-  streetLat?: number;
-  streetLon?: number;
-}
+/**
+ * A searchable name from the extract.
+ *
+ * The type lives in `src/search/gaz.ts` now — it is the search engine's input
+ * type — and is re-exported here because this is where it is *built*. The
+ * search engine itself moved there with it: `searchGazetteer` used to be a
+ * linear scan defined below, and the multi-region search in `osm/regions.ts`
+ * was a second, subtly different copy of it.
+ */
+export type { GazEntry } from '../search/gaz';
 
 export interface RenderLine { class: string; pts: LatLng[] }
 export interface RenderPoly { class: string; rings: LatLng[][] }
@@ -375,16 +374,6 @@ const PLACE_CATS: Record<string, string> = {
 
 
 /* ------------------------- graph construction ---------------------- */
-
-function haversineM(lon1: number, lat1: number, lon2: number, lat2: number): number {
-  const R = 6371008.8;
-  const toRad = Math.PI / 180;
-  const dLat = (lat2 - lat1) * toRad;
-  const dLon = (lon2 - lon1) * toRad;
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
-}
 
 /** Douglas-Peucker, keeps render geometry light while preserving shape. */
 function simplifyLine(pts: LatLng[], tolM: number): LatLng[] {
@@ -1129,44 +1118,12 @@ export function routeOnGraph(g: RoadGraph, from: LatLng, to: LatLng): RouteResul
 /* ------------------------------- search ---------------------------- */
 
 /**
- * Prefix + substring search over the gazetteer, ranked by category
- * importance then by name-prefix quality. Purely in-memory.
+ * The matcher and its ranking live in `src/search/gaz.ts` now — one matcher
+ * shared with the multi-region search, with typo tolerance and a token index.
+ * Kept as a named export here because this is where callers have always found
+ * it, and because this module is where the dataset that feeds it is built.
  */
-export function searchGazetteer(
-  gaz: GazEntry[],
-  q: string,
-  near?: LatLng,
-  limit = 12,
-): GazEntry[] {
-  const needle = q.trim().toLowerCase();
-  if (!needle) return [];
-  const scored: { e: GazEntry; s: number }[] = [];
-
-  for (const e of gaz) {
-    const name = e.name.toLowerCase();
-    let s = -1;
-    if (name === needle) s = 1000;
-    else if (name.startsWith(needle)) s = 800 - (name.length - needle.length);
-    else if (name.includes(needle)) s = 500 - (name.length - needle.length);
-    else {
-      // "123 main" should also match the street "main st"
-      const head = needle.replace(/^\d+\s+/, '');
-      if (head && name.startsWith(head)) s = 380;
-    }
-    if (s < 0) continue;
-
-    let total = s + e.rank;
-    if (near) {
-      const d = haversineM(near[0], near[1], e.lon, e.lat);
-      total -= Math.min(120, d / 500); // gentle distance bias
-    }
-    scored.push({ e, s: total });
-    if (scored.length > 4000) break;
-  }
-
-  scored.sort((a, b) => b.s - a.s);
-  return scored.slice(0, limit).map((x) => x.e);
-}
+export { searchGazetteer } from '../search/gaz';
 
 /* --------------------------- worker plumbing ----------------------- */
 

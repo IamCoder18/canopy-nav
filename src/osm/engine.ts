@@ -6,8 +6,8 @@
  */
 
 import type { LatLng } from '../geo';
-import type { OsmDataset, GazEntry, RouteResult } from './engine.worker';
-import { searchGazetteer, RENDER_MIN_ZOOM } from './engine.worker';
+import type { OsmDataset, RouteResult } from './engine.worker';
+import { RENDER_MIN_ZOOM } from './engine.worker';
 import type { PbfCrop } from './pbf';
 
 type Handler = (ev: MessageEvent) => void;
@@ -352,10 +352,10 @@ export class OsmEngine {
     return routeSync(this.dataset, from, to);
   }
 
-  search(q: string, near?: LatLng, limit = 12): GazEntry[] {
-    if (!this.dataset) return [];
-    return searchGazetteer(this.dataset.gaz, q, near, limit);
-  }
+  // `search()` used to wrap `searchGazetteer` here and had no callers. It is
+  // gone rather than kept as surface: the search engine loads on demand (see
+  // `src/search/`), and a wrapper that statically imported it would quietly
+  // put it back in the entry bundle.
 
   dispose() {
     // Terminating an already-terminated worker is harmless; calling it on one

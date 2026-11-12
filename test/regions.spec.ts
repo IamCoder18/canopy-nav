@@ -17,11 +17,12 @@ import {
   bboxContains,
   bboxOverlapFrac,
   boundaryPoint,
-  searchAll,
   type CatalogEntry,
   type Region,
 } from '../src/osm/regions';
+import { searchAll } from '../src/search/all';
 import { parseOsmXml, buildDataset, type GazEntry, type OsmDataset, type RoadGraph } from '../src/osm/engine.worker';
+import { haversineM } from '../src/geo';
 
 const EMPTY_GRAPH: RoadGraph = {
   coords: new Float64Array(0),
@@ -711,12 +712,14 @@ describe('searchAll', () => {
         gaz('Banff', 100, 0.6), // exact, 79 km   => 1100 - 120 (capped)
       ]),
     );
-    const mPerDegLon = 111320 * Math.cos((NEAR[1] * Math.PI) / 180);
-    // mirror the module's planar distance exactly (offsets applied to the
-    // stored lat/lon before subtracting, so the float rounding matches)
-    const dist = (off: number) =>
-      Math.hypot((NEAR[1] + off - NEAR[1]) * 111320, (NEAR[0] + off - NEAR[0]) * mPerDegLon);
-    expect(dist(0.05)).toBeCloseTo(6575, 0);
+    // Mirror the module's distance exactly — the same `haversineM` that
+    // `src/search/gaz.ts` now imports from `src/geo.ts`, with the offsets
+    // applied to the stored lat/lon before the call so the float arithmetic
+    // matches to the ulp. (This used to mirror a *planar* approximation that
+    // the search ranked with; the search now uses the same great-circle
+    // distance as routing, and this mirror followed.)
+    const dist = (off: number) => haversineM(NEAR[0], NEAR[1], NEAR[0] + off, NEAR[1] + off);
+    expect(dist(0.05)).toBeCloseTo(6566, 0);
     expect(dist(0.05) / 500).toBeCloseTo(13.15, 1);
     expect(dist(0.6) / 500).toBeGreaterThan(120); // the cap bites past 60 km
 
@@ -751,9 +754,9 @@ describe('searchAll', () => {
     const hits = searchAll(lib, 'calgary', NEAR, 10);
     expect(hits[0].entry.lat).toBeCloseTo(NEAR[1] + 0.01, 9);
     expect(hits[0].score).toBeGreaterThan(hits[1].score);
-    // penalty is the planar distance in metres / 500, both axes included
-    const mPerDegLon = 111320 * Math.cos((NEAR[1] * Math.PI) / 180);
-    const dist = (off: number) => Math.hypot(off * 111320, off * mPerDegLon);
+    // penalty is the great-circle distance in metres / 500 (see the mirror in
+    // the scoring test above)
+    const dist = (off: number) => haversineM(NEAR[0], NEAR[1], NEAR[0] + off, NEAR[1] + off);
     expect(hits[0].score - hits[1].score).toBeCloseTo((dist(0.05) - dist(0.01)) / 500, 9);
     expect(hits[0].score).toBeCloseTo(1090 - dist(0.01) / 500, 9);
   });
@@ -803,5 +806,46 @@ describe('searchAll', () => {
     const hits = searchAll(lib, 'calgary', NEAR, 10);
     expect(hits.map((h) => h.entry.name)).toEqual(['Calgary Road', 'Calgary Trail']);
     expect(hits.map((h) => h.score)).toEqual([800 - (12 - 7) + 100, 800 - (13 - 7) + 100]);
+  });
+
+  it('matches house-number queries the way single-region search does', () => {
+    // The multi-region matcher was a second copy of the single-region one with
+    // the "123 main" branch missing, so an address query worked with one region
+    // loaded and silently degraded with two. Both go through one matcher now.
+    const lib = libWith(
+      stubRegion('ab', [-1, -1, 1, 1], [
+        gaz('Main Street', 30),
+        {
+          name: 'Main Street 123', lat: NEAR[1], lon: NEAR[0],
+          cat: 'address', rank: 40, street: 'Main Street', house: 123,
+        },
+      ]),
+    );
+    const hits = searchAll(lib, '123 main', NEAR, 10);
+    // the address itself outranks the bare street, and the street is still there
+    expect(hits[0].entry.name).toBe('Main Street 123');
+    expect(hits.map((h) => h.entry.name)).toContain('Main Street');
+  });
+
+  it('ranks a hit across the continent below one down the street', () => {
+    // The distance bias has two terms (see `distanceBias` in `src/geo.ts`): the
+    // gentle local one the scoring test mirrors, and a locality term past
+    // 200 km. Without the second, an exact name match on the other side of the
+    // continent — "Elbow, Howard County, Texas", 7,503 km, with Nominatim
+    // importance behind it — outranked "Elbow St" at 340 m, and the e2e
+    // harness tapped Texas and failed every gate downstream (§18.6).
+    const lib = libWith(
+      stubRegion('ab', [-1, -1, 1, 1], [
+        gaz('Banff', 100), // exact, here
+        gaz('Banff', 100, 5), // exact, ~650 km away
+      ]),
+    );
+    const hits = searchAll(lib, 'banff', NEAR, 10);
+    expect(hits[0].entry.lat).toBeCloseTo(NEAR[1], 9);
+    // mirror both terms of the bias exactly (same haversine, same arithmetic)
+    const d = haversineM(NEAR[0], NEAR[1], NEAR[0] + 5, NEAR[1] + 5);
+    const bias = Math.min(120, d / 500) + Math.min(350, Math.max(0, d - 200_000) / 3000);
+    expect(bias).toBeGreaterThan(200); // well past the gentle term's cap
+    expect(hits[1].score).toBeCloseTo(1100 - bias, 9);
   });
 });

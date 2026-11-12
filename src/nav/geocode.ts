@@ -84,21 +84,42 @@ function headers(): HeadersInit {
 export const GEOCODE_TIMEOUT_MS = 12_000;
 
 /**
- * A `fetch` that gives up.
+ * A `fetch` that gives up — or is given up on.
  *
  * On timeout it throws a message that says so, rather than the generic
  * "connection failed" — the two need different responses from the user: one is
  * worth retrying, the other usually is not.
+ *
+ * The caller's `signal` is merged with the timeout rather than passed through,
+ * because the timeout is owned here: a superseded search aborts cleanly with
+ * its own `AbortError` (which callers recognise as "not an error"), while a
+ * dead server still produces the honest deadline message.
  */
-async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  signal?: AbortSignal,
+): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),
     GEOCODE_TIMEOUT_MS,
   );
+  const callerAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', callerAbort);
+  }
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } catch (e) {
+    // A superseded request is not a failure to report: the screen that wanted
+    // the answer has already asked a newer question.
+    if (signal?.aborted) {
+      const err = new Error('The search was superseded.');
+      err.name = 'AbortError';
+      throw err;
+    }
     if (controller.signal.aborted) {
       throw new Error(
         `The search service did not answer within ${Math.round(GEOCODE_TIMEOUT_MS / 1000)} seconds.`,
@@ -107,7 +128,18 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Re
     throw e;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', callerAbort);
   }
+}
+
+/**
+ * An abort rejection, for a request whose caller has already walked away.
+ * The name is what callers match on (`AbortError` is the platform convention).
+ */
+function abortError(): Error {
+  const err = new Error('The search was superseded.');
+  err.name = 'AbortError';
+  return err;
 }
 
 interface NominatimPlace {
@@ -158,7 +190,11 @@ function toPlace(p: NominatimPlace): Place {
 /** Free-text search, biased toward the current map centre. */
 export function searchPlaces(
   q: string,
-  opts: { near?: LatLng; limit?: number; addressDetails?: boolean; endpoint?: string } = {},
+  opts: {
+    near?: LatLng; limit?: number; addressDetails?: boolean; endpoint?: string;
+    /** Abort when the query is superseded; rejects with `AbortError`. */
+    signal?: AbortSignal;
+  } = {},
 ): Promise<Place[]> {
   const endpoint = (opts.endpoint ?? NOMINATIM_ENDPOINT).replace(/\/$/, '');
   const params = new URLSearchParams({
@@ -192,7 +228,12 @@ export function searchPlaces(
   }
 
   return throttle(async () => {
-    const res = await fetchWithTimeout(`${endpoint}/search?${params}`, { headers: headers() });
+    // Checked here, after the queue wait: a request whose caller has already
+    // superseded it must never reach the network — the throttle is a
+    // politeness gate for a shared public service, and spending a caller's
+    // 1 req/s budget on an answer nobody wants is how clients get banned.
+    if (opts.signal?.aborted) throw abortError();
+    const res = await fetchWithTimeout(`${endpoint}/search?${params}`, { headers: headers() }, opts.signal);
     if (!res.ok) throw new Error(`Nominatim search failed (HTTP ${res.status})`);
     const json = (await res.json()) as NominatimPlace[];
     return json.map(toPlace);
@@ -202,7 +243,7 @@ export function searchPlaces(
 /** Reverse-geocode a coordinate to the nearest address/place. */
 export function reverseGeocode(
   point: LatLng,
-  opts: { zoom?: number; endpoint?: string } = {},
+  opts: { zoom?: number; endpoint?: string; signal?: AbortSignal } = {},
 ): Promise<Place[]> {
   const endpoint = (opts.endpoint ?? NOMINATIM_ENDPOINT).replace(/\/$/, '');
   const params = new URLSearchParams({
@@ -215,7 +256,8 @@ export function reverseGeocode(
   });
 
   return throttle(async () => {
-    const res = await fetchWithTimeout(`${endpoint}/reverse?${params}`, { headers: headers() });
+    if (opts.signal?.aborted) throw abortError();
+    const res = await fetchWithTimeout(`${endpoint}/reverse?${params}`, { headers: headers() }, opts.signal);
     if (res.status === 404) return [];
     if (!res.ok) throw new Error(`Nominatim reverse failed (HTTP ${res.status})`);
     return [toPlace((await res.json()) as NominatimPlace)];

@@ -52,6 +52,13 @@ Valhalla engine (§17) — is recorded below, pass by pass:
   finding that reframed all of it: **Alberta has no sub-regional extracts**, so the fix
   that would have made the problem disappear is unavailable for the province that
   prompted it. §15 is what to do about it, ordered.
+- **§18** — the search pass. The matcher compared folded strings with `===` and
+  `includes`, so one dropped letter found nothing and "Main St" missed "Main Street";
+  the scan stopped scoring after 4000 matches, so **which results existed depended on
+  gazetteer order**; the multi-region search was a second, subtly different copy of the
+  single-region one; and the online half was concatenated below the offline half rather
+  than ranked with it. One matcher, one ranking, one list — with the source badge made
+  more important, not less, by the unification.
 
 Each pass also had to fix defects **it introduced**, which are recorded in §11.5, §12.8 and
 §13.6 rather than quietly corrected.
@@ -142,6 +149,15 @@ evaluated, which a pass or fail result does not tell you.
     — [the fix §12.5 recorded was made in the path that cannot fail](#161-the-fix-125-recorded-was-made-in-the-path-that-cannot-fail)
     — [every 50 metres, the sentence being spoken was cut in half](#162-every-50-metres-the-sentence-being-spoken-was-cut-in-half)
     — [what else this pass changed, and what it did not](#163-what-else-this-pass-changed-and-what-it-did-not)
+17. [The offline Valhalla engine: the routing graph is no longer the app's problem](#17-the-offline-valhalla-engine-the-routing-graph-is-no-longer-the-apps-problem)
+18. [The search pass: one matcher, one ranking, one list](#18-the-search-pass-one-matcher-one-ranking-one-list)
+    — [the matcher: fold, abbreviations, and tolerance proportional to the word](#181-the-matcher-fold-abbreviations-and-tolerance-proportional-to-the-word)
+    — [the index, and the truncation that made results depend on gazetteer order](#182-the-index-and-the-truncation-that-made-results-depend-on-gazetteer-order)
+    — [cross-source ranking, and the badge that makes it honest](#183-cross-source-ranking-and-the-badge-that-makes-it-honest)
+    — [cancellation: the request that ran to completion for nobody](#184-cancellation-the-request-that-ran-to-completion-for-nobody)
+    — [what the driver sees now](#185-what-the-driver-sees-now)
+    — [what this pass found wrong in itself](#186-what-this-pass-found-wrong-in-itself)
+    — [what is not done](#187-what-is-not-done)
 
 ---
 
@@ -168,8 +184,8 @@ stands. **Bold** = fully working and verified.
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
 | 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
 | 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1368 unit tests across 72 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
-| 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 10 screens at 3 viewports (50 checks each, 150 total), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1439 unit tests across 75 files, plus 5 browser suites and one browser gate | `test/`, `tools/` |
+| 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 12 screens at 3 viewports (53 checks each, 159 total), plus nine compact-width checks (§14.25), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
 | 21 | Update STATUS.md continuously | **This document** | — |
@@ -182,9 +198,9 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 27 warnings (ratchet — see §10.3) |
-| Unit tests | `npm test` | **1368 passing**, 72 files |
+| Unit tests | `npm test` | **1439 passing**, 75 files |
 | End-to-end | `npm run e2e` | **81 checks** against the built bundle |
-| Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720) |
+| Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720), plus nine compact-width checks (§14.25) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
 | Document audit | `npm run status` | every `wc -l`, cross-reference, current total, browser-gate figure and `npm run` in this file, checked against disk |
 | Offline shell | `npm run swshell` | a captive portal answered 2 navigations, then the network went off: the app still boots, 5 launcher tiles |
@@ -261,7 +277,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **72 files, 1368 tests**. The previous
+retyped by hand. The table is the complete set: **75 files, 1439 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -272,8 +288,8 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1368 total double-counts contrast's 34 tests**: 1334 distinct test cases are
-declared across 72 files. Both figures are recorded rather than reconciled by lowering the
+that **the 1439 total double-counts contrast's 34 tests**: 1405 distinct test cases are
+declared across 75 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
 
@@ -304,8 +320,8 @@ reading it.
 
 | File | Tests | Covers |
 |---|---|---|
-| `geo.spec.ts` | 78 | polyline codec and every refusal case, haversine, bearing, formatting boundaries, `simplify`, `snapToPolyline`, and the camera geometry: windowed `headingAlong`, `lookAheadMetres` |
-| `regions.spec.ts` | 64 | `RegionLibrary`, bbox helpers, `catalogFor`, `searchAll` ranking, `bestFor`, cross-region routing |
+| `geo.spec.ts` | 87 | polyline codec and every refusal case, haversine, bearing, formatting boundaries, `simplify`, `snapToPolyline`, and the camera geometry: windowed `headingAlong`, `lookAheadMetres` |
+| `regions.spec.ts` | 66 | `RegionLibrary`, bbox helpers, `catalogFor`, `searchAll` ranking (house-number parity with single-region search, and the two-term distance bias), `bestFor`, cross-region routing |
 | `providers.spec.ts` | 54 | provider chain, fallback, `requiresKey`, 4xx handling, `localToRoute` bbox reduction, and the two offline sources as separate providers: the pack engine's own row, the skip when no pack is installed, the walk to the map engine, and the combined failure headline (§17.7) |
 | `valhalla.spec.ts` | 46 | request body, headers, response parsing, multi-leg, unit normalisation, a response missing what it needs |
 | `engines.spec.ts` | 42 | engine selection policy, plan ordering across both offline sources, per-source readiness and probe reasons, the attempt trace, strict mode |
@@ -319,7 +335,10 @@ reading it.
 | `engine.spec.ts` | 35 | OSM parsing, graph construction, one-ways, A\* route quality, geometry continuity, index isolation and keying, and that `buildDataset` consumes its inputs |
 | `contrast.spec.ts` | 34 | every ink token against every dark surface, printed as a table |
 | `stream.spec.ts` | 30 | streaming XML parse ≡ whole-file parse across chunk sizes, incl. 1-char and seeded fuzz |
-| `geocode.spec.ts` | 29 | throttle serialisation and 1 req/s spacing, viewbox, place mapping |
+| `geocode.spec.ts` | 33 | throttle serialisation and 1 req/s spacing, viewbox, place mapping, and cancellation: a superseded request never reaches the network, an in-flight one aborts as `AbortError`, and a dead server still reads as a deadline (§18.4) |
+| `search-match.spec.ts` | 34 | the search matcher (§18): fold/abbreviation/fuzzy primitives, the tier identities, house numbers, index caching, brute-force parity of candidate generation against the matcher, order-independent results, `suggestName` |
+| `search-merge.spec.ts` | 19 | cross-source ranking (§18.3): one score scale for offline/online/saved, dedupe by canonical label and by place, saved-place boost, the continent-beats-street regression, and word-boundary highlight ranges |
+| `search-perf.spec.ts` | 3 | search performance measured, not claimed (§18.2): index built once per 60k-name gazetteer, queries in milliseconds, the everything-matches worst case |
 | `progress.spec.ts` | 29 | the three ETA properties as properties: monotone, never zero before arrival, last-good-kept |
 | `settings.spec.ts` | 29 | every setting round-trips, a malformed endpoint is not "Ready", quota failures reported |
 | `audit-regressions.spec.ts` | 33 | source-level guards for the §10/§11 defects, each verified to fail when reintroduced, and the multi-zoom basemap shape |
@@ -1775,7 +1794,7 @@ checked. Treat this table as a snapshot with a date, not a fact.
 
 ```
 src/
-  App.tsx 5244  screens, navigation state, focus + announcements,
+  App.tsx 5468  screens, navigation state, focus + announcements,
                                 keyboard shortcuts, request gates, Home/Work places
   textscale.ts            252  detects the platform's font scale, whichever way it is applied (§12.7, §14.8)
   shellcheck.ts            77  is this document the app? (the service worker's guard)
@@ -1784,22 +1803,34 @@ src/
   settings.ts             354  typed, validated, quota-safe persistence
   theme.ts 423  AAOS design tokens (colour, type, layout, shape)
   icons.tsx               421  29 maneuver kinds + system icons, hand-drawn SVG
-  geo.ts                  590  polyline codec, haversine, formatting, snapping,
+  geo.ts                  629  polyline codec, haversine, formatting, snapping,
                                 + snapAlong (metres along a line) and vertexAt,
                                 + headingAlong and lookAheadMetres (camera geometry)
-  styles.css 3623  layout, insets, responsive rules
+  styles.css 3657  layout, insets, responsive rules
 
   osm/
-    engine.worker.ts     1307  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
+    engine.worker.ts     1264  parse (whole + streaming) -> graph -> index -> gazetteer, + A*
     pbf.ts               1007  .osm.pbf protobuf reader, whole-buffer and streaming
     engine.ts             461  worker client, format sniff, GeoJSON mirroring,
                               + buildStageStep (which pipeline phase a stage is)
-    regions.ts            517  RegionLibrary, catalogue, bbox helpers, merge cache,
+    regions.ts            474  RegionLibrary, catalogue, bbox helpers, merge cache,
                               + the routing-pack registry (pack? per region)
     merge.ts              318  union-find merge of adjacent extracts
     mergeguard.ts         201  can a merge be afforded here? three outcomes
     importguard.ts        351  can a parse be afforded here? three outcomes (§15.2)
     tags.ts                36  shared node-tag filter
+
+  search/              the search engine: one matcher for every source (§18).
+                       text + results render and stay in the entry bundle;
+                       fuzzy + gaz + merge + all load on the first search
+    search/text.ts      104  fold, abbreviation equivalence classes
+    search/results.ts   138  the result row: types, cross-source merge, dedupe,
+                              + highlight ranges (word-boundary, abbrev-aware)
+    search/fuzzy.ts      57  tolerance policy and bounded OSA edit distance
+    search/gaz.ts       389  the token index + tiered ranking + house numbers,
+                              + suggestName ("did you mean") for the zero-result path
+    search/merge.ts     61  online and saved hits scored on the shared scale
+    search/all.ts       48  the one matcher, looped over every region
 
   nav/
     valhalla.ts 583  Valhalla /route client, response validation,
@@ -1825,7 +1856,7 @@ src/
     engines.ts 293  engine selection, readiness, provenance,
                               + per-source readiness (pack vs map) and the
                                 turn-by-turn capability on the provider table
-    geocode.ts            235  Nominatim client, 1 req/s throttle
+    geocode.ts            277  Nominatim client, 1 req/s throttle, cancellable (§18.4)
     location.ts           256  device/browser/simulated location
     offroute.ts           120  deviation detection primitives, reroute origin
     progress.ts           126  ETA policy: monotone, never zero, keep last good
@@ -1848,9 +1879,9 @@ src/
     store.ts              579  RegionLibrary singleton, per-region workers, memory gate,
                               + pack import/restore and the engine mount lifecycle
 
-test/            1368 unit tests, 72 files
+test/            1439 unit tests, 75 files
 test/e2e.mjs           81 browser checks, built bundle
-test/screens.mjs       53 checks x 3 viewports (159 total)
+test/screens.mjs       53 checks x 3 viewports (159 total), + nine compact-width checks
 tools/osm2pbf.mjs        362 XML -> PBF encoder (builds the test fixtures;
                              extract slicing is done by osmium on a desktop),
                              + the type-sorted encoder Valhalla's tile builder needs
@@ -2384,7 +2415,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1368 unit tests
+npm test             # 1439 unit tests
 npm run e2e          # 81 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -5705,7 +5736,9 @@ Android Auto shows and this app cannot yet. 20. The ETA bar's remaining-distance
 in the offline case, which §3.11.1 fixed once; re-check at real scale. 21. Search
 results ranked by *drive time* rather than straight-line distance, which is the only
 ranking that matches the decision being made. 22. Saved places with a Home/Work pair
-already claimed in `App.tsx` but never exercised. 23. Fuel-range and charging stops,
+already claimed in `App.tsx` but never exercised — **half closed by §18.5**: they are a
+search source and a list on the search screen now, and their ranking is tested; the
+save-a-place tap path is still unexercised by a browser check (§18.7). 23. Fuel-range and charging stops,
 which AAOS shows for EVs and which this app has no concept of. 24. A "what is this
 screen" affordance, since the UI is a deliberate imitation and a driver who has not used
 AAOS has no anchor for it.
@@ -6082,6 +6115,236 @@ and separately probed. What changed and why:
 - The closing failure sentence still combines both sources when both decline
   ("… The imported map had no route for this pair either."), because the one-
   line headline the driver reads is not the trace and cannot show two rows.
+
+## 18. The search pass: one matcher, one ranking, one list
+
+The request was to make the search experience — UI, performance, fuzzy matching, the
+sources, everything — as good as it can be. Reading the code that existed answered "as
+good as it can be" with more precision than expected, because what existed was four
+match cases applied to a folded string:
+
+- `name === needle` — exact, 1000.
+- `name.startsWith(needle)` — prefix.
+- `name.includes(needle)` — substring.
+- one special case: "123 main" strip the number, try the prefix again.
+
+That is not a matcher that fails occasionally; it is one that fails on the input it was
+designed for. **"Main St" did not find "Main Street."** One dropped letter found nothing.
+"Cafe" did not find "Café". "5 guys" did not find "Five Guys". And the multi-region
+search — the one used the moment a driver downloads a second region — was a *second copy*
+of this matcher with the fourth case missing, so address queries worked with one region
+loaded and silently degraded with two.
+
+Underneath that sat two structural problems. The scan stopped scoring after 4000
+matches, so which results *existed* depended on the order entries happened to sit in the
+gazetteer — on a province extract (the 120,000-entry cap from §14.16), every popular
+query silently lost its tail. And the online half (Nominatim) was *concatenated* below
+the offline half rather than ranked with it, so an exact online match could never appear
+above a weak offline one.
+
+The decisions taken for the shape of the fix are recorded first because they are not
+discoverable from the code: **one ranking across all sources, with the source made
+visible per row rather than implied by order** (the driver's explicit choice — "it needs
+to be clear what the source is"), and **saved places as a search source, no search
+history** (also a choice: the app stores Home/Work and nothing else of the driver's
+behaviour).
+
+### 18.1 The matcher: fold, abbreviations, and tolerance proportional to the word
+
+`src/search/text.ts` owns the primitives; `src/search/gaz.ts` owns the ranking. Three
+things the old comparison could not express:
+
+**Abbreviation equivalence.** Street types and directions expand to *equivalence
+classes* — `st` = `street` = `saint`, `ave` = `avenue`, `n` = `north` — and the class is
+applied symmetrically, so the abbreviated side may be the query ("main st" → "Main
+Street") or the name ("main street" → "Main St"). `st` is deliberately ambiguous:
+resolving "St" needs to know what the *name* meant, and being wrong makes half of them
+unsearchable.
+
+**Fuzzy tolerance, with none for short words.** Bounded Damerau-Levenshtein on tokens:
+≤3 characters get zero edits, 4–5 get one, 6+ get two. The short-word floor is load-
+bearing: with a three-letter needle almost every token in the gazetteer is within one
+edit ("gas" → "bar"), so tolerance there buys recall and pays in nonsense. Transpositions
+count as one edit ("musuem" → "Museum"), which is why the distance is OSA rather than
+plain Levenshtein.
+
+**Numeric tokens are droppable.** An unmatched number in a query is usually a house
+number the name does not carry: "5 guys" → "Five Guys", "123 main" → "Main St". Dropping
+costs 60, so a name that really contains the number still wins. And when the name *is*
+an address — the gazetteer carries `house` and `street` on interpolated addresses —
+"123 main" boosts "Main Street 123" to 930, but only if the street part fits: the right
+number on the wrong street is the wrong address and gets no boost at all.
+
+The tier order is **exact (1000) > name prefix (800 − excess) > phrase (tokens in order
+and adjacent, 700) > token matches (620) > substring (500) > fuzzy (440 − 25·edits)**,
+minus rank and distance. Two of those numbers were chosen to be *unchanged*: exact 1000
+and prefix `800 − excess` are the identities `test/regions.spec.ts` mirrors to the ulp
+and the ordering drivers have already learned from the app; every new tier slots in below
+them rather than reshuffling what worked.
+
+### 18.2 The index, and the truncation that made results depend on gazetteer order
+
+Every gazetteer array gets one lazily-built token index — folded name, tokens, a sorted
+vocabulary, and postings — cached in a `WeakMap` keyed on the array identity, so a
+dataset is indexed once and released with it. Candidate generation walks the *vocabulary*
+(not the gazetteer) with the same token matcher the ranking uses, which is what makes the
+parity test in `test/search-match.spec.ts` meaningful: a candidate generator that
+disagrees with the matcher produces results that rank fine when reached and are never
+reached.
+
+Measured (`test/search-perf.spec.ts`, this machine, Node):
+
+| | |
+|---|---|
+| index build, 60,000 names | **119 ms**, once per dataset |
+| query, average of 12 shapes | **27.7 ms** |
+| worst case — "st", matching everything | **126–164 ms** |
+
+The old code's cost was "the whole gazetteer, every keystroke" — 120,000 entries on the
+province extract, every 250 ms debounce — and its only defence was the `break` after
+4000 scored matches. **That `break` is the defect worth dwelling on**: it was not a
+performance guard but a correctness hole, because which 4000 entries were scored depended
+on gazetteer order (which is rank order, from `buildDataset`), so a query matching 5,000
+entries kept the first 4,000 scored and *never saw* the rest — including better matches
+lower down. There is no truncation at all now: every candidate is scored and the top
+`limit` taken. The perf gate exists to keep that affordable, with order-of-magnitude
+bounds rather than tight ones, because a performance test that fails for being busy is a
+test people stop believing.
+
+### 18.3 Cross-source ranking, and the badge that makes it honest
+
+All three sources now score on one scale (`src/search/merge.ts`): the same match tiers,
+plus each source's own importance signal, plus one shared distance bias —
+
+| source | match tier + | |
+|---|---|---|
+| offline gazetteer | category rank (20–100) | instant, no privacy cost |
+| online (Nominatim) | importance (0–120) | round-tripped through a third party |
+| saved Home/Work | intent boost (+250) | the driver's own |
+
+The shared distance bias (`distanceBias` in `src/geo.ts`) has **two terms**, and the
+second one exists because the browser gates caught the ranking being wrong in a way no
+unit test had asked about. The first term is the gentle `d/500`, capped at 120 — the
+bias search has always used, tuned to order results *within* a region. Applied alone it
+meant an exact name match on the other side of the continent ("Elbow, Howard County,
+Texas", 7,503 km, with Nominatim importance behind it) outranked "Elbow St" at 340 m:
+the e2e harness types "Elbow", taps the first row, and drove to Texas — preview,
+screens and textscale then failed downstream, all of them symptoms of one wrong row
+ordering. The second term is a locality penalty past 200 km that saturates at 350, so
+distance outweighs a name tier at absurd distances without drowning a landmark a driver
+genuinely means to drive to.
+
+The saved boost is an assertion: when a query matches a saved label, that is what the
+driver means, and it beats a same-named POI across town. When the query does *not* touch
+a saved label, the saved place is not in the list at all — a strong signal, not a blanket
+one. Nominatim hits whose *name* does not match (it often matches on address strings the
+app never sees) keep a floor of 480 so they still appear, below any real name match.
+
+Duplicates are collapsed two ways, because there are two kinds: the same name from two
+sources ("Memorial Dr" and "Memorial Drive" are one row — the abbreviation classes decide
+that, not string equality), and one place under two namings ("Bow River" and "Bow River,
+Calgary"), which is only collapsed *across* sources and only when the positions agree
+within 120 m — two genuinely distinct POIs survive.
+
+With order no longer encoding provenance, the badge is what tells the driver why row one
+is above row two. It is now three-way — **Offline / Online / Saved** — in three colour
+families, and the online/ offline distinction that §10 introduced stays exactly as
+load-bearing as it was.
+
+### 18.4 Cancellation: the request that ran to completion for nobody
+
+The search effect always had a `cancelled` flag, which kept stale *answers* off the
+screen — but the Nominatim request itself ran to completion. A fast typist spent the
+shared 1 req/s throttle budget on answers nobody would see, queued four dead requests
+behind one live one, and on a service that bans clients for bursts, spent every future
+search too. `searchPlaces` and `reverseGeocode` now take an `AbortSignal`; the abort is
+checked *after* the queue wait (a superseded request never reaches the network) and
+merged with the 12 s timeout (which is owned by the module and still blames the server,
+not the caller). The rejection is `AbortError`, and the search screen treats it as what
+it is — not a failure to apologise for.
+
+### 18.5 What the driver sees now
+
+- **Typos and abbreviations find the place** — "calgry" → Calgary, "main st" → Main
+  Street, "4 st w" → "4 Street W", "st albert" → Saint Albert Trail.
+- **One ranked list** where the best match wins; the badge per row says where from.
+- **Home and Work are listed before typing** and are searchable like anything else
+  ("home" is their home before it is a furniture shop across town).
+- **Every row shows distance** in the driver's units — "street · 1.2 km" answers "which
+  of these two Fifth Avenues" before the tap, not after.
+- **The matched part of the name is marked**, at word boundaries and through
+  abbreviations ("st" emphasises "Saint" in "Saint Mary Lake"), never mid-word noise.
+- **The zero-result screen suggests the correction** — "calgry" offers "Calgary" — where
+  it used to be a dead end with a hint card on it.
+- **Arrow keys walk the results** (ArrowDown leaves the box, ArrowUp returns to it),
+  Enter still picks the top hit, and the rows are real buttons for everything else.
+- **Addresses read as addresses**: "123 Main Street", not "Main Street 123".
+- Stale results stay on screen while a query updates, instead of flashing empty.
+
+### 18.6 What this pass found wrong in itself
+
+Recorded in the order found, because §13.16's rule is that a defect found by a test is
+still a defect worth naming:
+
+- **The unified ranking ranked Howard County, Texas above the street down the road.**
+  The one defect that reached a driver's tap: with the distance bias capped at 120, an
+  exact name match 7,503 km away — with Nominatim importance behind it — beat a local
+  prefix match at 340 m. The e2e harness taps the first row for "Elbow", drove to
+  Texas, and the preview, screens and textscale gates all failed downstream of one wrong
+  ordering. Every unit test was green: none of them had asked whether a hit across a
+  continent should outrank one down the street. The bias now has a locality term
+  (§18.3), and `test/search-merge.spec.ts` asks the question in the harness's own
+  terms.
+- **The edit-distance early exit was off by one.** "Row minimum exceeded the bound" is
+  not proof the final distance does: an OSA row can dip one below the previous row's
+  minimum on a transposition. The exit is gone; the length filter does the rejecting.
+- **The span penalty was computed in query order**, so "123 main" against "Main Street
+  123" produced a *negative* gap. Name-order for the arithmetic, query order for the
+  phrase test — the two are different questions.
+- **Candidate generation could hide a legal match.** For all-numeric queries ("66 12")
+  the matcher may drop either token, so intersecting the per-token sets was a superset
+  *minus* exactly those entries. The brute-force parity test found this before any
+  driver could.
+- **A test that was not testing what it named.** `test/memory.spec.ts` pins the shape of
+  `RawNode` — and its regex silently matched `GazEntry`'s `lat`/`lon` fields instead,
+  because `RawNode`'s own declaration ended without a semicolon. Moving `GazEntry` to
+  `src/search/gaz.ts` broke the test against its accidental fixture. The interface now
+  terminates its fields, and the gate matches what its comment always claimed.
+- **A verification suite that had not been running, and two checks that had drifted
+  behind it.** `test/screens.mjs` clicked the import button by the text `Import .osm
+  file`, which no element has said since the button was renamed to "Import .osm or
+  routing pack" — the rename's commit updated `e2e.mjs`'s selector and missed this one,
+  so the suite died on a 30-second timeout at its own first step, before checking a
+  single screen. Found because §18 ran the gates rather than trusting their last
+  recorded colour. With the selector fixed, the suite ran — and immediately showed that
+  the voice-control check looked for the nav rail's mute button *while the layers sheet
+  was open*, where the rail deliberately is not (`{!sheetOpen && ...}`, the Google-style
+  arrangement): a missing control reported from behind a sheet. Both selectors now ask
+  for what the app actually shows; the suite is green end to end.
+- **The bundle budget caught the matcher riding in the entry chunk** — 131.3 kB against
+  a 130 kB gate. Paid for rather than raised: the search engine (matcher, index,
+  cross-source scoring, `searchAll`) now loads on the first search (2.4 kB deferred),
+  `OsmEngine.search` — a wrapper with no callers that statically imported it — is gone,
+  and only normalization (`text.ts`) and row presentation (`results.ts`) remain in the
+  entry bundle, because rendering a highlighted row needs them before anyone types.
+  Entry is back to 130.0 kB with the gate unweakened.
+
+### 18.7 What is not done
+
+- **Drive-time ranking** (§15.4 item 21) remains open. The distance bias is still
+  straight-line — now the *same* great-circle distance routing uses, where it used to be
+  a second planar formula in a second file, but great-circle is still not drive time.
+  Doing it honestly means running a route per candidate, which is a different pass.
+- **Search history is a decision, not a gap**: the app stores Home/Work and nothing else
+  of the driver's behaviour, by explicit choice.
+- **The save flow itself is still unexercised by a browser check** (§15.4 item 22 half
+  open): saved places are listed and searchable and their ranking is tested, but the
+  save-a-place tap path has no e2e coverage.
+- `suggestName` is a bounded scan of the name column on the zero-result path — measured
+  fine at 60k entries, but it is the one part of search that is still O(gazetteer).
+- Online hits that matched Nominatim on non-name fields rank at the floor; a richer
+  online score (using `addresstype` and address detail) would order them among themselves
+  better than importance alone.
 
 ## Attribution
 

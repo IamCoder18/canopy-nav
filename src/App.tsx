@@ -2,7 +2,11 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import type { TrafficOverlay } from './map/overlays';
 import { buildStageStep, type BuildProgress } from './osm/engine';
 import type { OsmDataset } from './osm/engine.worker';
-import { searchGazetteer } from './osm/engine.worker';
+import type { GazEntry } from './search/gaz';
+import {
+  mergeHits, highlightRanges,
+  type RankedHit, type HitSource,
+} from './search/results';
 import { searchPlaces, type Place } from './nav/geocode';
 import {
   resolveRoute, isOnline, watchConnectivity, PROVIDERS, localToRoute,
@@ -35,7 +39,7 @@ import type { SimulatorState } from './nav/simulator';
 import { observeChromeHeights } from './nav/chrome';
 import {
   formatDistance, formatDuration, formatClock, lineLength, headingAlong,
-  snapAlong, snapToPolyline, vertexAt, type LatLng,
+  snapAlong, snapToPolyline, vertexAt, haversineM, type LatLng,
 } from './geo';
 import { placeOnRoute, startPosition, type RoutePosition } from './nav/progress';
 import { ink, accentNight, semantic, applyThemeTokens, type as T, DP, ICON, SEP } from './theme';
@@ -52,7 +56,6 @@ import {
   importRegionFile, importPackFile, packRegionId, localRegionId, localRegionName, regionLib, useRegions,
   restoreRegions,
 } from './regions/store';
-import { searchAll } from './osm/regions';
 import {
   ManeuverIcon, IconSearch, IconBack, IconClose, IconMute, IconSound, IconOverview,
   IconLayers, IconTraffic, IconSettings, IconHome, IconGoto, IconChevronRight,
@@ -1967,6 +1970,8 @@ const banner = rerouteNotice ?? routeError ?? null;
           regions={regions}
           online={online}
           location={location}
+          units={units}
+          places={places}
           initialQuery={pendingInitialQuery}
           headingRef={headingRef}
           onInitialQueryConsumed={() => setPendingInitialQuery('')}
@@ -3842,53 +3847,59 @@ function categoriesFor(regions: ReturnType<typeof useRegions>, dataset: OsmDatas
 /* ---------------------------- search hits --------------------------- */
 
 /**
- * One search result, and where it came from.
+ * One search result, and where it came from — see `search/merge.ts`.
  *
- * `source` is shown on the row. Offline hits are built from the imported OSM
- * data and cost nothing and no privacy; an online hit has been round-tripped
- * through a third-party server. Rendering both identically made that invisible,
- * which matters most to a user who believed they were offline.
+ * `source` is shown on the row as a badge. Offline hits are built from the
+ * imported OSM data and cost nothing and no privacy; an online hit has been
+ * round-tripped through a third-party server; a saved hit is the driver's own
+ * Home/Work. Rendering them identically made provenance invisible, which
+ * matters most to a user who believed they were offline — and with sources now
+ * ranked against each other rather than stacked, the badge is the only thing
+ * telling the driver why one row is above another.
  */
-interface SearchHit {
-  label: string;
-  sub: string;
-  pos: LatLng;
-  source: 'offline' | 'online';
-}
+type SearchHit = RankedHit;
 
-/** Metres from `a` to `b`, good enough for ordering a result list. */
-function distanceFrom(a: LatLng, b: LatLng): number {
-  const dLat = (a[1] - b[1]) * 111320;
-  const dLon = (a[0] - b[0]) * 111320 * Math.cos((b[1] * Math.PI) / 180);
-  return Math.hypot(dLat, dLon);
+/**
+ * A gazetteer name as the driver would write it.
+ *
+ * House-number entries are stored as "Main Street 123" (street first, matching
+ * how OSM tags them) and nobody writes an address that way; the row should say
+ * "123 Main Street". Only reformatted when the name is exactly the stored
+ * street-plus-number shape, so a POI called "Studio 54" is left alone.
+ */
+function displayGazName(e: GazEntry): string {
+  if (e.house != null && e.street && e.name === `${e.street} ${e.house}`) {
+    return `${e.house} ${e.street}`;
+  }
+  return e.name;
 }
 
 /**
- * Collapse duplicates within a result list, keeping the best-ranked row per name.
+ * The row label with its matched parts emphasised.
  *
- * Two separate duplications were happening. The gazetteer indexes one entry per
- * OSM *element*, so a street split into several ways produced "Memorial Dr" three
- * times; and Nominatim indexes the same data, so a place could arrive from both
- * offline and online.
- *
- * Keyed on the name, not the position. Keying on position leaves the multi-way
- * street case intact — the three segments are genuinely different coordinates —
- * and the user still sees "Memorial Dr, Memorial Dr, Memorial Dr", which is not
- * a list of three places. For a destination picker the first, best-ranked match
- * for a name is the one someone means; the rest are noise. Position still breaks
- * ties, because the ranking above already folds in distance.
+ * Ranges come from `highlightRanges` (word-boundary, abbreviation-aware).
+ * Rendering them as `<mark>` means a screen reader still reads one label, and
+ * the CSS gives the mark a tinted background with `color: inherit`, so the
+ * emphasis cannot cost contrast.
  */
-function dedupeHits(hits: SearchHit[]): SearchHit[] {
-  const seen = new Set<string>();
-  const out: SearchHit[] = [];
-  for (const h of hits) {
-    const key = h.label.trim().toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(h);
-  }
-  return out;
+function HighlightedLabel({ label, q }: { label: string; q: string }) {
+  const ranges = useMemo(() => highlightRanges(label, q), [label, q]);
+  if (!ranges.length) return <>{label}</>;
+  const out: React.ReactNode[] = [];
+  let at = 0;
+  ranges.forEach(([s, e], i) => {
+    if (s > at) out.push(label.slice(at, s));
+    out.push(<mark className="match-hl" key={i}>{label.slice(s, e)}</mark>);
+    at = e;
+  });
+  if (at < label.length) out.push(label.slice(at));
+  return <>{out}</>;
 }
+
+/** The badge text for a source. */
+const SOURCE_LABEL: Record<HitSource, string> = {
+  offline: 'Offline', online: 'Online', saved: 'Saved',
+};
 
 function SearchScreen(props: {
   dataset: OsmDataset | null;
@@ -3898,6 +3909,10 @@ function SearchScreen(props: {
   onInitialQueryConsumed?: () => void;
   online: boolean;
   location: LatLng;
+  /** Unit system, for the distance shown on every row. */
+  units: 'metric' | 'imperial';
+  /** Saved Home/Work: a search source of its own, and listed before typing. */
+  places: Partial<Record<PlaceSlot, SavedPlace>>;
   /**
    * What picking a result will *do*, when it is not the usual thing.
    *
@@ -3979,24 +3994,98 @@ function SearchScreen(props: {
     if (top) props.onPick(top.pos, top.label);
   };
 
+  /**
+   * The correction for a query that found nothing: one bounded-edit scan of
+   * the gazetteer names, run only on the zero-result path — which used to be a
+   * dead end with a hint card on it.
+   *
+   * State rather than `useMemo` because the scan comes with the search engine,
+   * which loads on demand — and a render must not wait for either.
+   */
+  const [suggestion, setSuggestion] = useState<string | null>(null);
+  useEffect(() => {
+    if (!searchedTerm || busy || results.length) {
+      setSuggestion(null);
+      return;
+    }
+    let cancelled = false;
+    void import('./search/gaz').then(({ suggestName }) => {
+      const gaz = props.regions.length
+        ? props.regions.flatMap((r) => r.dataset.gaz)
+        : (props.dataset?.gaz ?? []);
+      const s = suggestName(gaz, searchedTerm);
+      if (!cancelled) setSuggestion(s);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // `props.location` is deliberately absent: a suggestion that re-scanned the
+    // gazetteer on every GPS fix is a scan a second, forever.
+  }, [searchedTerm, busy, results.length, props.regions, props.dataset]);
+
+  /**
+   * Saved Home/Work. A search source in its own right (see the effect above)
+   * and listed before typing: half of all searches are for somewhere the
+   * driver has already been, and two of those are one tap away.
+   */
+  const savedRows: SearchHit[] = useMemo(() =>
+    (Object.entries(props.places) as [PlaceSlot, SavedPlace][]).map(([slot, p]) => ({
+      label: p.label,
+      sub: slot === 'home' ? 'Home' : 'Work',
+      pos: p.pos as LatLng,
+      source: 'saved' as const,
+      score: 0,
+    })), [props.places]);
+
+  /**
+   * Arrow keys walk the result rows; ArrowUp past the first returns to the
+   * search box. Rows are real buttons, so Enter and Tab already work — this
+   * only supplies the arrow movement a list implies (WAI-ARIA's listbox
+   * pattern), without taking focus management away from the platform.
+   */
+  const rowKeys = (e: React.KeyboardEvent<HTMLElement>) => {
+    const rows = Array.from(
+      e.currentTarget.querySelectorAll<HTMLButtonElement>('button.result-row'),
+    );
+    if (!rows.length) return;
+    const at = rows.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      (rows[at + 1] ?? rows[rows.length - 1]).focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (at > 0) rows[at - 1].focus();
+      else document.querySelector<HTMLInputElement>('.inline-search input')?.focus();
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      rows[0].focus();
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      rows[rows.length - 1].focus();
+    }
+  };
+
   useEffect(() => {
     // Category browse: every entry with that tag, nearest first.
     if (cat) {
       const gaz = props.regions.length
         ? props.regions.flatMap((r) => r.dataset.gaz)
         : (props.dataset?.gaz ?? []);
-      const near = props.location;
-      const hits = gaz
+      const near = locationRef.current;
+      const hits: SearchHit[] = gaz
         .filter((g) => g.cat === cat)
         .map((g) => ({
-          label: g.name,
+          label: displayGazName(g),
           sub: g.cat,
           pos: [g.lon, g.lat] as LatLng,
           source: 'offline' as const,
+          score: 0,
         }))
-        .sort((a, b) => distanceFrom(a.pos, near) - distanceFrom(b.pos, near))
+        .sort((a, b) =>
+          haversineM(a.pos[0], a.pos[1], near[0], near[1]) -
+          haversineM(b.pos[0], b.pos[1], near[0], near[1]))
         .slice(0, 20);
-      setResults(dedupeHits(hits).slice(0, 20));
+      setResults(mergeHits(hits));
       setBusy(false);
       return;
     }
@@ -4007,61 +4096,121 @@ function SearchScreen(props: {
     // two-character query.
     if (term.length < 2) { setResults([]); setBusy(false); setErr(null); setSearchedTerm(''); return; }
     let cancelled = false;
+    // The in-flight Nominatim request, aborted when the query is superseded.
+    // The `cancelled` flag kept stale *answers* off the screen, but the request
+    // itself ran to completion — costing the shared 1 req/s throttle budget on
+    // answers nobody would see. Aborting is also what keeps a fast typist from
+    // queueing four dead requests behind one live one.
+    const aborted = new AbortController();
     const here = locationRef.current;
     const t = setTimeout(async () => {
       setBusy(true); setErr(null);
       setSearchedTerm(term);
 
-      // Offline gazetteer first — instant, no network.
+      // The search engine — matcher, token index, cross-source scoring — loads
+      // here, not at boot. Nothing searches until someone types, and the entry
+      // bundle (parsed on the main thread before the app is interactive) should
+      // not carry a matcher for a query that may never come. First use pays one
+      // module load; after that it is the same instance.
+      const [gaz, merge, all] = await Promise.all([
+        import('./search/gaz'),
+        import('./search/merge'),
+        import('./search/all'),
+      ]);
+      if (cancelled) return;
+      const query = gaz.parseQuery(term);
+
+      // Distance on every row, in the driver's units: "1.2 km · street" answers
+      // "which of these two Fifth Avenues" before the tap, not after.
+      const dist = (pos: LatLng) =>
+        formatDistance(haversineM(here[0], here[1], pos[0], pos[1]), props.units);
+
+      // Offline gazetteer first — instant, no network. Matching, fuzzy
+      // tolerance and ranking all live in `search/gaz.ts`, one engine shared
+      // with the multi-region search.
       // With more than one region loaded, search every gazetteer and label the
       // result with its region, otherwise a hit in the "other" province looks
       // identical to one underfoot.
       const multi = props.regions.length > 1;
       const localHits: SearchHit[] = multi
-        ? searchAll(regionLib, term, here, 20).map((h) => ({
-            label: h.entry.name,
-            sub: h.regionName === 'Local map' ? h.entry.cat : `${h.entry.cat}${SEP}${h.regionName}`,
+        ? all.searchAll(regionLib, term, here, 20).map((h) => ({
+            label: displayGazName(h.entry),
+            sub: h.regionName === 'Local map'
+              ? `${h.entry.cat}${SEP}${dist([h.entry.lon, h.entry.lat])}`
+              : `${h.entry.cat}${SEP}${h.regionName}${SEP}${dist([h.entry.lon, h.entry.lat])}`,
             pos: [h.entry.lon, h.entry.lat] as LatLng,
             source: 'offline' as const,
+            score: h.score,
           }))
-        : searchGazetteer(props.dataset?.gaz ?? [], term, here, 12).map((g) => ({
-            label: g.name, sub: g.cat, pos: [g.lon, g.lat] as LatLng, source: 'offline' as const,
+        : gaz.scoreGazetteer(props.dataset?.gaz ?? [], term, here, 12).map((h) => ({
+            label: displayGazName(h.entry),
+            sub: `${h.entry.cat}${SEP}${dist([h.entry.lon, h.entry.lat])}`,
+            pos: [h.entry.lon, h.entry.lat] as LatLng,
+            source: 'offline' as const,
+            score: h.score,
           }));
-      if (!cancelled) setResults(dedupeHits(localHits));
 
-      // Enrich with Nominatim when there's a network.
-      if (props.online) {
-        try {
-          const places = await searchPlaces(term, { near: here, limit: 8 });
-          if (!cancelled) {
-            setResults((prev) => {
-              const extra = places.map((p: Place) => ({
-                label: p.name,
-                sub: p.displayName.split(',').slice(1, 3).join(',').trim(),
-                pos: [p.lon, p.lat] as LatLng,
-                source: 'online' as const,
-              }));
-              // Deduped on position as well as label: the gazetteer and
-              // Nominatim both index the same OSM data, so "Memorial Dr"
-              // arrived three times from offline alone and "Bow River" eight
-              // times from online.
-              return dedupeHits([...prev, ...extra]).slice(0, 14);
+      // The driver's own saved places rank on the same scale, with an intent
+      // boost (see `search/merge.ts`): searching "home" is their home before it
+      // is a furniture shop across town — and when the query does not touch a
+      // saved label at all, it is not in the list.
+      const savedHits: SearchHit[] = [];
+      if (query) {
+        for (const [slot, p] of Object.entries(props.places) as [PlaceSlot, SavedPlace][]) {
+          const s = merge.scoreSavedHit(query, p.label, p.pos, here);
+          if (s != null) {
+            savedHits.push({
+              label: p.label,
+              sub: slot === 'home' ? 'Home' : 'Work',
+              pos: p.pos,
+              source: 'saved' as const,
+              score: s,
             });
           }
+        }
+      }
+
+      // One ranked list across sources, duplicates collapsed (`search/results.ts`).
+      if (!cancelled) setResults(mergeHits(localHits, savedHits));
+
+      // Enrich with Nominatim when there's a network. Online hits are scored on
+      // the same scale and *merged*, not appended — the two lists used to be
+      // concatenated offline-first, so an exact online match could never
+      // surface above a weak offline one. The row's badge still says which
+      // server the hit came from; only the ordering is unified.
+      if (props.online) {
+        try {
+          const places = await searchPlaces(term, { near: here, limit: 8, signal: aborted.signal });
+          if (!cancelled && query) {
+            const extra = places.map((p: Place) => ({
+              label: p.name,
+              sub: [p.displayName.split(',').slice(1, 3).join(',').trim(), dist([p.lon, p.lat])]
+                .filter(Boolean).join(SEP),
+              pos: [p.lon, p.lat] as LatLng,
+              source: 'online' as const,
+              score: merge.scoreOnlineHit(query, p.name, p.importance, [p.lon, p.lat], here),
+            }));
+            setResults(mergeHits(localHits, savedHits, extra));
+          }
         } catch (e) {
-          if (!cancelled) setErr('Online search unavailable — showing offline results only.');
+          // A superseded request is not a failure to apologise for: the newer
+          // query is already on screen, and the card would describe a problem
+          // the driver cannot see and did not cause.
+          if (!cancelled && (e as Error).name !== 'AbortError') {
+            setErr('Online search unavailable — showing offline results only.');
+          }
         }
       }
       if (!cancelled) setBusy(false);
     }, 250);
-    return () => { cancelled = true; clearTimeout(t); };
+    return () => { cancelled = true; aborted.abort(); clearTimeout(t); };
     // `props.location` is intentionally NOT a dependency and `locationKey` is
     // its stand-in; the body reads the live value from `locationRef`. Adding
     // `props.location` here is exactly the bug this note exists to prevent — see
     // `locationKey` above — and `test/audit-regressions.spec.ts` asserts the raw
-    // array stays out of this dependency list.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, cat, props.dataset, props.online, locationKey, props.regions, locationRef]);
+    // array stays out of this dependency list. (The list is complete without a
+    // lint suppression now, which is itself worth keeping true.)
+  }, [q, cat, props.dataset, props.online, locationKey, props.regions, props.places, props.units, locationRef]);
 
   return (
     <div className="search-root">
@@ -4094,6 +4243,20 @@ function SearchScreen(props: {
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              // ArrowDown leaves the box for the first row: the list of
+              // results is what the arrows are *for*, and the alternative —
+              // ArrowDown moving the caret to the end of the query — is never
+              // what a driver pressing it wants.
+              if (e.key === 'ArrowDown') {
+                const first =
+                  document.querySelector<HTMLButtonElement>('.search-results button.result-row');
+                if (first) {
+                  e.preventDefault();
+                  first.focus();
+                }
+              }
+            }}
             placeholder="Search places, streets, addresses"
             aria-label="Search places, streets and addresses"
             enterKeyHint="search"
@@ -4106,7 +4269,16 @@ function SearchScreen(props: {
             <button
               type="button"
               className="search-clear"
-              onClick={() => { setQ(''); setResults([]); setBusy(false); }}
+              onClick={() => {
+                setQ('');
+                setResults([]);
+                setBusy(false);
+                // The empty state keys off `searchedTerm`, not `q`: without
+                // this, clearing the box re-answered the query that was just
+                // erased — "No matches for 'xy'", with an empty box.
+                setSearchedTerm('');
+                setErr(null);
+              }}
               aria-label="Clear search"
             >
               <IconClose size={ICON.secondary} />
@@ -4146,14 +4318,31 @@ function SearchScreen(props: {
          * Previously only the first rendered, so ten of twenty-four query shapes
          * — a typo, a house number, a category word — produced a completely blank
          * black screen indistinguishable from a hang.
+         *
+         * The empty state now *does* something: when the query is close to a
+         * real name ("calgry" -> "Calgary") it offers it, because the most
+         * common cause of zero results is one dropped letter and the fix
+         * should not require the driver to see it.
          */}
         <div aria-live="polite" aria-busy={busy}>
           {busy && !results.length && !cat && (
             <div style={{ ...T.body3, color: ink.secondary }} role="status">Searching…</div>
           )}
+          {busy && results.length > 0 && !cat && (
+            <div style={{ ...T.body3, color: ink.secondary }} role="status">Searching…</div>
+          )}
           {!busy && !results.length && !cat && searchedTerm && (
             <div className="empty-state" role="status">
               <div style={T.body3m}>No matches for “{searchedTerm}”</div>
+              {suggestion && (
+                <button
+                  type="button"
+                  className="chip suggestion-chip"
+                  onClick={() => { setQ(suggestion); setSearchedTerm(''); }}
+                >
+                  Did you mean “{suggestion}”?
+                </button>
+              )}
               <div style={{ ...T.sub3, color: ink.secondary, marginTop: DP.P1 }}>
                 {props.regions.length || props.dataset
                   ? 'Try fewer words, a street name without the house number, or a nearby category.'
@@ -4174,21 +4363,27 @@ function SearchScreen(props: {
           them.
         */}
         {results.length > 0 && (
-        <ul className="result-list" aria-label={`${results.length} search result${results.length === 1 ? '' : 's'}`}>
+        <ul
+          className="result-list"
+          aria-label={`${results.length} search result${results.length === 1 ? '' : 's'}`}
+          onKeyDown={rowKeys}
+        >
         {results.map((r, i) => (
           <li key={`${r.source}-${r.label}-${i}`}>
           <button className="result-row" onClick={() => props.onPick(r.pos, r.label)}>
             <span className="result-icon"><IconGoto size={ICON.secondary} /></span>
             <span className="result-text">
-              <span style={T.body3m}>{r.label}</span>
+              <span style={T.body3m}><HighlightedLabel label={r.label} q={searchedTerm} /></span>
               <span style={{ ...T.sub3, color: ink.secondary }}>{r.sub}</span>
             </span>
             {/*
               The badge and the chevron travel together, as one trailing cluster.
 
-              Where the row came from matters: an online hit has been round-
-              tripped through a third-party geocoder, which is not true of a
-              local one, and the two used to be indistinguishable.
+              Where the row came from matters, and with sources now ranked
+              against each other it matters more than before: the badge is the
+              only thing saying why this row is above that one — an online hit
+              has been round-tripped through a third-party geocoder, a saved hit
+              is the driver's own, a local one is neither.
 
               They were two independent flex children, each holding its share of
               the row for ever, which at 412px left the title about 108px wide and
@@ -4198,7 +4393,7 @@ function SearchScreen(props: {
               full width of the row instead of paying rent to two small glyphs.
             */}
             <span className="result-tail">
-              <span className={`source-tag ${r.source}`}>{r.source === 'online' ? 'Online' : 'Offline'}</span>
+              <span className={`source-tag ${r.source}`}>{SOURCE_LABEL[r.source]}</span>
               <IconChevronRight size={ICON.secondary} color={ink.tertiary} />
             </span>
           </button>
@@ -4206,6 +4401,35 @@ function SearchScreen(props: {
         ))}
         </ul>
         )}
+        {/*
+          Saved places, before typing. They are also a search source (the
+          effect above ranks them with the rest), but half of all searches are
+          for somewhere the driver has already been — Home and Work should not
+          need a query at all.
+        */}
+        {!q && !cat && savedRows.length > 0 && (
+          <>
+            <div className="section-head" style={{ ...T.body3m, marginTop: DP.P4 }}>Saved</div>
+            <ul className="result-list" aria-label="Saved places" onKeyDown={rowKeys}>
+              {savedRows.map((r) => (
+                <li key={r.label}>
+                  <button className="result-row" onClick={() => props.onPick(r.pos, r.label)}>
+                    <span className="result-icon"><IconPin size={ICON.secondary} /></span>
+                    <span className="result-text">
+                      <span style={T.body3m}>{r.label}</span>
+                      <span style={{ ...T.sub3, color: ink.secondary }}>{r.sub}</span>
+                    </span>
+                    <span className="result-tail">
+                      <span className={`source-tag ${r.source}`}>{SOURCE_LABEL[r.source]}</span>
+                      <IconChevronRight size={ICON.secondary} color={ink.tertiary} />
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
         {!q && !cat && categories.length > 0 && (
           <>
             <div className="section-head" style={{ ...T.body3m, marginTop: DP.P4 }}>Browse</div>

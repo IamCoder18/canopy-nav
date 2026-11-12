@@ -468,50 +468,7 @@ function area(b: [number, number, number, number]) {
 }
 
 /* ---------------------- search across regions ---------------------- */
-
-export interface RegionHit {
-  regionId: string;
-  regionName: string;
-  score: number;
-  entry: { name: string; lat: number; lon: number; cat: string; rank: number };
-}
-
-export function searchAll(
-  lib: RegionLibrary,
-  q: string,
-  near: LatLng,
-  limit = 20,
-): RegionHit[] {
-  const hits: RegionHit[] = [];
-  const needle = q.trim().toLowerCase();
-  if (!needle) return hits;
-
-  const mPerDegLon = 111320 * Math.cos((near[1] * Math.PI) / 180);
-
-  outer:
-  for (const region of lib.all) {
-    for (const g of region.dataset.gaz) {
-      const name = g.name.toLowerCase();
-      let score = -1;
-      if (name === needle) score = 1000;
-      else if (name.startsWith(needle)) score = 800 - (name.length - needle.length);
-      else if (name.includes(needle)) score = 500 - (name.length - needle.length);
-      if (score < 0) continue;
-
-      const dLat = (g.lat - near[1]) * 111320;
-      const dLon = (g.lon - near[0]) * mPerDegLon;
-      const distM = Math.hypot(dLat, dLon);
-
-      hits.push({
-        regionId: region.id,
-        regionName: region.name,
-        score: score + g.rank - Math.min(120, distM / 500),
-        entry: g,
-      });
-      // Cap total work, not per-region work: breaking only the inner loop let a
-      // 20-region library push tens of thousands of hits before stopping.
-      if (hits.length > 6000) break outer;
-    }
-  }
-  return hits.sort((a, b) => b.score - a.score).slice(0, limit);
-}
+// `searchAll` lives in `src/search/all.ts` now, with the one matcher it shares
+// with the single-region search. It is not re-exported here on purpose: the
+// region library is boot code and must not drag the search engine into the
+// entry bundle — search loads when someone searches.

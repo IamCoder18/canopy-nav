@@ -173,7 +173,13 @@ for (const vp of VIEWPORTS) {
   await visit('home', 'home');
 
   // import so later screens have a map
-  await page.click('text=Import .osm file');
+  // The button reads exactly "Import .osm or routing pack" — the app's comment
+  // above it says the browser gates select it by that text — and `e2e.mjs`
+  // does. This harness still said "Import .osm file", which no element has said
+  // since the button was renamed, so the whole suite died on a 30 s timeout at
+  // its own first step (found while running the gates for §18; the rename's
+  // commit updated one gate and missed this one).
+  await page.click('text=Import .osm or routing pack');
   await page.waitForTimeout(500);
   const input = await page.$('input[type=file]');
   if (input) {
@@ -291,6 +297,20 @@ for (const vp of VIEWPORTS) {
         check('layers panel lists its options', (panel.rows ?? 0) >= 2, `${panel.rows} rows`);
         await visit('layers panel', 'layers-panel');
 
+        // Close the panel before looking for the voice control. The control
+        // lives in the nav rail, and the rail deliberately unmounts while a
+        // sheet is open (`{!sheetOpen && ...}` — the Google-style arrangement):
+        // checking for the button with the layers sheet up found nothing and
+        // reported a missing control that was merely behind the sheet. The
+        // voice check moved below the close for that reason.
+        const closeBtn = await page.$('button[aria-label="Close map layers"]');
+        if (closeBtn) {
+          await closeBtn.click();
+          await page.waitForTimeout(500);
+          const closed = await page.evaluate(() => !document.querySelector('.nav-panel'));
+          check('the layers panel closes', closed);
+        }
+
         // The voice control. It used to claim an audio capability the app did not
         // have at all — see the honesty note in STATUS.md. It now drives real
         // spoken guidance, and where the WebView has no speech engine it is
@@ -307,13 +327,6 @@ for (const vp of VIEWPORTS) {
           check('the voice control is disabled exactly when voice is unavailable',
             (await mute.isDisabled()) === !!unavailable,
             `disabled=${await mute.isDisabled()} labelSaysUnavailable=${!!unavailable}`);
-        }
-        const closeBtn = await page.$('button[aria-label="Close map layers"]');
-        if (closeBtn) {
-          await closeBtn.click();
-          await page.waitForTimeout(500);
-          const closed = await page.evaluate(() => !document.querySelector('.nav-panel'));
-          check('the layers panel closes', closed);
         }
       }
     }

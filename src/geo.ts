@@ -112,6 +112,45 @@ export function haversine(a: LatLng, b: LatLng): number {
   return 2 * R_EARTH * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+/**
+ * Great-circle distance in metres.
+ *
+ * Shared by routing, search ranking and house-number interpolation. It used to
+ * be a private helper inside `engine.worker.ts`, which meant search ranking
+ * reimplemented it as a planar approximation in a second file — two "distance
+ * from here" formulas that disagree, ranking results against one of them.
+ */
+export function haversineM(lon1: number, lat1: number, lon2: number, lat2: number): number {
+  const R = 6371008.8;
+  const toRad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toRad;
+  const dLon = (lon2 - lon1) * toRad;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/**
+ * How much a hit's distance from here costs it in search ranking.
+ *
+ * Two terms, because one term cannot express the two decisions a result list
+ * serves. The first is the gentle `d/500`, capped at 120 — the bias search has
+ * always used, tuned to order results *within* a region (at 340 m it is a
+ * nudge; at 60 km it is about one name-tier step). The second is a locality
+ * term past 200 km, and without it an exact name match on the other side of
+ * the continent — "Elbow, Howard County, Texas", 7,503 km from the fixture —
+ * outranks "Elbow St" at 340 m, and the driver taps Texas. It saturates at
+ * 350, so a landmark the driver genuinely means to drive to (exact name, high
+ * importance) still beats weak local noise.
+ *
+ * Shared by every source (`search/gaz.ts`, `search/merge.ts`): a ranking where
+ * each source discounts distance its own way is not one ranking.
+ */
+export function distanceBias(near: LatLng, pos: LatLng): number {
+  const d = haversineM(near[0], near[1], pos[0], pos[1]);
+  return Math.min(120, d / 500) + Math.min(350, Math.max(0, d - 200_000) / 3000);
+}
+
 export function bearing(a: LatLng, b: LatLng): number {
   const toRad = Math.PI / 180;
   const lon1 = a[0] * toRad, lat1 = a[1] * toRad;

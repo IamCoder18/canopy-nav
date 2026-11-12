@@ -516,3 +516,59 @@ describe('CATEGORIES', () => {
     expect(CATEGORIES.every((c) => c.label.length > 0)).toBe(true);
   });
 });
+
+describe('cancellation', () => {
+  /** A fetch that only settles when its signal aborts it. */
+  const hangingFetch = () =>
+    fetchMock.mockImplementation((_url: string, init: RequestInit) =>
+      new Promise((_res, rej) => {
+        init.signal?.addEventListener('abort', () => rej(new DOMException('Aborted', 'AbortError')));
+      }));
+
+  it('never reaches the network for a request already superseded', async () => {
+    // A superseded request that still fetches spends the shared 1 req/s budget
+    // on an answer nobody will see — and on a service that bans clients that
+    // do that, it costs every future search too.
+    hangingFetch();
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const err = await settle(searchPlaces('x', { signal: ctrl.signal }).catch((e) => e));
+    expect(err.name).toBe('AbortError');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('aborts an in-flight request when superseded, and says so', async () => {
+    hangingFetch();
+    const ctrl = new AbortController();
+    const p = searchPlaces('x', { signal: ctrl.signal }).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    ctrl.abort();
+    const err = await p;
+    expect(err.name).toBe('AbortError');
+    // The message is what the caller uses to tell "the query moved on" from
+    // "the server is dead" — the first is not a failure, the second is.
+    expect(err.message).toMatch(/superseded/);
+    expect(err.message).not.toMatch(/did not answer/);
+  });
+
+  it('still blames the server — not the caller — on a deadline', async () => {
+    hangingFetch();
+    const p = searchPlaces('x').catch((e) => e);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(13_000); // past GEOCODE_TIMEOUT_MS
+    const err = await p;
+    expect(err.name).not.toBe('AbortError');
+    expect(err.message).toMatch(/did not answer within 12 seconds/);
+  });
+
+  it('gives reverse lookups the same cancellation', async () => {
+    hangingFetch();
+    const ctrl = new AbortController();
+    const p = reverseGeocode([0, 0], { signal: ctrl.signal }).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(10_000);
+    ctrl.abort();
+    const err = await p;
+    expect(err.name).toBe('AbortError');
+  });
+});

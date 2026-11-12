@@ -2179,6 +2179,40 @@ code {
      button on the same row. */
 }
 .source-tag.online { color: #F5D67E; background: rgba(253, 214, 99, 0.18); }
+/* The driver's own Home/Work: a third provenance, and a third colour family
+   (cool blue against the online amber), so the three badges separate at a
+   glance rather than only by their four-letter words. */
+.source-tag.saved { color: #A8CCF0; background: rgba(120, 180, 240, 0.18); }
+
+/*
+ * The matched part of a result label.
+ *
+ * `<mark>` for semantics — it is exactly what the element means — with
+ * `color: inherit` so the emphasis is a tint and a weight, never a colour
+ * change that could drop the label's contrast below the row's.
+ */
+.match-hl {
+  background: rgba(253, 214, 99, 0.16);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 700;
+}
+
+/*
+ * "Did you mean …?" in the empty state. A `.chip` otherwise: `white-space:
+ * normal` and a real height, because a place name is long by nature and the
+ * chip's `nowrap` would push it out of a 412dp column.
+ */
+.suggestion-chip {
+  margin-top: 12px;
+  white-space: normal;
+  height: auto;
+  min-height: 44px;
+  padding: 8px 16px;
+  max-width: 100%;
+  text-align: left;
+}
 
 /* Why a catalogue row cannot be downloaded, on screen rather than in a `title`
    attribute — a head unit has no hover, so a tooltip is a message nobody reads.
