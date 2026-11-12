@@ -26,8 +26,12 @@ jobs:
       # import -> offline search -> route -> navigate -> regions. That is the
       # only check exercising the worker, region store, router and screens
       # together, so a wiring regression can't slip past unit tests.
+      # Install with the pinned playwright-core, not `npx playwright` (which
+      # fetches the latest CLI and installs browsers for a *different* build than
+      # the tests launch). The tests require via `playwright-core`, so its build
+      # is the one to download — `chromium` includes the headless shell it uses.
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright-core install --with-deps chromium
 
       # Every gate, in one list — `tools/verify.mjs`, the same file `npm run
       # verify` runs locally. It used to be spelled out here step by step,
