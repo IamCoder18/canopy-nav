@@ -28,21 +28,138 @@ export function isInsecureTransport(url: URL): boolean {
   return url.protocol === 'http:' && !['localhost','127.0.0.1','[::1]'].includes(url.hostname);
 }
 function address(base: URL, path: string): string { return `${base.href.replace(/\/$/,'')}${path}`; }
+
+/** Bytes the *default* server configuration accepts (`PACKSERVER_MAX_UPLOAD_MB`). */
+const DEFAULT_UPLOAD_CAP = 2048 * 1024 * 1024;
+
+export interface UploadProgress {
+  /** Bytes handed to the network so far. */
+  sent: number;
+  /** Total bytes, or `null` when the platform does not report one. */
+  total: number | null;
+  /** `sent / total`, or `null` when the total is unknown or zero. */
+  fraction: number | null;
+}
+export interface SubmitOptions { region?: string; signal?: AbortSignal; onProgress?: (p: UploadProgress) => void; }
+
+/**
+ * The filename rules `server/src/api.rs` enforces *after* the bytes have arrived,
+ * checked here first so a phone does not push a gigabyte at a server that will
+ * refuse its name. Kept literal rather than regex-collapsed so each rule can be
+ * matched to its counterpart in the Rust handler.
+ */
+export function validateUploads(files: File[]): File[] {
+  if (!files.length) throw new Error('Choose one or more .osm.pbf files');
+  if (files.length > 128) throw new Error('The pack server takes at most 128 extracts per build. Split these across several builds.');
+  const seen = new Set<string>();
+  for (const f of files) {
+    if (!f.name.endsWith('.osm.pbf')) throw new Error(`“${f.name}” is not a .osm.pbf extract. Convert it first — osmium cat region.osm -o region.osm.pbf — and choose the converted file.`);
+    // Mirrors the Rust handler's `filename.contains(['/', '\\', '\0', '\n', '\r', '\''])`
+    // plus its length and leading-dot rules, character by character.
+    const unsafe = f.name.startsWith('.') || f.name.length > 180 || ['/', '\\', '\0', '\n', '\r', "'"].some((c) => f.name.includes(c));
+    if (unsafe) throw new Error(`“${f.name}” is not a filename the pack server accepts. Rename it to a plain name ending in .osm.pbf.`);
+    if (seen.has(f.name)) throw new Error(`Two of the chosen files are both called “${f.name}”. Each input needs its own name.`);
+    seen.add(f.name);
+  }
+  return files;
+}
+
+/**
+ * An advisory, not a refusal: the cap is the *server's* configuration and only
+ * the server knows it. Oversize bodies are refused from the Content-Length
+ * before a byte is accepted, so the worst case is a fast failure — but the user
+ * should hear about the limit before leaving on a multi-gigabyte send.
+ */
+export function uploadSizeNote(files: File[]): string | null {
+  const total = files.reduce((n, f) => n + (Number.isFinite(f.size) ? f.size : 0), 0);
+  if (total <= DEFAULT_UPLOAD_CAP) return null;
+  return `These files total ${Math.round(total / 1048576)} MB. The pack server's default upload limit is 2 GB (PACKSERVER_MAX_UPLOAD_MB) — crop large extracts with osmium extract, or the upload will be refused.`;
+}
+
+/**
+ * The service's `{error:{code,message,detail}}` contract as something a driver
+ * can act on, with the server's own words kept alongside rather than replaced
+ * (the same policy as the routing engine's error translation). Never includes
+ * request headers or credentials.
+ */
+export function explainFailure(status: number, body: unknown, retryAfter?: string | null): string {
+  const e = (body as { error?: { code?: string; message?: string; detail?: string } } | null | undefined)?.error;
+  const code = typeof e?.code === 'string' ? e.code : '';
+  const raw = [typeof e?.message === 'string' ? e.message : '', typeof e?.detail === 'string' ? e.detail : ''].filter(Boolean).join(' — ');
+  const minutes = Number(retryAfter) / 60;
+  const retry = Number.isFinite(minutes) && minutes >= 1 ? ` Try again in about ${Math.round(minutes)} minutes.` : ' Try again later.';
+  let action = '';
+  if (status === 401 || code === 'unauthorized') action = 'The pack server rejected the API key. Check it in Settings → Pack service.';
+  else if (status === 413 || code === 'too_large') action = 'The upload is larger than the pack server accepts. Crop the extract — osmium extract -b <west,south,east,north> in.osm.pbf -o area.osm.pbf — or raise PACKSERVER_MAX_UPLOAD_MB on the server.';
+  else if (code === 'input_not_pbf') action = 'The pack server refused the input: every file must be a real .osm.pbf extract.';
+  else if (code === 'input_unsorted') action = 'The pack server could not sort this extract. Sort it first — osmium sort in.osm.pbf -o sorted.osm.pbf — and upload again.';
+  else if (status === 429 || code === 'rate_limited') action = `The pack server is limiting uploads for this key (2 at a time, 10 per hour by default).${retry}`;
+  else if (code === 'not_ready') action = 'That build is not finished yet.';
+  return action ? (raw ? `${action} The server said: ${raw}` : action) : (raw || `Pack service returned HTTP ${status}`);
+}
+
 export class PackService {
   private base: URL;
-  constructor(private settings: PackServiceSettings, private fetcher: typeof fetch = fetch) { this.base = serviceAddress(settings); }
+  // The XHR factory is injectable because `upload()` is XHR-only (see below) and
+  // a unit test must be able to drive it without a network.
+  constructor(private settings: PackServiceSettings, private fetcher: typeof fetch = fetch, private xhr: () => XMLHttpRequest = () => new XMLHttpRequest()) { this.base = serviceAddress(settings); }
   private async request(path: string, init: RequestInit = {}): Promise<Response> {
     const response = await this.fetcher(address(this.base,path), { ...init, headers: { ...init.headers, 'X-API-Key': this.settings.apiKey.trim() }, redirect: 'error', credentials: 'omit', referrerPolicy: 'no-referrer' });
     if (!response.ok) {
-      const e = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+      const e = await response.json().catch(() => null);
       // Never interpolate request headers or credentials into errors/logs.
-      throw new Error(e?.error?.message ?? `Pack service returned HTTP ${response.status}`);
+      throw new Error(explainFailure(response.status, e, response.headers.get('Retry-After')));
     } return response;
   }
-  async submit(files: File[], region?: string, signal?: AbortSignal): Promise<{ id: string }> {
-    if (!files.length || files.some((f) => !f.name.endsWith('.osm.pbf'))) throw new Error('Choose one or more .osm.pbf files');
-    const body = new FormData(); for (const file of files) body.append('file',file); if (region) body.append('region',region);
-    return (await this.request('/v1/builds',{ method: 'POST',body,signal })).json();
+  async submit(files: File[], options: SubmitOptions = {}): Promise<{ id: string }> {
+    const body = new FormData();
+    for (const file of validateUploads(files)) body.append('file', file, file.name);
+    const region = options.region?.trim();
+    if (region) body.append('region', region);
+    return this.upload(body, options);
+  }
+  /**
+   * POST the multipart build request.
+   *
+   * This is `XMLHttpRequest`, not `fetch`, for one reason: it is the only way a
+   * WebView reports *upload* progress, and a province extract is a multi-minute,
+   * multi-hundred-megabyte send from a phone. What `fetch` was buying here —
+   * `redirect: 'error'`, the no-credentials/no-referrer policy — is
+   * re-established explicitly below.
+   */
+  private upload(body: FormData, options: SubmitOptions): Promise<{ id: string }> {
+    return new Promise((resolve, reject) => {
+      const xhr = this.xhr();
+      const onAbort = () => xhr.abort();
+      let settled = false;
+      const settle = (finish: () => void) => {
+        if (settled) return;
+        settled = true;
+        options.signal?.removeEventListener('abort', onAbort);
+        finish();
+      };
+      if (options.signal?.aborted) { settle(() => reject(options.signal?.reason ?? new DOMException('The upload was cancelled.', 'AbortError'))); return; }
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+      xhr.open('POST', address(this.base, '/v1/builds'));
+      // Key only to the configured origin, exactly as `request()` sends it.
+      xhr.setRequestHeader('X-API-Key', this.settings.apiKey.trim());
+      xhr.upload.onprogress = (e) => options.onProgress?.({ sent: e.loaded, total: e.lengthComputable ? e.total : null, fraction: e.lengthComputable && e.total > 0 ? e.loaded / e.total : null });
+      xhr.onload = () => settle(() => {
+        // XHR follows redirects silently, so `redirect: 'error'` is enforced by
+        // hand: a response that did not come from the configured origin is
+        // refused before its body is trusted.
+        if (xhr.responseURL && new URL(xhr.responseURL).origin !== this.base.origin) { reject(new Error('The pack server redirected the upload; the response is refused.')); return; }
+        let payload: unknown = null;
+        try { payload = JSON.parse(xhr.responseText); } catch { /* the status check says it plainly */ }
+        if (xhr.status < 200 || xhr.status >= 300) { reject(new Error(explainFailure(xhr.status, payload, xhr.getResponseHeader('Retry-After')))); return; }
+        const raw = (payload as { id?: unknown } | null)?.id;
+        if (typeof raw !== 'string') { reject(new Error('The pack server did not return a build id')); return; }
+        try { resolve({ id: this.id(raw) }); } catch (e) { reject(e); }
+      });
+      xhr.onerror = () => settle(() => reject(new Error(`Could not reach the pack server at ${this.base.host}. Check the address and this device's connection.`)));
+      xhr.onabort = () => settle(() => reject(options.signal?.reason ?? new DOMException('The upload was cancelled.', 'AbortError')));
+      xhr.send(body);
+    });
   }
   private id(id: string): string { if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw new Error('Invalid build id'); return id; }
   async status(id: string, signal?: AbortSignal): Promise<BuildStatus> { return (await this.request(`/v1/builds/${this.id(id)}`,{signal})).json(); }

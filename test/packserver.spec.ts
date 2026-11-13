@@ -5,7 +5,7 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import { PMTiles, zxyToTileId } from 'pmtiles';
 import { validateStyleMin } from '@maplibre/maplibre-gl-style-spec';
 import { unpackBundle, validateManifest, loadGazetteer, importBundle, diskGate } from '../src/regions/bundle';
-import { PackService, serviceAddress, isInsecureTransport } from '../src/regions/service';
+import { PackService, serviceAddress, isInsecureTransport, validateUploads, uploadSizeNote, explainFailure } from '../src/regions/service';
 import { readPackService, writePackService } from '../src/settings';
 import { scoreGazetteer } from '../src/search/gaz';
 import { searchContext, searchType } from '../src/search/types';
@@ -153,5 +153,84 @@ describe('configured service client', () => {
     const client = new PackService({url:'https://packs.example.org',apiKey:'secret'},vi.fn(async () => new Response(JSON.stringify({state:'failed',error:{message:'PBF not sorted'}}))) as typeof fetch);
     await expect(client.poll('bld_test')).rejects.toThrow('PBF not sorted');
     const ctrl = new AbortController();ctrl.abort();await expect(client.poll('bld_test',{signal:ctrl.signal})).rejects.toThrow();
+  });
+});
+
+/** The slice of XMLHttpRequest the upload client drives, faked for the unit tests. */
+class FakeXHR {
+  static last: FakeXHR | null = null;
+  upload: { onprogress: ((e: ProgressEvent) => void) | null } = { onprogress: null };
+  status = 0; responseText = ''; responseURL = ''; aborted = false;
+  requestHeaders: Record<string,string> = {}; responseHeaders: Record<string,string> = {};
+  method = ''; url = ''; body: FormData | null = null;
+  onload: (() => void) | null = null; onerror: (() => void) | null = null; onabort: (() => void) | null = null;
+  open(method: string, url: string) { this.method = method; this.url = url; }
+  setRequestHeader(name: string, value: string) { this.requestHeaders[name] = value; }
+  getResponseHeader(name: string) { return this.responseHeaders[name] ?? null; }
+  send(body: FormData) { this.body = body; FakeXHR.last = this; }
+  abort() { this.aborted = true; this.onabort?.(); }
+  respond(status: number, body: unknown, headers: Record<string,string> = {}, at = this.url) {
+    this.status = status; this.responseText = JSON.stringify(body); this.responseHeaders = headers; this.responseURL = at; this.onload?.();
+  }
+}
+const pbf = (name: string, bytes = 4) => new File([new Uint8Array(bytes)], name);
+const uploads: FakeXHR[] = [];
+const uploadClient = (fetcher: typeof fetch = vi.fn(async () => new Response('{}'))) =>
+  new PackService({url:'https://packs.example.org',apiKey:'secret'}, fetcher, () => { const x = new FakeXHR(); uploads.push(x); return x as unknown as XMLHttpRequest; });
+
+describe('pack service upload', () => {
+  it('preflights the filename rules the server enforces, before any bytes move', () => {
+    expect(() => validateUploads([])).toThrow('Choose one or more .osm.pbf files');
+    expect(() => validateUploads([pbf('region.osm'), pbf('a.osm.pbf')])).toThrow('not a .osm.pbf extract');
+    expect(() => validateUploads([pbf('../a.osm.pbf')])).toThrow('not a filename');
+    expect(() => validateUploads([pbf('a.osm.pbf'), pbf('b.osm.pbf'), pbf('a.osm.pbf')])).toThrow('both called');
+    expect(() => validateUploads(Array.from({length: 129},(_,i) => pbf(`f${i}.osm.pbf`)))).toThrow('at most 128');
+    expect(validateUploads([pbf('alberta-latest.osm.pbf')])).toHaveLength(1);
+  });
+  it('advises on the default upload cap without refusing smaller sends', () => {
+    expect(uploadSizeNote([pbf('a.osm.pbf')])).toBeNull();
+    // Only `size` is read, so no multi-gigabyte buffer is allocated to test it.
+    expect(uploadSizeNote([{ name: 'a.osm.pbf', size: 2.5 * 1024 * 1024 * 1024 }] as unknown as File[])).toContain('PACKSERVER_MAX_UPLOAD_MB');
+  });
+  it('submits the extracts as one multipart build request and returns the build id', async () => {
+    const client = uploadClient();
+    const promise = client.submit([pbf('alberta-latest.osm.pbf'),pbf('saskatchewan-latest.osm.pbf')],{ region: 'prairies' });
+    const x = FakeXHR.last!;
+    expect(x.method).toBe('POST'); expect(x.url).toBe('https://packs.example.org/v1/builds');
+    expect(x.requestHeaders).toEqual({ 'X-API-Key': 'secret' });
+    expect((x.body!.getAll('file') as File[]).map((f) => f.name)).toEqual(['alberta-latest.osm.pbf','saskatchewan-latest.osm.pbf']);
+    expect(x.body!.get('region')).toBe('prairies');
+    x.respond(202,{ id: 'bld_test',state: 'queued' });
+    await expect(promise).resolves.toEqual({ id: 'bld_test' });
+  });
+  it('reports upload progress and cancels the send', async () => {
+    const client = uploadClient(); const seen: number[] = [];
+    const ctrl = new AbortController();
+    const promise = client.submit([pbf('a.osm.pbf')],{ signal: ctrl.signal,onProgress: (p) => seen.push(p.sent) });
+    const x = FakeXHR.last!;
+    x.upload.onprogress?.({ loaded: 5,total: 10,lengthComputable: true } as ProgressEvent);
+    expect(seen).toEqual([5]);
+    ctrl.abort();
+    expect(x.aborted).toBe(true);
+    await expect(promise).rejects.toThrow();
+  });
+  it('translates refusals into what the driver can do, keeping the server words', async () => {
+    expect(explainFailure(401,{error:{code:'unauthorized',message:'Unknown key'}})).toMatch(/rejected the API key.*Unknown key/);
+    expect(explainFailure(413,{error:{code:'too_large',message:'Upload exceeds configured body cap'}})).toContain('osmium extract');
+    expect(explainFailure(422,{error:{code:'input_unsorted',message:'PBF not sorted'}})).toContain('osmium sort');
+    expect(explainFailure(422,{error:{code:'input_not_pbf',message:'Each file must have a safe .osm.pbf filename'}})).toContain('safe .osm.pbf filename');
+    expect(explainFailure(429,{error:{code:'rate_limited',message:'Slow down'}})).toContain('Try again later');
+    expect(explainFailure(429,{error:{code:'rate_limited'}},'3600')).toContain('about 60 minutes');
+    const client = uploadClient(vi.fn(async () => new Response(JSON.stringify({error:{code:'unauthorized',message:'Unknown key'}}),{ status: 401 })) as typeof fetch);
+    await expect(client.status('bld_test')).rejects.toThrow('rejected the API key');
+  });
+  it('refuses a redirected response and an invalid build id rather than trusting them', async () => {
+    const client = uploadClient();
+    const redirected = client.submit([pbf('a.osm.pbf')]);
+    FakeXHR.last!.respond(202,{ id: 'bld_test' },{},'https://evil.example.net/v1/builds');
+    await expect(redirected).rejects.toThrow('redirected');
+    const malformed = client.submit([pbf('a.osm.pbf')]);
+    FakeXHR.last!.respond(202,{ id: '../admin' });
+    await expect(malformed).rejects.toThrow('Invalid build id');
   });
 });
