@@ -1930,10 +1930,13 @@ previous revision and now has 12 entries, because gaps closed here were removed 
 than left as struck-through tombstones. References elsewhere in this file to "gap 16"
 or "gap 18" are to the *old* numbering and say so; the current numbers are 1–12.
 
-1. **Never run on physical hardware.** Everything is browser-verified plus one
-   Android 14 emulator. WebView behaviour, real GPS quality, SAF file import and
-   on-phone memory pressure are unproven. The one gap no amount of further work
-   here can close — it needs a phone. *(Was gap 2; renumbered, and the old gap 1
+1. **Physical hardware testing is early: one phone, one car, one drive.** Canopy
+   has run on real hardware — an Android phone mounted in a car, driven with live
+   GPS — which closes the "never run on physical hardware" claim this entry used
+   to carry. What that drive did **not** exercise is what the gap now names: SAF
+   file import on a device, on-phone memory pressure during a province-sized
+   parse (gap 2's measurement is still desktop-only), and anything resembling a
+   long-haul or low-end-device session. *(Was gap 2; renumbered, and the old gap 1
    is closed — see below.)*
 2. **A real province has never been parsed on device.** Streaming (§3.12) is
    verified for equivalence and against a 19-way fixture; peak memory on an
@@ -2715,7 +2718,8 @@ error, and the reason "just re-run it" is the only reliable instruction.
 
 **Cross-region routing is no longer the most serious open item.** §7 has been
 renumbered, and the old gap 1 is closed. What remains at the top is gap 1: never run on
-physical hardware, which needs a phone and no amount of further work here.
+physical hardware, which needs a phone and no amount of further work here. *(It later got
+one: §7 gap 1 now records a drive in a car with live GPS, and has been rewritten in place.)*
 
 ### 9.8 Carried forward
 
@@ -2935,8 +2939,9 @@ role; the steps screen told a user who had imported a map to import a map.
    The map now reports the style it adopted and the layers panel names the difference
    between what was asked for and what is drawn.
 3. **Chrome covers ~98% of the viewport** at phone portrait (§7 gap 10).
-4. **Nothing has run on physical hardware** (§7 gap 1). No further work here
-   closes it.
+4. ~~**Nothing has run on physical hardware**~~ (§7 gap 1) — **closed by a real
+   drive**: an Android phone mounted in a car, driven with live GPS. What that
+   drive did not exercise is what §7 gap 1 names now.
 
 **Closed since this section was written.** The two entries this list used to carry at
 the top — the ETA reading `0 m` while route remained, and cross-region routing being
@@ -4262,8 +4267,8 @@ nobody had checked it:
 > size**. Absolute `px` lengths are not affected by it.
 
 It is in `textscale.ts`'s own header, and it is the reason the detector watched the root
-font size and nothing else. It could not be checked, because §7 gap 1 is that this app
-has never run on physical hardware.
+font size and nothing else. It could not be checked, because §7 gap 1 was that this app
+had never run on physical hardware.
 
 **It is also only half true, and the half that is false is the dangerous one.** A
 platform has more than one way to scale text, and the two leave *different evidence*:
@@ -4642,7 +4647,7 @@ is web-only)"* — and then hands a Blob to `writeFile`.
 to 900 MB that is a 500 MB to 1.2 GB string across the bridge — the same cost that made
 §13 decline to enable `CapacitorHttp` wholesale, and the reason Capacitor's own guidance
 is `@capacitor/file-transfer`. A chunked base64 writer is implementable, and shipping one
-that can only be exercised on hardware I do not have (§7 gap 1) is how this project ends
+that can only be exercised on hardware I did not have (§7 gap 1) is how this project ends
 up with a plausible-looking untested path — §12.2 is the precedent for what that costs.
 
 What *was* fixed is the sentence the failure produces. It used to read:

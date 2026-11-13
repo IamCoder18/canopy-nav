@@ -1,61 +1,57 @@
 # Canopy Nav
 
-An Android app that recreates the **Google Maps dark navigation UI**, with
-**fully offline routing** from OpenStreetMap data.
+An Android navigation app that recreates the **Google Maps dark navigation UI**, with
+**fully offline routing** from OpenStreetMap data — including Valhalla, compiled to
+WebAssembly and running on the device.
 
-Built with **Capacitor + React 19 + TypeScript**. The entire UI is web
-technology wrapped in a native shell, so the same codebase runs in a browser —
-which is why most of it is verified in Chromium rather than on a device.
+Built with **Capacitor + React 19 + TypeScript + MapLibre GL**. The UI is web
+technology in a native shell, so the same build runs in a browser and is verifiable
+there without a device.
 
-Latest release: **v1.2.1**. See [STATUS.md](./STATUS.md) for the full design
-record, including what is *not* finished.
+**Latest release: v1.3.1.** Tested on real hardware — an Android phone mounted in a
+car, driven with live GPS. The full design record, including what is *not* finished,
+is in [STATUS.md](./STATUS.md).
 
----
+## Features
 
-## What it does
-
-- **Recreates Google Maps' dark theme** — its neutral surface ramp
-  (`#1E2024` → `#30343A`), the `#8AB4F8` accent, its radius and elevation
-  scales, and its component language. Colour is **solid, not an alpha ramp**, so
-  a token's contrast is a property of the token rather than of the screen it
-  landed on; every ink is asserted at >= 4.5:1 against every surface by
-  `test/contrast.spec.ts`. Interactive states on surfaces that float over the map
-  are opaque, because `background` *replaces* rather than composites — a
-  translucent hover on the launcher tiles rendered them as bare basemap.
-- **Uses the AAOS *layout* system**: 8dp grid, type scale, and component metrics
-  (96dp app bar, 76dp touch targets, 158dp grid cells) — the numbers are right
-  for a car even where the palette is Google's.
-- **Offline routing** from an imported `.osm` file. No network required.
-- **Online routing** via Valhalla when a network is available, with the engine
-  and fallback policy under your control.
-- **Offline search** — cities, streets, addresses and POIs, built from OSM tags.
-  Import several extracts and search across all of them.
-- **Reroutes when you miss a turn**, keeping the existing guidance on screen
-  until a replacement route exists.
-- **Streams large extracts**, so a province is parsed in a bounded window rather
-  than held in memory twice.
-- **Speaks the guidance** through the platform's own text-to-speech engine, once
-  per step rather than on every position update.
-- **Starts with no network at all.** A service worker precaches the app shell, so
-  opening the app in a tunnel works once it has been opened online once.
-- **Routes across regions as one route**, over a merged graph, behind a memory
-  guard that refuses with a reason instead of being killed mid-journey.
-- **Says what a driver can act on.** A routing server's own error text is
-  translated — "Path distance exceeds the max distance limit: 1500000 meters"
-  became "That trip is longer than the routing server will plan. Pick a closer
-  destination, or use the offline map" — and the raw text is kept in the engine
-  trace for whoever is debugging.
-- **Is operable without sight.** Every screen has a heading, a screen change is
-  announced and takes focus, and a control that cannot be used says why *and*
-  stays reachable so the reason can be read.
+- **Offline routing** — Valhalla runs on-device (WebAssembly) over imported routing
+  packs, producing real turn-by-turn maneuvers with no network. A self-contained A\*
+  over an imported `.osm`/`.osm.pbf` graph remains as a deprecated fallback.
+- **Online routing** — Valhalla providers (FOSSGIS, Simplerouting.io, or your own
+  server) when a network is available, with a configurable fallback policy. Each
+  route is attributed to the engine that actually answered.
+- **Offline search** — cities, streets, addresses and POIs built from OSM tags, with
+  typo tolerance and abbreviation matching ("Main St" finds "Main Street"). Import
+  several extracts and search across all of them; offline and online results are
+  ranked in one list with a source badge.
+- **Google Maps dark theme** — its surface ramp, `#8AB4F8` accent, and AAOS layout
+  metrics (8dp grid, 96dp app bar, 76dp touch targets). Colour is solid rather than
+  alpha-blended, and every text/surface pair is asserted at ≥ 4.5:1 contrast by
+  `test/contrast.spec.ts`.
+- **Turn-by-turn guidance** — spoken through the platform TTS engine, with full
+  sentences that are never cut off mid-utterance. Guidance is real Valhalla maneuvers
+  where a pack or online engine produced the route; the raw-import engine infers
+  turns from geometry and labels them as inferred.
+- **Rerouting** when you miss a turn, keeping current guidance on screen until a
+  replacement route exists.
+- **Follow camera** that points the way you are driving and glides through turns.
+- **Self-contained APK** — the web bundle ships inside the APK, the offline basemap
+  fetches nothing, and every remote service is optional. Opening the app in a tunnel
+  works after one online open, thanks to a precached service-worker shell.
+- **Cross-region routing** as one route over merged extracts, behind a memory guard
+  that refuses with a reason instead of failing mid-journey.
+- **Accessible** — every screen has a heading, screen changes are announced and take
+  focus, and unusable controls say why while staying reachable.
 
 ## Quick start
 
 ```bash
 npm install
 npm run dev          # dev server
-npm test             # 828 unit tests
+npm test             # 1,458 unit tests
+npm run check        # typecheck + lint + unit tests
 npm run build        # typecheck + production build
+npm run verify       # every gate (unit, build, browser suites, audits)
 npm run serve        # LAN server, so a phone can load the built app
 ```
 
@@ -68,60 +64,40 @@ export ANDROID_HOME=/path/to/android-sdk
 JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 npm run apk
 ```
 
-Output: `android/app/build/outputs/apk/debug/app-debug.apk`
+Output: `android/app/build/outputs/apk/debug/app-debug.apk`. Pushing a `v*` tag
+builds a debug APK and attaches it to a GitHub Release
+(`.github/workflows/release.yml`).
 
-### A self-contained APK, and how to tell
-
-The APK needs no remote URL to boot or to draw its map. That is not a build flag — it is
-three things holding at once:
-
-1. **The web bundle is inside the APK.** `npm run sync` copies `dist/` into
-   `android/app/src/main/assets/public/`, and Capacitor's WebView serves it from
-   `https://localhost`, the package's own origin. `capacitor.config.ts` deliberately has
-   **no `server.url`**: adding one points the WebView at a host and makes the app depend
-   on it.
-2. **The offline basemap fetches nothing.** With no network the map adopts
-   `offlineStyleSpec` (`src/map/style.ts`): GeoJSON sources with inline data, no tiles, no
-   glyphs, no sprite. `test/offlinestyle.spec.ts` runs MapLibre's *own validator* over that
-   style and fails if any fetchable URL appears in it — a style with one validation error
-   is not "slightly wrong", it is refused in full and the map draws nothing.
-3. **Everything remote is optional.** OpenFreeMap (tiles, glyphs), Nominatim and Valhalla
-   are used when reachable and degrade to the offline engine and gazetteer when not.
-
-### Verifying the APK on a device
+### Device smoke test
 
 With one device or emulator connected (`adb devices`):
 
 ```bash
 npm run apk            # build + sync
-npm run apk:smoke      # install it, go offline, import a fixture, screenshot, scan logcat
+npm run apk:smoke      # install, go offline, import a fixture, screenshot, scan logcat
 ```
 
-`tools/offline-smoke.mjs` installs the APK, turns airplane mode on (and restores it after),
-imports `test/fixture.osm` through the app's **real import path** — the hidden file input is
-set over the WebView DevTools socket, so the parse, graph build and style swap all run —
-and leaves screenshots in `probe-shots/offline-smoke/`. It passes when the assets report
-`Handling local request` (read from the APK, not a host), the import lands, and logcat holds
-no errors. The one expected warning is `Tile style unavailable, using offline style`: the
-app honestly reporting the substitution. It needs Node >= 22 (built-in `WebSocket`) and a
-**debug** APK, since release builds do not expose the WebView DevTools socket.
+`tools/offline-smoke.mjs` installs the APK, enables airplane mode (restoring it
+afterwards), imports `test/fixture.osm` through the app's real import path, and
+verifies the assets are served from the APK itself, the import lands, and logcat
+holds no errors. Needs Node ≥ 22 and a **debug** APK (release builds do not expose
+the WebView DevTools socket).
 
 ## Usage
 
-1. Get an extract from [Geofabrik](https://download.geofabrik.de/). Both
-   `.osm.pbf` and `.osm` (XML) are read directly — no conversion needed:
-   ```bash
-   # or convert, if you prefer XML
-   osmium cat region.osm.pbf -o region.osm
-   ```
-2. In the app: **Import .osm** → choose the file. You can also drag an extract
-   onto the home screen.
+1. Get map data from [Geofabrik](https://download.geofabrik.de/). Both `.osm.pbf`
+   and `.osm` (XML) are read directly — no conversion needed.
+2. In the app, **Import** the file (or drag it onto the home screen). Routing packs
+   (`.tar`) and pack bundles import through the same flow.
 3. **Search** for a destination, then **Start**.
 
-Province extracts are 100–900 MB. The download streams, the parse streams, and
-the app checks free space before starting rather than failing at 80%.
+For real turn-by-turn offline, install a **routing pack** alongside the map — either
+import a `.tar` built with `tools/build-pack.mjs`, or point the app at a pack server
+(see below). Province extracts are 100–900 MB; downloads and parses both stream, and
+free space is checked up front. Raw imports of province-sized extracts are refused
+on-device by a memory guard with a specific reason; packs sidestep this entirely.
 
-## Choosing a routing engine
+## Routing engines
 
 Settings → **Routing** → **Engines**. Two independent controls, because "I want
 Valhalla" and "let me have the offline engine if Valhalla is down" are different
@@ -129,154 +105,117 @@ requests:
 
 | Control | Options |
 |---|---|
-| Route with | Any online engine · Offline (.osm) · FOSSGIS · Simplerouting.io · custom |
+| Route with | Any online engine · Offline Valhalla · Offline (.osm) · FOSSGIS · Simplerouting.io · custom |
 | If it cannot route | Use another engine (default) · Fail instead |
 
 | Engine | Needs network | Notes |
 |---|---|---|
-| **Offline (.osm)** | No | Default. Self-contained A\* over the imported graph. |
+| **Offline Valhalla** | No | Default. Valhalla compiled to WASM, running on-device over an imported routing pack. Real maneuvers. |
+| **Offline (.osm)** | No | Deprecated. Self-contained A\* over an imported map; turns are inferred from geometry and labelled as such. |
 | **Valhalla — FOSSGIS** | Yes | Public demo server, best quality, rate-limited. |
 | **Valhalla — Simplerouting.io** | Yes | Requires an API key. |
 | **Valhalla — custom** | Optional | Point at your own `valhalla_service`. |
 
-Each engine's availability is shown with a specific reason — "API key required",
-not "unavailable" — and **Test** contacts it live for a version and latency.
+Each engine's availability is shown with a specific reason ("API key required", not
+"unavailable"), and **Test** contacts it live for a version and latency. When a
+fallback engine produces a route, the app says so and states whether it can supply
+turn-by-turn at all.
 
-**The route is attributed to whichever engine actually answered.** If a fallback
-engine produced it, the app says so and states whether that engine can supply
-turn-by-turn at all, because the offline engine cannot. That distinction is
-recorded per request in the Engines screen.
+### Routing packs and the pack server
+
+A **routing pack** is a `.tar` of Valhalla tiles built from one or more `.osm.pbf`
+extracts (`tools/build-pack.mjs`). Packs keep real maneuvers and stay on disk —
+the runtime footprint is a bounded tile cache, not a resident graph.
+
+The **packserver** (`server/`) is a stateless Rust build service: upload extracts,
+download a verified bundle containing Valhalla tiles, a gazetteer, and PMTiles
+basemap tiles. It is authenticated (API keys, CLI-only admin) and deployed behind
+Caddy — see [`server/README.md`](./server/README.md). In the app, Settings →
+**Pack service** takes your server address and API key; bundles install with one
+tap. Self-hosted plain-HTTP pack servers are accepted with a warning. Independently
+built packs do not merge at borders — submit adjacent extracts together.
 
 ## Architecture
 
 ```
 src/
-  ErrorBoundary.tsx  crash screen; reports rather than swallows
-  settings.ts        durable settings + endpoint validation
-  sw.ts              offline shell (service worker), built as its own entry
-  voice.ts           spoken guidance, or an honest "unavailable"
+  App.tsx              screens and navigation state
+  settings.ts          durable settings + endpoint validation
+  sw.ts                offline shell (service worker)
+  voice.ts             spoken guidance
+  theme.ts             design tokens: Google Maps dark palette + AAOS metrics
+  search/              one matcher, one ranking: typos, abbreviations, cross-source
   osm/
-    engine.worker.ts   OSM parser (whole + streaming), road graph, A*, gazetteer
+    engine.worker.ts   OSM parser (streaming), road graph, A* (deprecated engine)
     pbf.ts             .osm.pbf protobuf reader
     merge.ts           union-find merge of adjacent extracts
-    regions.ts         multi-region library + download catalogue
+    importguard.ts     heap guard: refuses imports that would kill the WebView
   nav/
+    valhalla-local/    Valhalla WASM engine: packs as lazy tiles, worker transport
     providers.ts       engine chain, attempt trace, connectivity
     engines.ts         engine selection, readiness, provenance
-    offroute.ts        off-route detection primitives
+    guidance.ts        step model and progress along the route
     reroute.ts         reroute policy: when to act, backoff, messaging
-    valhalla.ts        Valhalla /route client
-    geocode.ts         Nominatim client (1 req/s throttle)
-    maneuver.ts        Valhalla maneuver codes -> icons
-  map/
-    MapView.tsx        MapLibre view, tile/offline style switch
-    style.ts           Google palette, tile remap, offline LOD
-  regions/
-    RegionsScreen.tsx  manage, catalogue, cross-region preview
-    download.ts        streaming downloader with resume
-    persist.ts         IndexedDB caching of parsed datasets
-  theme.ts             design tokens: Google Maps dark palette + AAOS layout metrics
-  App.tsx              screens and navigation state
+    valhalla.ts        hosted Valhalla client
+    geocode.ts         Nominatim client
+  map/                 MapLibre view, tile/offline style switch, overlays
+  regions/             region library, pack/bundle stores, pack service client
+server/                packserver: Rust build service (see server/README.md)
+tools/                 build-pack, offline-smoke, bundle budget, audits
+test/                  76 unit specs + browser suites (e2e, screens, focus, shots)
 ```
 
-### Why not Expo?
-
-MapLibre needs WebGL and the OSM parser needs a Web Worker. Expo would mean
-sacrificing one or the other. Capacitor's web-first model also means the build
-output is directly testable in a browser.
-
-### Why is on-device routing TypeScript rather than Valhalla?
-
-Valhalla ships no Android binary or SDK. Cross-compiling requires the NDK plus
-protobuf, boost, luajit, prime_server, sqlite3 and GEOS all built for arm64 — a
-substantial undertaking whose feasibility is not established. So the default
-engine is a self-contained A\* over a graph parsed from `.osm`. Valhalla remains
-available as an engine.
-
-### Cross-region routing, and the memory guard in front of it
-
-Routing across two downloaded regions runs **one A\* over a merged graph**.
-`osm/merge.ts` builds that graph with a union-find over shared OSM node IDs,
-reconciling direction permissions where the extracts disagree, and
-`RegionLibrary.route()` calls it. Previously it stitched two separately-routed
-legs at a point derived from their bounding boxes, which produced a
-continuous-looking line that was not the route a driver would take — the app's
-top open gap for most of its life, and wrong in a way no test could see because
-the line looked plausible.
-
-Merging is not free: two provincial extracts is a large graph. `osm/mergeguard.ts`
-estimates the cost from the declared graph size and **refuses with a specific
-reason** rather than being OOM-killed mid-route, which on a phone means the app
-closing with no explanation. The estimate is structural, so a refusal on a real
-province is predicted rather than discovered — and has never been seen on real
-data, which is the honest limit of it.
-
-`STATUS.md` §3.18 has the analysis and §3.5.2 the original decision.
+Capacitor was chosen over Expo because MapLibre needs WebGL and the OSM parser needs
+a Web Worker; the web-first model also makes the build output directly testable in a
+browser. On-device routing is Valhalla-in-WASM rather than a native build because the
+WASM engine is only 1.4–1.7× slower than native (a 739 km route across a 279 MB tile
+set in ~75 ms warm) while avoiding an NDK toolchain of protobuf, boost and friends.
 
 ## Testing
 
 ```bash
-npm run check        # typecheck + lint + unit tests
-npm test             # 828 unit tests
-npm run lint         # type-aware ESLint, ratcheted at 27 warnings
-npm run bundle       # gzip size budget on the built output; fails on regression
-npm run e2e          # 40 browser checks against the built bundle
-npm run screens      # 150 screen checks across 3 viewports
-npm run focus        # 13 keyboard and focus checks in a real browser
+npm run verify       # every gate below, in one command (what CI runs)
+npm test             # 1,458 unit tests across 76 files
+npm run check        # typecheck + type-aware lint + unit tests
+npm run e2e          # 89 browser checks against the built bundle (run per fixture format)
+npm run screens      # 53 checks × 3 viewports, plus compact-width checks
+npm run focus        # 15 keyboard and focus checks in a real browser
 npm run shots        # screenshot every screen + record computed styles
-npm run serve        # then point the browser suites at it
+npm run bundle       # gzip size budgets; fails on regression
 ```
 
-`npm run bundle` is a ratchet, not a report: the entry chunk is parsed on a
-phone's main thread before anything is interactive, so its size is asserted on
-every build rather than noted in a document nobody re-reads. Raising a budget is
-a deliberate edit to `tools/bundle-budget.mjs`.
+Two gates are ratchets, not reports: the entry chunk's gzip size (`tools/bundle-budget.mjs`)
+and the lint warning count (`--max-warnings 27`) are asserted on every build, so
+raising either is a deliberate edit.
 
 The browser suites import the fixture, route across it, drive the reroute flow by
 moving the simulated GPS fix, and audit every screen for horizontal overflow and
-zero-size text at phone-portrait, phone-landscape and head-unit sizes.
+zero-size text at phone-portrait, phone-landscape and head-unit sizes. `npm run
+focus` exists because a unit suite structurally cannot see where focus ended up.
+`npm run shots` records each screen's *computed* styles alongside its screenshot, so
+a defect that CSS error recovery silently discarded shows up as a recorded value
+rather than an opinion about a picture.
 
-`npm run focus` exists because a unit suite structurally cannot see where focus
-ended up. It drives the built app by keyboard and asks the two questions that
-matter: does a letter reach the field it was typed into, and after a screen change
-is focus on the new screen's heading or back on `<body>`. Both were broken, and
-every other gate was green throughout.
+The server has its own gate: `cd server && cargo test --locked`, plus a Docker
+image whose real Valhalla pipeline is exercised by `server/smoke.mjs`
+(`.github/workflows/packserver.yml`).
 
-`npm run shots` captures each screen at three viewports and writes the *computed*
-style of its named elements alongside the image, so a defect that CSS error
-recovery silently discarded — which is how the maneuver arrow lost its background,
-for every non-major turn — shows up as a recorded value rather than as an opinion
-about a picture. It also flags any text element whose content is wider than its
-box, which is the most common polish defect and the least visible in a
-screenshot.
+## Status
 
-CI runs all of it and uploads screenshots as artifacts. Pushing a `v*` tag also
-builds a debug APK and attaches it to a GitHub Release — see
-`.github/workflows/release.yml`.
+Verified by the full browser gate suite, the Android emulator, and on real hardware:
+an Android phone mounted in a car, driven with live GPS. Known limitations, in
+brief:
 
-## Status and honesty
+- **Turn-by-turn is real only where Valhalla produced the route** — a routing pack or
+  an online engine. The deprecated raw-import engine infers turns from geometry and
+  the app labels them as inferred.
+- **Province-sized raw imports are refused on-device by design** (the heap guard);
+  use routing packs for large regions.
+- Peak memory of a full province parse and long-run GNSS behaviour on phone hardware
+  are not yet measured.
 
-[STATUS.md](./STATUS.md) is the design record: what is verified, how, and what
-is not.
-
-Three things worth knowing before relying on this:
-
-- **Offline turn-by-turn guidance is inferred, not real.** The offline engine
-  cannot produce instructions, so turns are guessed from where the road bends.
-  Measured against Valhalla it missed three of seven real maneuvers on one 4 km
-  stretch. The app labels inferred guidance as inferred; choose a Valhalla engine
-  for real turn-by-turn.
-- **It has never run on physical hardware.** Everything is browser-verified plus
-  one Android 14 emulator. WebView behaviour, real GPS quality and on-phone
-  memory pressure are unproven. This is the one gap no further work here can
-  close.
-- **Home and Work are unset until you set them.** They used to be two fixed
-  coordinates in the English Channel, which is a tile labelled "Home"
-  navigating a car into the ocean. They now open search and save what you pick.
-
-One thing that is *not* a gap any more, though older copies of this file said so:
-cross-region routing now runs one A\* over a merged graph rather than stitching
-two routes at a bounding-box midpoint. `STATUS.md` §3.18 has the analysis.
+[STATUS.md](./STATUS.md) is the complete design record: what is verified, how, and
+what is not.
 
 ## Data
 
@@ -284,4 +223,5 @@ Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright
 [ODbL](https://www.openstreetmap.org/copyright). Routing via
 [Valhalla](https://github.com/valhalla/valhalla) and geocoding via
 [Nominatim](https://nominatim.org/), both OSM projects. Base tiles from
-[OpenFreeMap](https://openfreemap.org/).
+[OpenFreeMap](https://openfreemap.org/). The on-device engine is
+[`ecc521/valhalla-wasm`](https://github.com/ecc521/valhalla-wasm) (MIT).
