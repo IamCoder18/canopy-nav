@@ -5,7 +5,7 @@ with **fully offline OpenStreetMap routing**.
 
 **Stack:** Capacitor + React 19 + TypeScript + Vite + MapLibre GL
 **Repo:** https://github.com/IamCoder18/canopy-nav
-**Latest release:** v1.3.1 (APK attached). The work in it — including the offline
+**Latest release:** v1.3.2 (APK attached). The work in it — including the offline
 Valhalla engine (§17) and the packserver program (§19) — is recorded below, pass by pass:
 
 - **§3.17–3.18** — §3.17 closes the ETA gap this document once called the most dangerous
@@ -183,9 +183,9 @@ stands. **Bold** = fully working and verified.
 | 12 | Keep hosted Valhalla as an option | **Done.** Three hosted presets plus a custom endpoint — FOSSGIS, Simplerouting.io, and your own `valhalla_service` — each individually selectable and probeable, alongside the offline engine | §3.6, §3.6.1 |
 | 13 | Handle losing connectivity mid-trip | **Done.** Provider chain + snapshotted route + honest degradation | §3.7 |
 | 14 | GitHub repo (public) | **Done** | [repo](https://github.com/IamCoder18/canopy-nav) |
-| 15 | CI that builds a release with the APK on tags | **Done.** 15 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
-| 16 | Small increments: one fix/feature per release | **Done.** 17 tags, 15 releases | §8 |
-| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1458 unit tests across 76 files, plus browser suites and the independent Rust server gate (§19) | `test/`, `tools/`, `server/tests/` |
+| 15 | CI that builds a release with the APK on tags | **Done.** 22 releases, APK attached automatically (v0.1.0 was uploaded by hand) | `.github/workflows/release.yml` |
+| 16 | Small increments: one fix/feature per release | **Done.** 24 tags, 22 releases | §8 |
+| 17 | Unit tests for everything; subagents for tests and browser verification | **Done.** 1464 unit tests across 76 files, plus browser suites and the independent Rust server gate (§19) | `test/`, `tools/`, `server/tests/` |
 | 18 | Every screen and function verified in real Chromium at mobile size | **Done for what the suites cover.** 12 screens at 3 viewports (53 checks each, 159 total), plus nine compact-width checks (§14.25), plus 39 e2e checks covering engine selection, provenance, a streamed import and the full off-route reroute flow — the last being the gap this requirement once named as uncovered. Not covered: cross-region routing (§7 gap 1), and the emulator is not a phone | `test/screens.mjs` |
 | 19 | Keep going until every issue fixed | **Ongoing.** See §7 for the gap list and §9 for what has actually been built and what has not, including the fixes that measurement contradicted | — |
 | 20 | Host on 0.0.0.0 so it can be tested | **Done.** `npm run serve` (`tools/serve.mjs`), in the repo rather than `/tmp`; APK served at `/dl/canopy-nav.apk` | §3.14 |
@@ -199,7 +199,7 @@ stands. **Bold** = fully working and verified.
 |---|---|---|
 | Types | `npx tsc --noEmit` | clean |
 | Lint | `npm run lint` | **0 errors**, 13 warnings (27-warning ratchet — see §10.3) |
-| Unit tests | `npm test` | **1458 passing**, 76 files |
+| Unit tests | `npm test` | **1464 passing**, 76 files |
 | End-to-end | `npm run e2e` | **89 checks** against the built bundle, including the offline service-bundle workflow; §19 distinguishes current from historical runs |
 | Screen coverage | `node test/screens.mjs` | **53 checks × 3 viewports = 159** (phone-portrait 412×915, phone-landscape 892×412, head-unit 1280×720), plus nine compact-width checks (§14.25) |
 | Focus & keyboard | `npm run focus` | **15 checks** in a real browser |
@@ -278,7 +278,7 @@ That was the last known console output in the project.
 ### Test breakdown
 
 Every count below is measured by counting `PASS` lines from a run, grouped by file, not
-retyped by hand. The table is the complete set: **76 files, 1458 tests**. The previous
+retyped by hand. The table is the complete set: **76 files, 1464 tests**. The previous
 revision's table listed 24 of 38 files and carried several stale counts.
 
 **One count here is 47 and it owns only 13 tests.** `attribution.spec.ts:29` is
@@ -289,7 +289,7 @@ it reports 47; count its own `it(` calls and there are 13. `13 + 34 = 47`.
 
 This was established by subtraction rather than assumed, and the table carries the number
 the audit compares against — the **run's** count, not the file's own. The consequence is
-that **the 1458 total double-counts contrast's 34 tests**: 1424 distinct test cases are
+that **the 1464 total double-counts contrast's 34 tests**: 1430 distinct test cases are
 declared across 76 files. Both figures are recorded rather than reconciled by lowering the
 total, because `tools/status-audit.mjs` checks the sum a run reports and a "corrected"
 total would fail it for the right reason on the wrong number.
@@ -331,7 +331,7 @@ reading it.
 | `valhalla-tilesource.spec.ts` | 10 | pack tile sources and the whole-tile cache: one source read per tile however much the search asks, LRU bounds, correctness across eviction |
 | `pack-import.spec.ts` | 8 | routing-pack import: naming ties a pack to its region, a non-pack changes nothing, persistence failure is non-fatal, removal takes the pack with it |
 | `packstore.spec.ts` | 6 | pack persistence: byte round-trip, listing without bytes, replacement, deletion, and no-IndexedDB degrading to session-only |
-| `packserver.spec.ts` | 19 | Rust/JS bundle, gazetteer, PMTiles and WASM contracts; verified ingestion, checksums, storage gate, real addresses and alts, service-only routing policy, IPv6 URL/key settings and authenticated client |
+| `packserver.spec.ts` | 25 | Rust/JS bundle, gazetteer, PMTiles and WASM contracts; verified ingestion, checksums, storage gate, real addresses and alts, service-only routing policy, IPv6 URL/key settings, authenticated client, and the upload path: filename preflight, multipart submit, progress/cancel, redirect refusal and error translation |
 | `merge.spec.ts` | 37 | node-ID union, direction permissions, dead-edge sweep, >2^21 node regression |
 | `download.spec.ts` | 37 | streaming, progress, abort, retry/resume, HTML-error detection, truncation, disk cache, poisoned part files |
 | `engine.spec.ts` | 35 | OSM parsing, graph construction, one-ways, A\* route quality, geometry continuity, index isolation and keying, and that `buildDataset` consumes its inputs |
@@ -1882,13 +1882,13 @@ src/
     packstore.ts          155  routing-pack persistence (its own database, its own failure policy)
     store.ts              594  RegionLibrary singleton, per-region workers, memory gate,
                               + pack import/restore and the engine mount lifecycle
-    service.ts            76  packserver client: URL/key validation, poll, download (§19)
+    service.ts           193  packserver client: URL/key validation, upload with progress, poll, download (§19)
     bundle.ts            138  verified bundle ingest: streaming tar, sha256, route stores (§19)
     bundlestore.ts        22  bundle-manifest records (its own IDB database)
     artifactstore.ts      56  random-access artifacts: OPFS / Android private files (§19)
-    PackServiceSettings.tsx 31  Settings -> Pack service: server address + API key (§19)
+    PackServiceSettings.tsx 117  Settings -> Pack service: server address + API key, PBF upload and build retrieval (§19)
 
-test/            1458 unit tests, 76 files
+test/            1464 unit tests, 76 files
 test/e2e.mjs           89 browser checks, built bundle
 test/screens.mjs       53 checks x 3 viewports (159 total), + nine compact-width checks
 tools/osm2pbf.mjs        362 XML -> PBF encoder (builds the test fixtures;
@@ -2427,7 +2427,7 @@ three cold-start console warnings (§3.15).
 ```bash
 npm install
 npm run dev          # vite dev server
-npm test             # 1458 unit tests
+npm test             # 1464 unit tests
 npm run e2e          # 89 browser checks against the built bundle
 npm run build        # typecheck + production build
 npm run preview      # serve the built bundle
@@ -6416,9 +6416,12 @@ credentials remain device-local and redirects cannot forward the key elsewhere.
 Public service URLs require HTTPS; HTTP is allowed only on loopback for tests.
 
 The service is an artifact source, not a routing provider. Its client submits,
-polls with cancellation/backoff and checks disk before downloading. Users can
-submit with curl and retrieve a build by id in the app; no PBF upload UI is
-added. Both import pickers accept bundles before either raw-import guard runs.
+polls with cancellation/backoff and checks disk before downloading. The app
+uploads `.osm.pbf` extracts itself: preflighted against the service's filename
+rules before any bytes move, sent as one multipart build with upload progress
+and cancellation, and never following a redirect away from the configured
+origin. A build id can still be retrieved on its own, so a build submitted from
+curl is not stranded. Both import pickers accept bundles before either raw-import guard runs.
 Search gzip persists compressed; maps use OPFS or Android app-private files
 with bounded range reads and a whole-tile cache. Pack metadata now has a small
 separate IDB store so listing does not clone every routing archive.
@@ -6433,7 +6436,7 @@ compatible with the region ranking tests.
 
 Current implementation checks:
 
-- Final app gate: `npm run verify` — **11/11 gates passed** in 15.3 minutes:
+- Final app gate: `npm run verify` — **11/11 gates passed** in 15.5 minutes:
   typecheck/lint, all unit tests, production build, bundle budgets, fixture
   reproducibility, both e2e formats (89 checks each), three-viewport screens,
   reflow, text scaling and zero UI-audit findings. Per-file unit totals were
@@ -6481,7 +6484,10 @@ headers because proxy errors can log headers even with access logging off.
 Still **unmeasured, not claimed complete**: public DNS/ACME/firewall deployment
 on the owner's IPv6 host; province-scale artifact size/RSS and search-index
 latency on target hardware; phone WASM + MapLibre peak memory and native range
-read latency; and a real-query importance comparison corpus. The implementation
+read latency; a real multi-hundred-megabyte `.osm.pbf` upload from an Android
+WebView (content-URI streaming and XHR progress on a phone — the client and its
+contract are unit-tested and the server path smoke-tested end to end, but the
+device send is not); and a real-query importance comparison corpus. The implementation
 is present, but a tiny fixture is not evidence for these resource envelopes.
 The service keeps the plan's upload cap and conservative build concurrency;
 importance remains an approximation without Wikipedia weights. MapLibre Native,

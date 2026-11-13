@@ -8,7 +8,7 @@ Built with **Capacitor + React 19 + TypeScript + MapLibre GL**. The UI is web
 technology in a native shell, so the same build runs in a browser and is verifiable
 there without a device.
 
-**Latest release: v1.3.1.** Tested on real hardware — an Android phone mounted in a
+**Latest release: v1.3.2.** Tested on real hardware — an Android phone mounted in a
 car, driven with live GPS. The full design record, including what is *not* finished,
 is in [STATUS.md](./STATUS.md).
 
