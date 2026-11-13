@@ -40,6 +40,14 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # `npm test` runs after the web build, not before it: `test/shellcheck.spec.ts`
+      # reads `dist/index.html`, and a fresh checkout has no `dist/` (it is
+      # gitignored). Running Test first failed every release since v1.3.0 with
+      # ENOENT before the APK step ever ran — the browser gates' build-first fix
+      # in tools/verify.mjs covers CI, but this workflow calls `npm test` itself.
+      - name: Build web bundle and sync Capacitor
+        run: npm run sync
+
       - name: Test
         run: npm test
 
@@ -63,9 +71,6 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-
-      - name: Build web bundle and sync Capacitor
-        run: npm run sync
 
       - name: Build debug APK
         run: |
