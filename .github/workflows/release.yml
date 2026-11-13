@@ -110,12 +110,12 @@ jobs:
             ```
 
             ### First run
-            1. Download a `.osm` extract from [Geofabrik](https://download.geofabrik.de/),
-               or convert a `.pbf` first:
-               ```bash
-               osmium cat region.osm.pbf -o region.osm
-               ```
-            2. Tap **Import .osm** and select the file.
+            1. Download an extract from [Geofabrik](https://download.geofabrik.de/) —
+               `.osm.pbf` works directly; no conversion needed.
+            2. In the app, either **import the file** (offline routing + search,
+               right on the device) or **upload it to your pack server**
+               (Settings -> Pack service) to get a Valhalla bundle with real
+               turn-by-turn.
             3. Search for a destination and tap **Start**.
 
             Routing works entirely offline once a map is loaded. Valhalla and

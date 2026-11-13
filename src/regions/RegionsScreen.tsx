@@ -5,9 +5,9 @@
  * Reachability: home quick tile, Settings -> Offline maps.
  *
  * Format reality check: the catalogue lists Geofabrik `.osm.pbf` URLs because
- * that is what you actually download, but `engine.worker.ts` parses **XML**.
- * The URLs are shown as information; the import path is a file picker that
- * takes the `.osm` conversion, which the screen spells out.
+ * that is what you actually download, and it is read directly — `engine.worker.ts`
+ * sniffs XML and protobuf alike. The URLs are shown as information; the import
+ * path is a file picker that takes `.osm.pbf` or `.osm` as readily as either.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';

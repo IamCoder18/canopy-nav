@@ -11,8 +11,8 @@
  * non-junction ("pass-through") nodes first, which is what makes it fast
  * enough to feel instant on a city extract.
  *
- * NOTE: this reads `.osm` XML. `.osm.pbf` must be converted first, e.g.
- *   osmium cat region.osm.pbf -o region.osm
+ * NOTE: both `.osm` XML and `.osm.pbf` are read directly — `parseOsmPbf` (pbf.ts)
+ *   handles the protobuf path; the engine sniffs which format it was handed.
  */
 
 import { haversineM, type LatLng } from '../geo';
